@@ -3,9 +3,11 @@ name: identity-visitor-manager
 
 services:
   identity:
-    # Build from this checkout:
+    # The published image, built by GitHub Actions from main for amd64 and arm64:
+    #   docker compose pull && docker compose up -d
+    # Or build from this checkout, which tags the result with the same name:
     #   docker compose up -d --build
-    image: identity-visitor-manager:latest
+    image: ghcr.io/spicy384/tenant-identity-visitor-manager:latest
     build: .
     container_name: identity-visitor-manager
     restart: unless-stopped
@@ -59,7 +61,7 @@ services:
       ENTRA_DEFAULT_ROLE: ${ENTRA_DEFAULT_ROLE:-none}
 
     # The database key, read from /run/secrets/db_key. Make it once with
-    #   docker run --rm identity-visitor-manager node scripts/new-key.js > secrets/db_key
+    #   docker run --rm ghcr.io/spicy384/tenant-identity-visitor-manager node scripts/new-key.js > secrets/db_key
     # (or `npm run new-key` anywhere Node runs), keep a copy in your password manager,
     # and let the container's user read it: chown 1000:1000 secrets/db_key && chmod 400 secrets/db_key
     secrets:

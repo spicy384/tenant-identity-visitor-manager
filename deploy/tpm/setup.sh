@@ -138,9 +138,9 @@ cmd_install() {
     echo "Stopping the containers started without the service..."
     docker compose down
   fi
-  if ! docker image inspect identity-visitor-manager:latest >/dev/null 2>&1; then
-    echo "Building the image..."
-    docker compose build
+  if ! docker image inspect ghcr.io/spicy384/tenant-identity-visitor-manager:latest >/dev/null 2>&1; then
+    echo "Pulling the image (or building it from this checkout if that fails)..."
+    docker compose pull || docker compose build
   fi
   sed -e "s|@APPDIR@|$APPDIR|g" -e "s|@DOCKER@|$docker|g" "$HERE/$NAME.service.in" > "$UNIT"
   chmod 0644 "$UNIT"
@@ -148,7 +148,7 @@ cmd_install() {
   systemctl enable --now "$NAME.service"
   echo "Installed and started $NAME.service."
   echo "  Logs:            journalctl -u $NAME -f"
-  echo "  After an update: docker compose build && sudo systemctl restart $NAME"
+  echo "  After an update: docker compose pull && sudo systemctl restart $NAME"
   if [ -f "$APPDIR/secrets/db_key" ]; then echo "  Then remove the plain key: shred -u $APPDIR/secrets/db_key"; fi
 }
 

@@ -31,6 +31,18 @@ COPY public ./public
 # it opens a throwaway encrypted database with a throwaway key and resolves every module.
 RUN DATA_DIR=/tmp/smoke DB_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")" node -e "require('./server.js')" && rm -rf /tmp/smoke
 
+# Where the image came from, for `docker inspect` and GitHub Container Registry (the
+# source label links the package to the repository). The workflow passes the commit and
+# build time; a local build leaves them empty.
+ARG GIT_SHA=""
+ARG BUILD_DATE=""
+LABEL org.opencontainers.image.title="Identity and Visitor Manager" \
+      org.opencontainers.image.description="Tenant directory and visitor check-in across sites, with badges, clearance validation and an encrypted database" \
+      org.opencontainers.image.source="https://github.com/spicy384/tenant-identity-visitor-manager" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
+
 # The image ships no data and no key; /data is a volume that outlives the container and
 # the key arrives as the Docker secret db_key (/run/secrets/db_key).
 # node:alpine already provides an unprivileged `node` user (uid 1000).

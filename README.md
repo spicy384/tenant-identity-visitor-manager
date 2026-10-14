@@ -1,9 +1,12 @@
 # Identity and Visitor Manager
 
+[![Container image](https://img.shields.io/badge/ghcr.io-spicy384%2Ftenant--identity--visitor--manager-blue)](https://github.com/spicy384/tenant-identity-visitor-manager/pkgs/container/tenant-identity-visitor-manager)
+
 A directory of the companies in one or more buildings and the people who work for them,
 and of their visitors, kept in an encrypted database, with control over which fields each
-role can see. Visitors check themselves in and out on an iPad kiosk in each lobby. The link
-to Equipment Checkout comes in phase 3 (see [PLAN.md](PLAN.md)).
+role can see. Visitors check themselves in and out on an iPad kiosk in each lobby, badges and
+clearances are tracked and validated, and Equipment Checkout takes its people from here.
+The design and decisions are in [PLAN.md](PLAN.md).
 
 ## The directory
 
@@ -195,12 +198,28 @@ the sign-ins are written to `data/demo-login.txt`.
 
 ## Docker
 
+Every push to `main` publishes `ghcr.io/spicy384/tenant-identity-visitor-manager:latest`
+for amd64 and arm64 (GitHub Actions, `.github/workflows/docker-image.yml`). A server needs
+only Docker and the compose file:
+
 ```bash
-mkdir -p secrets
-npm run new-key -- secrets/db_key
+mkdir -p ~/identity-visitor-manager/secrets && cd ~/identity-visitor-manager
+curl -fsSLO https://raw.githubusercontent.com/spicy384/tenant-identity-visitor-manager/main/docker-compose.yml
+docker run --rm ghcr.io/spicy384/tenant-identity-visitor-manager node scripts/new-key.js > secrets/db_key
 sudo chown 1000:1000 secrets/db_key && sudo chmod 400 secrets/db_key
-docker compose up -d --build
+docker compose up -d
 ```
+
+Copy the key in `secrets/db_key` into your password manager straight away. To seal it to the
+TPM instead (below), clone the repository rather than fetching the compose file alone: the
+service needs `deploy/tpm/`.
+
+**Updating:** `docker compose pull && docker compose up -d`. The data volume carries over.
+**Versions:** a tag such as `v1.2.0` also publishes `:1.2.0` and `:1.2`, and every build
+is reachable as `:sha-<commit>`; change the tag in the compose file to pin one. Bump
+`version` in `package.json` in the same commit as the tag.
+**From source:** in a clone, `docker compose up -d --build` builds the image locally under the
+same name.
 
 The container runs as uid 1000, so it must be able to read the secret file. Nginx Proxy
 Manager on another host terminates HTTPS and connects to the container over HTTPS with
@@ -274,7 +293,8 @@ What it does:
   and runs `docker compose` with `deploy/tpm/docker-compose.tpm.yml`, which points the
   `db_key` secret there and turns Docker's own restart off so systemd starts and restarts
   the container. Logs: `journalctl -u identity-visitor-manager -f`.
-- After updating the app: `docker compose build && sudo systemctl restart identity-visitor-manager`.
+- After updating the app: `docker compose pull && sudo systemctl restart identity-visitor-manager`
+  (or `docker compose build` in place of the pull, to build from the clone).
   Use `systemctl`, not `docker compose up`, to start and stop it from now on.
 - `status` shows the service and whether the key still unseals; `uninstall` removes the
   service and leaves the sealed key.
@@ -330,8 +350,8 @@ log, and are wiped on time). Equipment Checkout's own tests run its directory mo
 
 ## Not yet tried
 
-- The Docker image build (Docker isn't running on the development machine), including the
-  compose file's memory, swap and core-dump limits
+- Running the published image on a real host (Docker isn't running on the development
+  machine), including the compose file's memory, swap and core-dump limits
 - Sealing the database key to a TPM (deploy/tpm/): the script's logic was run against a
   stand-in for systemd-creds, not on a real Debian or Ubuntu host with a TPM
 - Microsoft Entra sign-in against a real tenant (only a fake Microsoft)
