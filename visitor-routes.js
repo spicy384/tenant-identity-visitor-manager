@@ -186,6 +186,23 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
     });
   });
 
+  // --- kiosk visitors waiting for a badge (the banner on staff pages) ----------------------------
+
+  /** Who can be told: those who see visitors and may give badges out. */
+  const giveBadges = (req, res, next) => (badges && access.canReadVisitors(req.ctx) && access.canEditBadges(req.ctx) ? next() : res.status(403).json({ error: "This account can't give badges out." }));
+
+  router.get("/api/visits/badge-needed", giveBadges, (req, res) => {
+    const siteId = positiveInt(req.query.site);
+    if (siteId && !access.siteVisible(req.ctx, siteId)) throw fail(403, "This account can't see that site.");
+    res.json({ visits: badges.waitingForBadge({ sites: req.ctx.sites, siteId }) });
+  });
+
+  router.post("/api/visits/:id/badge-not-needed", giveBadges, (req, res) => {
+    const waived = badges.waiveVisitBadge(positiveInt(req.params.id), { by: req.user?.displayName || req.user?.username || null, sites: req.ctx.sites });
+    auditFrom(req, "visit.badge_not_needed", waived.name, `visit ${waived.visitId}`);
+    res.json({ ok: true });
+  });
+
   router.get("/api/visits.csv", admin, (req, res) => {
     const { visits } = visitors.listVisits({ ...visitFilter(req), limit: 1000000 });
     const iso = (ms) => (ms ? new Date(ms).toISOString() : "");

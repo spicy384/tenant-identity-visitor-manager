@@ -324,6 +324,34 @@ identity-data, so `docker compose up -d` is all a first start needs; optional se
 from an optional .env (env_file). The TPM override replaces /keys with an empty tmpfs, and
 setup.sh seal reads the key straight from the volume.
 
+## Badge images and who sees clearance levels (2026-10-14)
+
+Asked for by the user: a tenant and a visitor badge image per clearance level, shown to the
+front desk when giving a badge out, with clearance level names shown only to authorised
+roles (Security, Managers, Administrators). User decisions: images per level plus a pair for
+uncleared badges, personnel badges use the tenant image; a per-role "Sees clearance levels"
+switch (roles.clearances, schema 6), on for admin, manager and security (security always);
+front desk picks a cleared badge's level by its image (templateRef, never a level id); the
+large "Give them this badge" image plus thumbnails. Built: badge-templates.js (badge_templates,
+keyed by level and kind, random ref per upload), templates in badge-routes.js (badgeOut strips
+level ids and names, levelInput, suggested), the sensitive-field cap in access.levelFor and
+setPolicies, level-free refusal messages, Settings > Badges and clearances > Badge images.
+Choice made while building it: the large image is of the highest badge actually on offer to
+them, not of their own level, so it always matches a badge in the list.
+
+## Kiosk visitors waiting for a badge (2026-10-14)
+
+Asked for by the user: when a visitor checks in at the kiosk, a banner on the admin pages of
+users at that site saying a badge needs assigning, with a button to start it. Built:
+badges.waitingForBadge / waiveVisitBadge (open visits with a kiosk_id whose visitor holds no
+badge, not waived; visits.badge_waived_at/by, schema 7), GET /api/visits/badge-needed and POST
+/api/visits/:id/badge-not-needed (visitors read + badges edit, site-limited), ?site= on
+/api/badge-holders, public/js/18-badge-alerts.js (15-second poll, at most three banners then
+"N more"). Choices made while building it: shown only to staff who can give badges out (a
+banner they can't act on would be noise); a "No badge needed" button so an escorted visitor
+doesn't keep it up all day; staff check-ins never raise it (the desk dialog already offers
+a badge).
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

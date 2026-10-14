@@ -45,6 +45,12 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Visitors** lists everyone, with those who registered themselves at a kiosk marked "To
   check": staff confirm them, correct them, or merge them into an existing visitor. A visitor
   can be blocked: the kiosk then sends them to reception, and the desk needs a manager's say-so.
+- **Needs a badge**: when a visitor checks themselves in at a kiosk, a banner appears at the
+  top of every page for staff who give badges out at that site (and the site chosen in the
+  header): who, which kiosk, when, and whom they are visiting. **Assign badge** shows the image
+  of the badge to give and the badges free there, and gives one for that visit; **No badge
+  needed** (audited) clears it. It also clears once they have a badge or check out. Pages
+  check every 15 seconds.
 - **Visit log**: every visit with filters and a CSV export (administrators).
 - **End of day**: at each site's end-of-day time, in its own time zone, anyone still checked
   in is checked out automatically, at that time, even if the server was down then.
@@ -96,6 +102,21 @@ The design and decisions are in [PLAN.md](PLAN.md).
   overdue on the Badges page and in the navigation until someone takes it back.
 - **Access.** Each role has a badge level as well as directory and visitor levels: read to
   look, change to add badges and give them out. Front desk can change badges by default.
+- **Who sees clearance levels.** Each role has a **Sees clearance levels** switch under
+  Settings > Roles: on for Administrator, Manager and Security to start with (Security
+  always), off for Front desk, Viewer, new roles, kiosks and API clients. Roles without it
+  never receive a level's name or id from the server: not on people or visitors (their
+  clearance details stay hidden whatever the field access grid says), not on badges, not in
+  the level list, not in the reason a badge is refused. They still see the validation tag.
+- **Badge images.** Under Settings > Badges and clearances an administrator uploads what
+  each level's badges look like: a tenant image (personnel badges use it too) and a visitor
+  image per level, and a pair for uncleared badges. Roles that don't see clearance levels
+  see these instead: beside each badge in the list and wherever one is offered, and large,
+  as "Give them this badge", when they give someone a badge or check a visitor in. That large
+  image is of the highest badge on offer that the person may hold, which is listed first. They
+  add a cleared badge by picking its image rather than a level name. Images are PNG or JPEG up
+  to 1 MB (other formats are converted in the browser), served under a random address that
+  changes with each upload and says nothing about the level.
 
 ## Expected visitors
 
@@ -374,13 +395,14 @@ are skipped and listed.
 npm test
 ```
 
-Ten suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
+Eleven suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
 field access and site limits (the most important), visitors (name matching, end of day across
 time zones and daylight-saving changes, retention, merging), Entra sign-in against a fake
 Microsoft, the HTTP API end to end, the kiosk and visitor routes end to end, the API for other
 systems, badges, clearances and visitor events (rules and routes), and clearance validation (who
 sees the queue, and that the SSN digits never reach the database, the audit trail or the
-log, and are wiped on time). Equipment Checkout's own tests run its directory mode against this app.
+log, and are wiped on time), and badge images (that roles without clearance levels never
+receive a level name, pick levels by image, and are shown the right badge). Equipment Checkout's own tests run its directory mode against this app.
 
 ## Not yet tried
 

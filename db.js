@@ -16,7 +16,8 @@ const Database = require("better-sqlite3-multiple-ciphers");
 const DB_FILE = "identity.db";
 // 1: directory, fields, roles, sites. 2: visitors, their links, visits, kiosk devices.
 // 3: API clients. 4: badges, clearances, building staff, visitor events. 5: clearance validation.
-const SCHEMA_VERSION = 5;
+// 6: badge template images, and which roles see clearance levels. 7: kiosk visits waiting for a badge.
+const SCHEMA_VERSION = 7;
 
 function fail(status, message) {
   const error = new Error(message);
@@ -339,6 +340,20 @@ CREATE TABLE IF NOT EXISTS clearance_requests (
   level_id INTEGER REFERENCES clearance_levels(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS clearance_requests_open ON clearance_requests(status, holder_kind, holder_id);
+
+-- What a badge of each clearance level looks like, for staff who may not see level names:
+-- one image for tenant (and personnel) badges and one for visitor badges per level, and a
+-- pair for uncleared badges (level_key 0). ref is random and changes with each upload, so
+-- an image's address says nothing about its level.
+CREATE TABLE IF NOT EXISTS badge_templates (
+  level_key INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  ref TEXT NOT NULL UNIQUE,
+  image BLOB NOT NULL,
+  image_type TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (level_key, kind)
+);
 `;
 
 // Columns added after a table first shipped: [table, column, definition]. CREATE TABLE IF NOT
@@ -361,7 +376,12 @@ const ADDED_COLUMNS = [
   ["people", "clearance_validated_at", "INTEGER"],
   ["people", "clearance_validated_by", "TEXT"],
   ["visitors", "clearance_validated_at", "INTEGER"],
-  ["visitors", "clearance_validated_by", "TEXT"]
+  ["visitors", "clearance_validated_by", "TEXT"],
+  // Which roles see clearance level names (the rest see badge template images).
+  ["roles", "clearances", "INTEGER NOT NULL DEFAULT 0"],
+  // A kiosk visit staff marked as needing no badge (it then leaves the "needs a badge" banner).
+  ["visits", "badge_waived_at", "INTEGER"],
+  ["visits", "badge_waived_by", "TEXT"]
 ];
 
 function addColumns(db) {

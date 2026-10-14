@@ -309,8 +309,11 @@ function createBadges({ db, clearance, now = Date.now }) {
     return null;
   }
 
-  /** Why `h` can't hold `badge`, or null when they can. */
-  function refusal(badge, h) {
+  /**
+   * Why `h` can't hold `badge`, or null when they can. Without `levelNames` (staff who don't see
+   * clearance levels) the reason never names the level.
+   */
+  function refusal(badge, h, { levelNames = true } = {}) {
     if (badge.status !== "active") return `Badge ${badge.number} is ${badge.status}.`;
     if (badge.type === "visitor" && h.kind !== "visitor") return `Badge ${badge.number} is a visitor badge; it goes to visitors.`;
     if (badge.type !== "visitor" && h.kind === "visitor") return `Badge ${badge.number} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`;
@@ -327,7 +330,8 @@ function createBadges({ db, clearance, now = Date.now }) {
       const needed = clearance.level(badge.clearanceLevelId);
       if (!clearance.covers(clearance.effectiveLevel(h), needed)) {
         const why = clearance.notCounting(h);
-        return why ? `${h.name}'s clearance ${why}, so it doesn't cover badge ${badge.number} (${needed.name}).` : `${h.name}'s clearance doesn't cover badge ${badge.number} (${needed.name}).`;
+        const level = levelNames ? ` (${needed.name})` : "";
+        return why ? `${h.name}'s clearance ${why}, so it doesn't cover badge ${badge.number}${level}.` : `${h.name}'s clearance doesn't cover badge ${badge.number}${level}.`;
       }
     }
     return null;
@@ -348,13 +352,13 @@ function createBadges({ db, clearance, now = Date.now }) {
   }
 
   /** Gives a badge to a person or visitor; refuses one they may not hold. */
-  function assign(badgeId, { kind, holderId, visitId = null, replacesBadgeId = null }, { by = null, sites = null } = {}) {
+  function assign(badgeId, { kind, holderId, visitId = null, replacesBadgeId = null }, { by = null, sites = null, levelNames = true } = {}) {
     const badge = get(badgeId, { sites });
     if (!badge) throw fail(404, "No such badge.");
     if (badge.holder) throw fail(409, `Badge ${badge.number} is with ${badge.holder.name}; take it back first.`);
     const h = holder(kind, holderId);
     if (!h) throw fail(404, "No such person or visitor.");
-    const why = refusal(badge, h);
+    const why = refusal(badge, h, { levelNames });
     if (why) throw fail(409, why);
     if (visitId && !raw.prepare("SELECT 1 FROM visits WHERE id = ? AND visitor_id = ?").get(visitId, h.id)) throw fail(400, "That visit isn't the visitor's.");
     let replaces = null;
@@ -394,7 +398,47 @@ function createBadges({ db, clearance, now = Date.now }) {
     return list({ state: "overdue", sites, limit: 1 }).total;
   }
 
-  return { list, get, history, forHolder, openForHolder, create, createRange, update, remove, holder, refusal, availableFor, assign, takeBack, leftCount, overdueCount };
+  // --- kiosk visits waiting for a badge --------------------------------------------------------
+
+  const WAITING_WHERE = `v.kiosk_id IS NOT NULL AND v.checked_out_at IS NULL AND v.badge_waived_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM badge_assignments a WHERE a.holder_kind = 'visitor' AND a.holder_id = v.visitor_id AND a.returned_at IS NULL)`;
+
+  /**
+   * Visitors who checked themselves in at a kiosk and hold no badge yet, oldest first, at the
+   * sites `sites` covers (null for every site), or at `siteId` alone. Each leaves the list once
+   * given a badge, checked out, or marked as needing none.
+   */
+  function waitingForBadge({ sites = null, siteId = null } = {}) {
+    const where = [WAITING_WHERE];
+    const params = [];
+    if (sites) where.push(`v.site_id IN (${[...sites].map(Number).join(",") || "NULL"})`);
+    if (siteId) { where.push("v.site_id = ?"); params.push(Number(siteId)); }
+    return raw.prepare(`SELECT v.id, v.visitor_id, v.site_id, v.company_name, v.host_name, v.checked_in_at, s.name AS site_name, k.name AS kiosk_name,
+        p.first_name, p.last_name, p.organisation
+      FROM visits v JOIN visitors p ON p.id = v.visitor_id JOIN sites s ON s.id = v.site_id LEFT JOIN kiosks k ON k.id = v.kiosk_id
+      WHERE ${where.join(" AND ")} ORDER BY v.checked_in_at`).all(...params).map((r) => ({
+      visitId: r.id,
+      visitorId: r.visitor_id,
+      name: `${r.first_name} ${r.last_name}`,
+      organisation: r.organisation,
+      siteId: r.site_id,
+      siteName: r.site_name,
+      kioskName: r.kiosk_name,
+      companyName: r.company_name,
+      hostName: r.host_name,
+      checkedInAt: r.checked_in_at
+    }));
+  }
+
+  /** Staff say a kiosk visit needs no badge (an escort, a delivery): it leaves the list. */
+  function waiveVisitBadge(visitId, { by = null, sites = null } = {}) {
+    const v = raw.prepare(`SELECT v.id, v.site_id, p.first_name, p.last_name FROM visits v JOIN visitors p ON p.id = v.visitor_id WHERE v.id = ? AND ${WAITING_WHERE}`).get(Number(visitId));
+    if (!v || (sites && !sites.has(v.site_id))) throw fail(404, "That visit isn't waiting for a badge.");
+    raw.prepare("UPDATE visits SET badge_waived_at = ?, badge_waived_by = ? WHERE id = ?").run(now(), by, v.id);
+    return { visitId: v.id, name: `${v.first_name} ${v.last_name}` };
+  }
+
+  return { list, get, history, forHolder, openForHolder, create, createRange, update, remove, holder, refusal, availableFor, assign, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge };
 }
 
 module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES };

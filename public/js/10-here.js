@@ -122,23 +122,31 @@ async function staffCheckInAt(visitor, siteId) {
   const blocked = visitor.blocked;
   // Visitor badges they may hold, to hand over with the check-in.
   let badgeChoices = [];
-  if (canEditBadges()) badgeChoices = (await api(`/api/badge-holders/visitor/${visitor.id}`).catch(() => ({ available: [] }))).available.filter((b) => !b.sites.length || b.sites.some((s) => String(s.id) === String(siteId)));
+  let suggested = null;
+  if (canEditBadges()) {
+    const offered = await api(`/api/badge-holders/visitor/${visitor.id}?site=${encodeURIComponent(siteId)}`).catch(() => ({ available: [], suggested: null }));
+    badgeChoices = offered.available;
+    suggested = offered.suggested;
+  }
+  // Each badge on offer with its image, and the one to give them large.
+  const picker = badgeChoices.length ? badgePicker(badgeChoices, { suggested, allowNone: true, label: "Visitor badge" }) : null;
   const result = await formDialog({
     title: `Check in ${visitorName(visitor)}`,
     intro: blocked ? h("p", { class: "message error", text: `${visitorName(visitor)} is blocked. Only let them in if a manager has agreed.` }) : null,
     fields: [
       ...companyHostFields(companies, { companyId: usual?.companyId || "", hostId: usual?.hostId || "", siteId }),
       { name: "purpose", label: "Purpose (optional)", placeholder: "Meeting, interview, delivery…" },
-      ...(badgeChoices.length ? [{ name: "badgeId", label: "Visitor badge", type: "select", value: "", options: [{ value: "", label: "No badge" }, ...badgeChoices.map((b) => ({ value: String(b.id), label: `${b.number} · ${[b.classificationName, b.clearanceLevelName].filter(Boolean).join(" ")}` }))], hint: "It stays with them until someone takes it back." }] : []),
+      ...(picker ? [{ node: h("div", { class: "full-row" }, h("span", { class: "label", text: "Visitor badge" }), h("div", { class: "badge-give" }, suggestedBadge(suggested), picker.node), h("span", { class: "hint", text: "It stays with them until someone takes it back." })) }] : []),
       ...(blocked ? [{ name: "overrideBlock", label: "A manager has agreed to let them in", type: "checkbox", value: false }] : [])
     ],
     submitLabel: "Check in",
     onSubmit: async (v) => {
       const r = await api("/api/visits", { method: "POST", body: { visitorId: visitor.id, siteId: Number(siteId), companyId: Number(v.companyId), hostId: v.hostId ? Number(v.hostId) : null, purpose: v.purpose, overrideBlock: Boolean(v.overrideBlock) } });
-      if (v.badgeId) {
+      const badgeId = picker ? picker.value() : "";
+      if (badgeId) {
         try {
-          await api(`/api/badges/${v.badgeId}/assign`, { method: "POST", body: { kind: "visitor", holderId: visitor.id, visitId: r.visit.id } });
-          r.badge = badgeChoices.find((b) => String(b.id) === v.badgeId)?.number;
+          await api(`/api/badges/${badgeId}/assign`, { method: "POST", body: { kind: "visitor", holderId: visitor.id, visitId: r.visit.id } });
+          r.badge = picker.chosen()?.number;
         } catch (error) {
           toast(`Checked in, but the badge wasn't given: ${error.message}`, "error");
         }

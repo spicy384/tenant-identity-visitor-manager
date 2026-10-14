@@ -207,6 +207,39 @@ async function main() {
 
   r = await desk.get("/api/config");
   check("staff: config carries who is in the building and how many to check", r.data.visits.here[river.id] === 1 && r.data.visits.review === 1);
+
+  // --- kiosk visitors waiting for a badge (the banner) -------------------------------------------------
+  pw.harbourDesk = password();
+  await admin.post("/api/users", { username: "harbourdesk", password: pw.harbourDesk, role: "frontdesk", sites: [harbour.id] });
+  const harbourDesk = client();
+  await harbourDesk.post("/api/auth/login", { username: "harbourdesk", password: pw.harbourDesk });
+  r = await desk.get("/api/visits/badge-needed");
+  check("badge banner: a visitor who checked in at a kiosk is waiting for a badge", r.data.visits.length === 1 && r.data.visits[0].name === "Grace Hopper" && r.data.visits[0].kioskName === "River iPad" && r.data.visits[0].siteId === river.id && r.data.visits[0].companyName === "Both Partners");
+  check("badge banner: shown to staff at that site", (await riverDesk.get("/api/visits/badge-needed")).data.visits.length === 1);
+  check("badge banner: not to staff only at another site", (await harbourDesk.get("/api/visits/badge-needed")).data.visits.length === 0);
+  check("badge banner: nor for another site chosen in the picker", (await desk.get(`/api/visits/badge-needed?site=${harbour.id}`)).data.visits.length === 0);
+  check("badge banner: nor to anyone who can't give badges out", (await viewer.get("/api/visits/badge-needed")).status === 403);
+  const walkIn = (await desk.post("/api/visitors", { firstName: "Wally", lastName: "Walkin" })).data.visitor;
+  await desk.post("/api/visits", { visitorId: walkIn.id, siteId: river.id, companyId: both.id });
+  check("badge banner: not for visitors staff checked in themselves", (await desk.get("/api/visits/badge-needed")).data.visits.every((v) => v.name !== "Wally Walkin"));
+  const uncleared = (await admin.get("/api/clearance")).data.classifications.find((c) => !c.requiresClearance);
+  const harbourBadge = (await admin.post("/api/badges", { number: "VH-1", type: "visitor", classificationId: uncleared.id, siteIds: [harbour.id] })).data.badge;
+  const riverBadge = (await admin.post("/api/badges", { number: "VR-1", type: "visitor", classificationId: uncleared.id, siteIds: [river.id] })).data.badge;
+  const graceWaiting = (await desk.get("/api/visits/badge-needed")).data.visits[0];
+  r = await desk.get(`/api/badge-holders/visitor/${graceWaiting.visitorId}?site=${river.id}`);
+  check("badge banner: the badges offered are those valid where they checked in", r.data.available.map((b) => b.number).join() === "VR-1" && harbourBadge.id);
+  r = await desk.post(`/api/badges/${riverBadge.id}/assign`, { kind: "visitor", holderId: graceWaiting.visitorId, visitId: graceWaiting.visitId });
+  check("badge banner: given a badge, they leave it", r.status === 200 && (await desk.get("/api/visits/badge-needed")).data.visits.length === 0);
+  await desk.post(`/api/badges/${riverBadge.id}/return`);
+  await riverKiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Kay", lastName: "Kiosk" }, companyId: both.id });
+  const kay = (await desk.get("/api/visits/badge-needed")).data.visits.find((v) => v.name === "Kay Kiosk");
+  check("badge banner: a new kiosk visitor appears", Boolean(kay));
+  check("badge banner: staff at another site can't mark them", (await harbourDesk.post(`/api/visits/${kay.visitId}/badge-not-needed`)).status === 404);
+  check("badge banner: nor can someone who doesn't give badges out", (await viewer.post(`/api/visits/${kay.visitId}/badge-not-needed`)).status === 403);
+  r = await riverDesk.post(`/api/visits/${kay.visitId}/badge-not-needed`);
+  check("badge banner: marked as needing no badge, they leave it", r.status === 200 && !(await desk.get("/api/visits/badge-needed")).data.visits.some((v) => v.name === "Kay Kiosk"));
+  check("badge banner: and it is in the audit log", (await admin.get("/api/audit?action=visit.badge_not_needed")).data.entries.some((e) => e.target === "Kay Kiosk"));
+  check("badge banner: once only", (await riverDesk.post(`/api/visits/${kay.visitId}/badge-not-needed`)).status === 404);
   r = await desk.post("/api/visitors", { firstName: "Alan", lastName: "Turing", email: "alan@example.com", links: [{ companyId: acme.id, hostId: bob.id }] });
   check("staff: front desk adds a visitor with a company", r.status === 200 && r.data.visitor.companies[0].hostName === "Bobby Host" && r.data.visitor.verified === true);
   const alan = r.data.visitor;

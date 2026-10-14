@@ -12,7 +12,8 @@ const SUITES = [
   "api.test.js",
   "badges.test.js",
   "events.test.js",
-  "clearance.test.js"
+  "clearance.test.js",
+  "templates.test.js"
 ];
 
 let failed = 0;

@@ -51,6 +51,7 @@ $("site-select").addEventListener("change", () => {
   try { localStorage.setItem(SITE_KEY, state.site); } catch { /* storage blocked */ }
   applyConfig();
   refreshCurrentView();
+  loadBadgeAlerts();
 });
 
 function showView(name) {
@@ -134,6 +135,7 @@ async function refreshCounts() {
     if (canReadVisitors()) state.config.visits = await api("/api/visits/summary");
     if (isSecurity()) state.config.clearance.queue = (await api("/api/clearance/queue-count")).count;
     showCounts();
+    loadBadgeAlerts();
   } catch {
     // The counts are a convenience; the pages show the real lists.
   }

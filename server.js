@@ -21,6 +21,7 @@ const { createBadges } = require("./badges");
 const { createEvents } = require("./events");
 const { createBadgeRoutes } = require("./badge-routes");
 const { createClearanceRoutes } = require("./clearance-routes");
+const { createBadgeTemplates } = require("./badge-templates");
 const { createAuth } = require("./auth-routes");
 const { createEntra } = require("./entra");
 const { resolveTlsOptions } = require("./tls-setup");
@@ -182,6 +183,7 @@ const clock = createVisitClock({ db, visitors, log: (message) => console.error(m
 const apiClients = createApiClients({ db, access, sites });
 const clearance = createClearance({ db, digitsHours: CLEARANCE_DIGITS_HOURS });
 const badges = createBadges({ db, clearance });
+const templates = createBadgeTemplates({ db, clearance });
 const events = createEvents({ db });
 const store = { read: db.readDoc, write: db.writeDoc };
 const entra = createEntra({ store, roles: () => access.listRoles({ kind: "user" }) });
@@ -288,9 +290,10 @@ app.get("/api/config", (req, res) => {
   const ctx = req.ctx;
   res.json({
     version: pkg.version,
-    access: { role: ctx.role?.id || null, roleName: ctx.role?.name || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, sitesLimited: Boolean(ctx.sites) },
+    access: { role: ctx.role?.id || null, roleName: ctx.role?.name || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), sitesLimited: Boolean(ctx.sites) },
     visits: access.canReadVisitors(ctx) ? { here: visitors.hereNow(ctx.sites), review: visitors.reviewCount(ctx.sites), expected: events.expectedCount(ctx.sites), badgesLeft: access.canReadBadges(ctx) ? badges.leftCount(ctx.sites) : 0, tempOverdue: access.canReadBadges(ctx) ? badges.overdueCount(ctx.sites) : 0 } : null,
-    clearanceLevels: clearance.levels().map((l) => ({ id: l.id, name: l.name, rank: l.rank })),
+    // Level names only for roles that see them; the rest see badge template images.
+    clearanceLevels: access.canSeeClearances(ctx) ? clearance.levels().map((l) => ({ id: l.id, name: l.name, rank: l.rank })) : [],
     clearance: { security: access.isSecurity(ctx), queue: clearanceRoutes.queueCount(req), digitsHeldHours: clearance.DIGITS_TTL_HOURS, ...clearance.settings() },
     sites: visibleSites(ctx).map((s) => ({ id: s.id, name: s.name, active: s.active, hasLogo: s.hasLogo, logoUpdatedAt: s.logoUpdatedAt })),
     siteCount: sites.count()
@@ -716,13 +719,13 @@ app.get("/api/roles", admin, (req, res) => {
 
 app.post("/api/roles", admin, (req, res) => {
   const role = access.createRole(req.body || {});
-  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}; fields copied from ${req.body?.copyFrom || "viewer"}`);
+  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}${role.clearances ? ", sees clearance levels" : ""}; fields copied from ${req.body?.copyFrom || "viewer"}`);
   res.json({ ok: true, role });
 });
 
 app.put("/api/roles/:id", admin, (req, res) => {
   const role = access.updateRole(String(req.params.id), req.body || {});
-  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}`);
+  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}${role.clearances ? ", sees clearance levels" : ""}`);
   res.json({ ok: true, role });
 });
 
@@ -744,7 +747,8 @@ function apiClientOut(client) {
 
 /** Every field a client could be given, database-wide ones only. */
 function apiFieldChoices() {
-  const choices = (entity) => access.allFields(entity).map((f) => ({ key: f.builtIn ? f.key : f.apiKey, label: f.label, locked: f.locked, builtIn: f.builtIn }));
+  // Clearance details are never given to API clients.
+  const choices = (entity) => access.allFields(entity).filter((f) => !f.sensitive).map((f) => ({ key: f.builtIn ? f.key : f.apiKey, label: f.label, locked: f.locked, builtIn: f.builtIn }));
   return { company: choices("company"), person: choices("person") };
 }
 
@@ -848,8 +852,10 @@ function kioskAddress(req) {
 }
 
 app.use(createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom, publicFields, kioskAddress, kioskPort: KIOSK_PORT, badges, events, clearance }));
-app.use(createBadgeRoutes({ access, badges, clearance, events, visitors, directory, admin, auditFrom }));
+// The clearance routes first: they mark everything under /api/clearance no-store, the
+// level list the badge routes answer included.
 app.use(clearanceRoutes.router);
+app.use(createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, admin, auditFrom }));
 
 app.use("/api", (req, res) => {
   res.status(404).json({ error: "Not found." });

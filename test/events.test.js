@@ -117,17 +117,18 @@ async function main() {
   check("clearance: a level in use can't be removed", (await admin.del(`/api/clearance/levels/${L["TS//SCI"].id}`)).status === 409);
 
   // --- badges ------------------------------------------------------------------------------------
-  r = await desk.post("/api/badges", { number: "T-100", type: "tenant", classificationId: cleared.id, clearanceLevelId: L["TS//SCI"].id });
-  check("badges: front desk adds one", r.status === 200 && r.data.badge.clearanceLevelName === "TS//SCI");
+  check("badges: front desk can't set a level by its id (they choose it by image)", (await desk.post("/api/badges", { number: "T-099", type: "tenant", classificationId: cleared.id, clearanceLevelId: L.TS.id })).status === 403);
+  r = await manager.post("/api/badges", { number: "T-100", type: "tenant", classificationId: cleared.id, clearanceLevelId: L["TS//SCI"].id });
+  check("badges: a manager adds one, with its level", r.status === 200 && r.data.badge.clearanceLevelName === "TS//SCI");
   const sciBadge = r.data.badge;
-  const tsBadge = (await desk.post("/api/badges", { number: "T-101", type: "tenant", classificationId: cleared.id, clearanceLevelId: L.TS.id })).data.badge;
-  const fspBadge = (await desk.post("/api/badges", { number: "T-102", type: "tenant", classificationId: cleared.id, clearanceLevelId: L["TS//SCI FSP"].id })).data.badge;
+  const tsBadge = (await manager.post("/api/badges", { number: "T-101", type: "tenant", classificationId: cleared.id, clearanceLevelId: L.TS.id })).data.badge;
+  const fspBadge = (await manager.post("/api/badges", { number: "T-102", type: "tenant", classificationId: cleared.id, clearanceLevelId: L["TS//SCI FSP"].id })).data.badge;
   const riverBadge = (await admin.post("/api/badges", { number: "R-1", type: "tenant", classificationId: uncleared.id, siteIds: [other.id] })).data.badge;
   check("badges: a role without badge access sees none", (await nobadge.get("/api/badges")).status === 403);
   check("badges: a viewer sees them", (await viewer.get("/api/badges")).data.total === 4);
   check("badges: a viewer can't give one out", (await viewer.post(`/api/badges/${sciBadge.id}/assign`, { kind: "person", holderId: tess.id })).status === 403);
   r = await desk.post(`/api/badges/${fspBadge.id}/assign`, { kind: "person", holderId: tess.id });
-  check("badges: someone whose clearance doesn't cover it is refused", r.status === 409 && /clearance doesn't cover/.test(r.data.error));
+  check("badges: someone whose clearance doesn't cover it is refused, without naming the level to front desk", r.status === 409 && /clearance doesn't cover/.test(r.data.error) && !/TS|FSP/.test(r.data.error));
   r = await desk.post(`/api/badges/${sciBadge.id}/assign`, { kind: "person", holderId: tess.id });
   check("badges: someone whose clearance covers it gets it", r.status === 200 && r.data.badge.holder.name === "Tess Secret" && r.data.badge.holder.assignedBy === "desk");
   r = await desk.get(`/api/badge-holders/person/${tess.id}`);

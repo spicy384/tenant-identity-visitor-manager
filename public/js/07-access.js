@@ -19,6 +19,8 @@ async function settingsAccess(body) {
     if (!field.locked) levels.push("hidden");
     levels.push("view");
     if (role.kind === "user" && role[grid.areas[field.entity]] === "edit" && !field.system && !field.security) levels.push("edit");
+    // Clearance details only for roles that see clearance levels (Settings > Roles).
+    if (field.sensitive && !role.clearances) return ["hidden"];
     return levels;
   }
 

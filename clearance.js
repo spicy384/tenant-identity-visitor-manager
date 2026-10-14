@@ -148,7 +148,11 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     const existing = levels().find((l) => l.id === Number(id));
     if (!existing) throw fail(404, "No such clearance level.");
     if (existing.inUse) throw fail(409, `${existing.name} is used by ${existing.inUse} ${existing.inUse === 1 ? "person, visitor or badge" : "people, visitors or badges"}; change them first.`);
-    raw.prepare("DELETE FROM clearance_levels WHERE id = ?").run(id);
+    db.transaction(() => {
+      // Its badge template images go with it (badge-templates.js).
+      raw.prepare("DELETE FROM badge_templates WHERE level_key = ?").run(Number(id));
+      raw.prepare("DELETE FROM clearance_levels WHERE id = ?").run(id);
+    });
     return existing;
   }
 

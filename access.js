@@ -22,11 +22,12 @@ const AREA_LEVELS = ["none", "read", "edit"];
 const ROLE_KINDS = { user: "Staff accounts", kiosk: "Kiosk devices", api: "API clients" };
 
 const DEFAULT_ROLES = [
-  { id: "admin", name: "Administrator", kind: "user", directory: "edit", visitors: "edit", badges: "edit", position: 0 },
-  { id: "manager", name: "Manager", kind: "user", directory: "edit", visitors: "edit", badges: "edit", position: 10 },
+  // clearances: sees clearance level names (the rest see badge template images instead).
+  { id: "admin", name: "Administrator", kind: "user", directory: "edit", visitors: "edit", badges: "edit", clearances: true, position: 0 },
+  { id: "manager", name: "Manager", kind: "user", directory: "edit", visitors: "edit", badges: "edit", clearances: true, position: 10 },
   { id: "frontdesk", name: "Front desk", kind: "user", directory: "read", visitors: "edit", badges: "edit", position: 20 },
   // The only role that validates and sets clearances, and sees the validation queue.
-  { id: "security", name: "Security", kind: "user", directory: "read", visitors: "read", badges: "read", position: 25 },
+  { id: "security", name: "Security", kind: "user", directory: "read", visitors: "read", badges: "read", clearances: true, position: 25 },
   { id: "viewer", name: "Viewer", kind: "user", directory: "read", visitors: "read", badges: "read", position: 30 },
   { id: "kiosk", name: "Kiosk", kind: "kiosk", directory: "read", visitors: "none", badges: "none", position: 90 },
   { id: "checkout", name: "Equipment Checkout", kind: "api", directory: "read", visitors: "none", badges: "none", position: 91 }
@@ -63,7 +64,8 @@ function createAccess({ db, fields }) {
   // --- roles -----------------------------------------------------------------------
 
   function roleRow(r) {
-    return r && { id: r.id, name: r.name, kind: r.kind, builtIn: Boolean(r.built_in), directory: r.directory, visitors: r.visitors, badges: r.badges || "none", position: r.position };
+    return r && { id: r.id, name: r.name, kind: r.kind, builtIn: Boolean(r.built_in), directory: r.directory, visitors: r.visitors, badges: r.badges || "none",
+      clearances: r.id === "admin" || r.id === "security" || (r.kind === "user" && Boolean(r.clearances)), position: r.position };
   }
 
   function listRoles({ kind = null } = {}) {
@@ -108,8 +110,8 @@ function createAccess({ db, fields }) {
     db.transaction(() => {
       for (const r of DEFAULT_ROLES) {
         if (getRole(r.id)) continue;
-        raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, position, created_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)")
-          .run(r.id, r.name, r.kind, r.directory, r.visitors, r.badges, r.position, now);
+        raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, clearances, position, created_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)")
+          .run(r.id, r.name, r.kind, r.directory, r.visitors, r.badges, r.clearances ? 1 : 0, r.position, now);
         if (r.id === "admin") continue;
         for (const entity of ENTITIES) {
           for (const f of builtIn(entity)) putPolicy.run(r.id, entity, f.key, builtInDefault(r, entity, f.key));
@@ -123,6 +125,13 @@ function createAccess({ db, fields }) {
     db.transaction(() => {
       for (const r of DEFAULT_ROLES) raw.prepare("UPDATE roles SET badges = ? WHERE id = ? AND built_in = 1").run(r.badges, r.id);
       db.setSetting("roles.badges_seeded", "1");
+    });
+  }
+  // As did seeing clearance level names: once, for the built-in roles that start with it.
+  if (!db.getSetting("roles.clearances_seeded")) {
+    db.transaction(() => {
+      for (const r of DEFAULT_ROLES) if (r.clearances) raw.prepare("UPDATE roles SET clearances = 1 WHERE id = ? AND built_in = 1").run(r.id);
+      db.setSetting("roles.clearances_seeded", "1");
     });
   }
 
@@ -139,7 +148,7 @@ function createAccess({ db, fields }) {
   }
 
   /** A new account role; its grid column starts as a copy of `copyFrom` (default: Viewer). */
-  function createRole({ name, directory = "read", visitors = "none", badges = "none", copyFrom = "viewer" }) {
+  function createRole({ name, directory = "read", visitors = "none", badges = "none", clearances = false, copyFrom = "viewer" }) {
     const clean = String(name || "").trim().slice(0, 40);
     if (!clean) throw fail(400, "Give the role a name.");
     if (raw.prepare("SELECT 1 FROM roles WHERE name = ?").get(clean)) throw fail(409, "A role with that name already exists.");
@@ -150,7 +159,7 @@ function createAccess({ db, fields }) {
     if (!source || source.kind !== "user") throw fail(400, "Copy the field access of a staff role.");
     const id = roleId(clean);
     db.transaction(() => {
-      raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, position, created_at) VALUES (?, ?, 'user', 0, ?, ?, ?, 50, ?)").run(id, clean, directory, visitors, badges, Date.now());
+      raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, clearances, position, created_at) VALUES (?, ?, 'user', 0, ?, ?, ?, ?, 50, ?)").run(id, clean, directory, visitors, badges, clearances === true ? 1 : 0, Date.now());
       if (source.id === "admin") {
         // Administrators have no stored column: everything is editable.
         for (const entity of ENTITIES) {
@@ -169,7 +178,8 @@ function createAccess({ db, fields }) {
     if (!role) throw fail(404, "No such role.");
     if (role.id === "admin") throw fail(400, "The Administrator role always has full access.");
     if (role.kind === "api" && !role.builtIn) throw fail(400, "An API client's fields are set under Settings > API clients.");
-    if (role.kind !== "user" && (patch.directory !== undefined || patch.visitors !== undefined || patch.badges !== undefined)) throw fail(400, `What the ${role.name} role reaches is fixed; set which fields it sees in the field access grid.`);
+    if (role.kind !== "user" && (patch.directory !== undefined || patch.visitors !== undefined || patch.badges !== undefined || patch.clearances !== undefined)) throw fail(400, `What the ${role.name} role reaches is fixed; set which fields it sees in the field access grid.`);
+    if (role.id === "security" && patch.clearances === false) throw fail(400, "The Security role validates clearances, so it always sees clearance levels.");
     const next = { ...role };
     if (patch.name !== undefined) {
       if (role.builtIn) throw fail(400, "Built-in roles keep their names.");
@@ -182,7 +192,8 @@ function createAccess({ db, fields }) {
     if (patch.directory !== undefined) next.directory = checkArea(patch.directory, "Directory access");
     if (patch.visitors !== undefined) next.visitors = checkArea(patch.visitors, "Visitor access");
     if (patch.badges !== undefined) next.badges = checkArea(patch.badges, "Badge access");
-    raw.prepare("UPDATE roles SET name = ?, directory = ?, visitors = ?, badges = ? WHERE id = ?").run(next.name, next.directory, next.visitors, next.badges, id);
+    if (patch.clearances !== undefined) next.clearances = patch.clearances === true;
+    raw.prepare("UPDATE roles SET name = ?, directory = ?, visitors = ?, badges = ?, clearances = ? WHERE id = ?").run(next.name, next.directory, next.visitors, next.badges, next.clearances ? 1 : 0, id);
     return getRole(id);
   }
 
@@ -243,7 +254,7 @@ function createAccess({ db, fields }) {
     for (const entity of ["company", "person"]) {
       const keep = new Set(Array.isArray(wanted?.[entity]) ? wanted[entity].map(String) : []);
       for (const f of allFields(entity, { allRecords: false })) {
-        const on = f.locked || keep.has(f.builtIn ? f.key : f.apiKey);
+        const on = f.locked || (!f.sensitive && keep.has(f.builtIn ? f.key : f.apiKey));
         changes.push({ roleId, entity, field: f.key, access: on ? (role.directory === "edit" && !f.system ? "edit" : "view") : "hidden" });
       }
     }
@@ -279,6 +290,8 @@ function createAccess({ db, fields }) {
     if (role.id === "admin") return field.system || field.security ? "view" : "edit";
     const area = role[areaOf(entity)];
     if (area === "none") return "hidden";
+    // Clearance details only for roles that see clearance levels, whatever the grid says.
+    if (field.sensitive && !role.clearances) return "hidden";
     let level = stored.get(`${role.id}|${entity}|${field.key}`);
     // A built-in field nobody has set yet has its default; a custom field without a cell
     // is hidden, so a missing row can only ever hide data, never show it.
@@ -330,6 +343,9 @@ function createAccess({ db, fields }) {
       if (field.locked && c.access === "hidden") throw fail(400, `${field.label} can't be hidden: anyone who sees a record sees it.`);
       if (c.access === "edit" && field.system) throw fail(400, `${field.label} is kept by the app and can't be edited.`);
       if (c.access === "edit" && field.security) throw fail(400, `${field.label} is set only by the Security role, by validating a clearance.`);
+      if (c.access !== "hidden" && field.sensitive && !role.clearances) {
+        throw fail(400, role.kind === "user" ? `${role.name} doesn't see clearance levels: turn that on for the role under Settings > Roles first.` : `${field.label} isn't given to ${role.kind === "api" ? "API clients" : "kiosks"}.`);
+      }
       if (c.access === "edit" && (role.kind === "kiosk" || role[areaOf(c.entity)] !== "edit")) {
         throw fail(400, `${role.name} can't change ${areaOf(c.entity) === "visitors" ? "visitors" : "the directory"}, so these fields can only be hidden or read-only.`);
       }
@@ -369,6 +385,8 @@ function createAccess({ db, fields }) {
       directory: role ? role.directory : "none",
       visitors: role ? role.visitors : "none",
       badges: role ? role.badges : "none",
+      // Sees clearance level names; everyone else sees badge template images instead.
+      clearances: Boolean(role?.clearances),
       sites: limited ? new Set(principal.sites.map(Number)) : null,
       // Read when used, so a context never answers from a grid that has since changed.
       get stored() {
@@ -383,6 +401,8 @@ function createAccess({ db, fields }) {
   const canEditVisitors = (ctx) => ctx.visitors === "edit";
   /** The Security role: validates clearances and sees the validation queue. */
   const isSecurity = (ctx) => ctx.role?.id === "security";
+  /** Sees clearance level names (Settings > Roles); everyone else sees badge template images. */
+  const canSeeClearances = (ctx) => Boolean(ctx.clearances);
   const canReadBadges = (ctx) => ctx.badges === "read" || ctx.badges === "edit";
   const canEditBadges = (ctx) => ctx.badges === "edit";
 
@@ -498,6 +518,7 @@ function createAccess({ db, fields }) {
     canReadBadges,
     canEditBadges,
     isSecurity,
+    canSeeClearances,
     fieldsFor,
     siteVisible,
     project,

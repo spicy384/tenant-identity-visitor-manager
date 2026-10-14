@@ -55,6 +55,8 @@ const canReadVisitors = () => ["read", "edit"].includes(state.config?.access?.vi
 const canEditVisitors = () => state.config?.access?.visitors === "edit";
 const canReadBadges = () => ["read", "edit"].includes(state.config?.access?.badges);
 const canEditBadges = () => state.config?.access?.badges === "edit";
+/** Sees clearance level names (Settings > Roles); everyone else sees badge template images instead. */
+const canSeeClearances = () => Boolean(state.config?.access?.clearances);
 const multiSite = () => (state.config?.sites || []).length > 1;
 
 // --- API -----------------------------------------------------------------------
