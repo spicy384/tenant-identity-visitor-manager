@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#f6f5f2" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Visitors" />
+  <title>Visitor check-in</title>
+  <link rel="manifest" href="/kiosk/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/kiosk/kiosk.css" />
+</head>
+<body>
+  <main class="stage">
+    <!-- Pairing: shown until an administrator's code links this iPad to a kiosk. -->
+    <section id="pair" class="screen" hidden>
+      <h1>Set up this kiosk</h1>
+      <p class="lead">Enter the pairing code from Settings &gt; Kiosks.</p>
+      <form id="pair-form" class="stack" autocomplete="off">
+        <input id="pair-code" class="big-input code-input" maxlength="9" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Pairing code" />
+        <p id="pair-error" class="error" role="alert"></p>
+        <button type="submit" class="btn primary">Pair this kiosk</button>
+      </form>
+    </section>
+
+    <!-- 1. Welcome: a name and two buttons, nothing else. -->
+    <section id="welcome" class="screen" hidden>
+      <div class="brand">
+        <img id="logo" class="logo" alt="" hidden />
+        <h1 id="site-name"></h1>
+        <p id="site-welcome" class="lead"></p>
+      </div>
+      <form id="name-form" class="stack" autocomplete="off">
+        <label class="visually-hidden" for="name-input">Your full name</label>
+        <input id="name-input" class="big-input" autocomplete="off" autocapitalize="words" spellcheck="false" enterkeyhint="go" placeholder="Your first and last name" />
+        <p id="name-error" class="error" role="alert"></p>
+        <div class="row">
+          <button type="submit" id="checkin-btn" class="btn primary">Check in</button>
+          <button type="button" id="checkout-btn" class="btn secondary">Check out</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Several visitors share that name. -->
+    <section id="which" class="screen" hidden>
+      <h1>Which one are you?</h1>
+      <div id="which-list" class="choices"></div>
+      <button type="button" class="btn link" data-action="new">I'm not on this list</button>
+      <button type="button" class="btn link" data-action="home">Start again</button>
+    </section>
+
+    <!-- 2. Found you: confirm who they're visiting. -->
+    <section id="confirm" class="screen" hidden>
+      <h1 id="confirm-title"></h1>
+      <p class="lead">Is this right?</p>
+      <dl class="card facts">
+        <dt>Visiting</dt><dd id="confirm-company"></dd>
+        <dt>Host</dt><dd id="confirm-host"></dd>
+      </dl>
+      <div class="row">
+        <button type="button" id="confirm-yes" class="btn primary">Check in</button>
+        <button type="button" id="confirm-change" class="btn secondary">Something's different</button>
+      </div>
+      <button type="button" class="btn link" data-action="home">Start again</button>
+    </section>
+
+    <!-- A returning visitor linked to several companies here. -->
+    <section id="pick-company" class="screen" hidden>
+      <h1 id="pick-company-title"></h1>
+      <p class="lead">Who are you visiting today?</p>
+      <div id="pick-company-list" class="choices"></div>
+      <button type="button" class="btn link" data-action="home">Start again</button>
+    </section>
+
+    <!-- 3. New here, or something's different: who they are and who they're visiting. -->
+    <section id="details" class="screen" hidden>
+      <h1 id="details-title">Nice to meet you</h1>
+      <form id="details-form" class="stack" autocomplete="off">
+        <div id="about-you" class="stack">
+          <div class="row">
+            <input id="first-name" class="big-input" autocapitalize="words" spellcheck="false" placeholder="First name" aria-label="First name" />
+            <input id="last-name" class="big-input" autocapitalize="words" spellcheck="false" placeholder="Last name" aria-label="Last name" />
+          </div>
+          <input id="organisation" class="big-input" autocapitalize="words" placeholder="Your company (optional)" aria-label="Your company" />
+          <input id="contact" class="big-input" type="text" inputmode="email" autocapitalize="off" spellcheck="false" placeholder="Email or phone (optional)" aria-label="Email or phone" />
+        </div>
+        <div class="picker">
+          <label class="picker-label" for="company-search">Who are you visiting?</label>
+          <div id="company-chosen" class="chosen" hidden>
+            <span id="company-chosen-name"></span>
+            <button type="button" id="company-clear" class="btn link small">Change</button>
+          </div>
+          <input id="company-search" class="big-input" autocapitalize="words" spellcheck="false" placeholder="Start typing the company's name" />
+          <div id="company-list" class="choices compact"></div>
+        </div>
+        <div id="host-picker" class="picker" hidden>
+          <span class="picker-label">Your host</span>
+          <div id="host-list" class="choices compact"></div>
+        </div>
+        <p id="details-error" class="error" role="alert"></p>
+        <button type="submit" id="details-submit" class="btn primary">Check in</button>
+      </form>
+      <button type="button" class="btn link" data-action="home">Start again</button>
+    </section>
+
+    <!-- 4. Done. -->
+    <section id="done" class="screen" hidden>
+      <div class="tick" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+      </div>
+      <h1 id="done-title"></h1>
+      <p id="done-text" class="lead"></p>
+      <p id="done-countdown" class="muted"></p>
+    </section>
+
+    <!-- Checking out -->
+    <section id="out-which" class="screen" hidden>
+      <h1>Which visit is yours?</h1>
+      <div id="out-list" class="choices"></div>
+      <button type="button" class="btn link" data-action="home">Start again</button>
+    </section>
+
+    <section id="out-confirm" class="screen" hidden>
+      <h1 id="out-title"></h1>
+      <p id="out-text" class="lead"></p>
+      <div class="row">
+        <button type="button" id="out-yes" class="btn primary">Check out</button>
+        <button type="button" class="btn secondary" data-action="home">Back</button>
+      </div>
+    </section>
+
+    <!-- Something only a person at reception can sort out. -->
+    <section id="reception" class="screen" hidden>
+      <h1 id="reception-title">Please see reception</h1>
+      <p id="reception-text" class="lead"></p>
+      <button type="button" class="btn secondary" data-action="home">Done</button>
+    </section>
+  </main>
+
+  <p id="offline" class="offline" hidden>Reconnecting…</p>
+  <script src="/kiosk/kiosk.js"></script>
+</body>
+</html>

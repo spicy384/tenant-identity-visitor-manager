@@ -1,0 +1,11 @@
+node_modules
+data
+test
+.git
+.claude
+*.md
+.env
+# Never bake a database key into an image.
+.db-key
+*.key
+secrets

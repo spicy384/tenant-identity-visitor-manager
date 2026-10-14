@@ -1,0 +1,1218 @@
+/**
+ * User accounts, sessions and the authentication routes.
+ *
+ * Accounts and sessions are two JSON documents in the encrypted database (db.js), so a
+ * restart does not sign everyone out and a copy of the data volume reveals nothing. An account is either local (password, optional
+ * authenticator code, passkeys) or Entra (signs in through Microsoft, which does its
+ * own MFA; no password is stored here).
+ */
+const express = require("express");
+const QRCode = require("qrcode");
+
+const auth = require("./auth");
+const webauthn = require("@simplewebauthn/server");
+const { createRateLimiter } = require("./rate-limit");
+
+// Failed sign-in attempts allowed per client address per 15 minutes, on top of the
+// per-account lockout below. 0 switches the address limit off (tests do this).
+const LOGIN_RATE_LIMIT = (() => {
+  const raw = process.env.LOGIN_RATE_LIMIT;
+  if (raw === undefined || raw === "") return 20;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : 20;
+})();
+// A session's lastSeenAt is persisted at most this often; the idle window is hours, so seconds do not matter.
+const LAST_SEEN_WRITE_INTERVAL_MS = 60 * 1000;
+
+const SESSION_COOKIE = "ivm_session";
+const ENTRA_STATE_COOKIE = "ivm_entra_state";
+const RP_NAME = "Identity and Visitor Manager";
+const PASSKEY_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const MAX_PASSKEYS_PER_USER = 10;
+
+// Passkeys are bound to a domain (the relying party ID). Normally both come from
+// the Origin header of the browser's request; these override them for setups where
+// the app sits behind a proxy that rewrites hosts, or for tests.
+const PASSKEY_RP_ID = process.env.PASSKEY_RP_ID || "";
+const PASSKEY_ORIGIN = process.env.PASSKEY_ORIGIN || "";
+const CSRF_HEADER = "x-csrf-token";
+
+// Session lifetimes.
+const IDLE_TIMEOUT_MS = 8 * 60 * 60 * 1000;      // signed out after 8h of inactivity
+const ABSOLUTE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000; // and after 7 days regardless
+const PENDING_LOGIN_TTL_MS = 5 * 60 * 1000;      // window to enter an MFA code
+
+// Brute-force protection.
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_MS = 15 * 60 * 1000;
+
+// Methods that change state require a CSRF token.
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * store: { read(name, fallback), write(name, value) } over the database's documents.
+ * roles: { isAssignable(id), getRole(id) } from access.js.
+ * sites: { exists(id) } to check the sites an account is limited to.
+ * onSetup({ siteName }): runs once, when the first administrator is created.
+ */
+function createAuth({ store, roles, sites = { exists: () => true }, audit = () => {}, entra = null, appUrl = "", onSetup = () => {} } = {}) {
+  /** Records who did what; never throws, so an audit problem cannot block sign-in. */
+  function log(req, action, target, detail, username) {
+    try {
+      audit({ username: username !== undefined ? username : (req.user ? req.user.username : null), ip: req.ip || null, action, target: target === undefined ? null : target, detail: detail === undefined ? null : detail });
+    } catch (error) {
+      console.error(`audit: could not record ${action}: ${error.message}`);
+    }
+  }
+
+  /** Where a session was opened from, kept on the session for the Sessions list. */
+  function clientInfo(req) {
+    return { ip: req.ip || null, userAgent: String(req.headers["user-agent"] || "").slice(0, 200) };
+  }
+
+  /** A stable, non-secret handle for a session id. */
+  function sessionKey(id) {
+    return require("crypto").createHash("sha256").update(String(id)).digest("hex").slice(0, 16);
+  }
+  const USERS_DOC = "users";
+  const SESSIONS_DOC = "sessions";
+
+  // Optional: let a reverse proxy (Authelia, Authentik, oauth2-proxy) assert identity.
+  const trustProxyAuth = String(process.env.TRUST_PROXY_AUTH || "").toLowerCase() === "true";
+  const proxyUserHeader = String(process.env.PROXY_USER_HEADER || "remote-user").toLowerCase();
+
+  // Set this whenever HTTPS terminates in front of the app (a reverse proxy counts).
+  // Deliberately not tied to NODE_ENV: a flag that silently does nothing is worse
+  // than one that is simply off.
+  const cookieSecure = String(process.env.COOKIE_SECURE || "").toLowerCase() === "true";
+
+  // Pending logins live in memory only: they are short-lived by design.
+  const pendingLogins = new Map();
+
+  // An unreadable document throws rather than reading as "no accounts yet", which
+  // would reopen first-run setup.
+  const loadUsers = () => {
+    const u = store.read(USERS_DOC, []);
+    return Array.isArray(u) ? u : [];
+  };
+  const saveUsers = (users) => store.write(USERS_DOC, users);
+
+  const loadSessions = () => {
+    const s = store.read(SESSIONS_DOC, {});
+    return s && typeof s === "object" && !Array.isArray(s) ? s : {};
+  };
+  const saveSessions = (sessions) => store.write(SESSIONS_DOC, sessions);
+
+  function hasUsers() {
+    return loadUsers().length > 0;
+  }
+
+  function findUser(username) {
+    const target = String(username || "").trim().toLowerCase();
+    return loadUsers().find((u) => u.username.toLowerCase() === target) || null;
+  }
+
+  function findUserById(id) {
+    return loadUsers().find((u) => u.id === id) || null;
+  }
+
+  function updateUser(id, patch) {
+    const users = loadUsers();
+    const idx = users.findIndex((u) => u.id === id);
+    if (idx < 0) {
+      return null;
+    }
+    users[idx] = { ...users[idx], ...patch };
+    saveUsers(users);
+    return users[idx];
+  }
+
+  // --- sessions ------------------------------------------------------------
+
+  function pruneSessions(sessions) {
+    const now = Date.now();
+    let changed = false;
+    for (const [id, s] of Object.entries(sessions)) {
+      if (now > s.expiresAt || now - s.lastSeenAt > IDLE_TIMEOUT_MS) {
+        delete sessions[id];
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  function createSession(userId, req = null) {
+    const sessions = loadSessions();
+    pruneSessions(sessions);
+
+    const id = auth.randomToken(32);
+    const client = req ? clientInfo(req) : { ip: null, userAgent: "" };
+    sessions[id] = {
+      userId,
+      csrfToken: auth.randomToken(24),
+      createdAt: Date.now(),
+      lastSeenAt: Date.now(),
+      expiresAt: Date.now() + ABSOLUTE_TIMEOUT_MS,
+      ip: client.ip,
+      userAgent: client.userAgent
+    };
+
+    saveSessions(sessions);
+    return { id, ...sessions[id] };
+  }
+
+  function getSession(id) {
+    if (!id) {
+      return null;
+    }
+
+    const sessions = loadSessions();
+    const pruned = pruneSessions(sessions);
+    const session = sessions[id];
+
+    if (!session) {
+      if (pruned) {
+        saveSessions(sessions);
+      }
+      return null;
+    }
+
+    // Sliding idle window, persisted once a minute rather than on every request.
+    const now = Date.now();
+    if (pruned || now - (session.lastSeenAt || 0) >= LAST_SEEN_WRITE_INTERVAL_MS) {
+      session.lastSeenAt = now;
+      saveSessions(sessions);
+    } else {
+      session.lastSeenAt = now;
+    }
+    return { id, ...session };
+  }
+
+  function destroySession(id) {
+    const sessions = loadSessions();
+    if (sessions[id]) {
+      delete sessions[id];
+      saveSessions(sessions);
+    }
+  }
+
+  /** Ends a user's sessions (all of them, or all but `except`); returns how many ended. */
+  function destroySessionsForUser(userId, { except = null } = {}) {
+    const sessions = loadSessions();
+    let ended = 0;
+    for (const [id, s] of Object.entries(sessions)) {
+      if (s.userId === userId && id !== except) {
+        delete sessions[id];
+        ended += 1;
+      }
+    }
+    if (ended) {
+      saveSessions(sessions);
+    }
+    return ended;
+  }
+
+  // --- cookies -------------------------------------------------------------
+
+  function parseCookies(header) {
+    const out = {};
+    for (const part of String(header || "").split(";")) {
+      const idx = part.indexOf("=");
+      if (idx > 0) {
+        const raw = part.slice(idx + 1).trim();
+        let value = raw;
+        try {
+          value = decodeURIComponent(raw);
+        } catch {
+          // Another app's cookie with a bare "%": keep it as sent rather than fail every request.
+        }
+        out[part.slice(0, idx).trim()] = value;
+      }
+    }
+    return out;
+  }
+
+  function setSessionCookie(res, id) {
+    res.setHeader("Set-Cookie", sessionCookieValue(id));
+  }
+
+  function sessionCookieValue(id) {
+    const attrs = [
+      `${SESSION_COOKIE}=${id}`,
+      "Path=/",
+      "HttpOnly",
+      "SameSite=Lax",
+      `Max-Age=${Math.floor(ABSOLUTE_TIMEOUT_MS / 1000)}`
+    ];
+    // Secure requires HTTPS; setting it on plain HTTP would stop sign-in working at all.
+    if (cookieSecure) {
+      attrs.push("Secure");
+    }
+    return attrs.join("; ");
+  }
+
+  function clearSessionCookie(res) {
+    res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  }
+
+  // --- lockout -------------------------------------------------------------
+
+  function isLockedOut(user) {
+    return Boolean(user?.lockedUntil && Date.now() < user.lockedUntil);
+  }
+
+  function registerFailure(user) {
+    const failed = (user.failedAttempts || 0) + 1;
+    const patch = { failedAttempts: failed };
+    if (failed >= MAX_FAILED_ATTEMPTS) {
+      patch.lockedUntil = Date.now() + LOCKOUT_MS;
+      patch.failedAttempts = 0;
+    }
+    updateUser(user.id, patch);
+  }
+
+  function clearFailures(user) {
+    if (user.failedAttempts || user.lockedUntil) {
+      updateUser(user.id, { failedAttempts: 0, lockedUntil: null });
+    }
+  }
+
+  // --- identity resolution -------------------------------------------------
+
+  function publicUser(user) {
+    return user && {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName || null,
+      email: user.email || null,
+      provider: user.provider === "entra" ? "entra" : "local",
+      entraLinked: Boolean(user.entraOid),
+      role: user.role,
+      roleName: roles.getRole(user.role)?.name || user.role,
+      // null: every site. An administrator always has every site, whatever is stored.
+      sites: user.role !== "admin" && Array.isArray(user.sites) ? user.sites : null,
+      mfaEnrolled: Boolean(user.totpSecret && user.mfaEnrolled),
+      passkeys: (user.passkeys || []).length,
+      createdAt: user.createdAt,
+      lastLoginAt: user.lastLoginAt || null
+    };
+  }
+
+  // --- passkeys (WebAuthn) -------------------------------------------------
+  //
+  // A passkey signs in on its own: the authenticator requires the device plus a
+  // biometric or PIN, which is the two-factor guarantee the password path gets
+  // from TOTP. Passwords and TOTP stay exactly as they are for every account.
+
+  // Challenges in flight, keyed by a random token (sign-in) or "reg:<user id>".
+  const passkeyChallenges = new Map();
+
+  function rememberChallenge(key, challenge) {
+    for (const [k, v] of passkeyChallenges) if (Date.now() > v.expiresAt) passkeyChallenges.delete(k);
+    passkeyChallenges.set(key, { challenge, expiresAt: Date.now() + PASSKEY_CHALLENGE_TTL_MS });
+  }
+
+  function takeChallenge(key) {
+    const entry = passkeyChallenges.get(key);
+    passkeyChallenges.delete(key);
+    return entry && Date.now() <= entry.expiresAt ? entry.challenge : null;
+  }
+
+  /** The origin and relying-party ID this request's ceremony must match. */
+  function passkeyContext(req) {
+    let origin = PASSKEY_ORIGIN || String(req.headers.origin || "");
+    if (!origin) {
+      const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http").split(",")[0].trim();
+      origin = `${proto}://${req.headers.host || "localhost"}`;
+    }
+    let url;
+    try {
+      url = new URL(origin);
+    } catch {
+      return null;
+    }
+    return { origin: url.origin, rpID: PASSKEY_RP_ID || url.hostname };
+  }
+
+  /** What the browser stores and what the API shows; the public key stays server-side. */
+  function publicPasskey(p) {
+    return { id: p.id, name: p.name, createdAt: p.createdAt, lastUsedAt: p.lastUsedAt || null, deviceType: p.deviceType || null, backedUp: Boolean(p.backedUp), transports: p.transports || [] };
+  }
+
+  function findUserByPasskey(credentialId) {
+    for (const user of loadUsers()) {
+      const passkey = (user.passkeys || []).find((p) => p.id === credentialId);
+      if (passkey) return { user, passkey };
+    }
+    return null;
+  }
+
+  /** Resolves the caller, from a trusted proxy header if enabled, else the session cookie. */
+  function resolveIdentity(req) {
+    if (trustProxyAuth) {
+      const name = req.headers[proxyUserHeader];
+      if (name) {
+        const user = findUser(name);
+        if (user) {
+          return { user, session: null, viaProxy: true };
+        }
+      }
+    }
+
+    const cookies = parseCookies(req.headers.cookie);
+    const session = getSession(cookies[SESSION_COOKIE]);
+    if (!session) {
+      return null;
+    }
+
+    const user = findUserById(session.userId);
+    if (!user) {
+      destroySession(session.id);
+      return null;
+    }
+
+    return { user, session, viaProxy: false };
+  }
+
+  function requireAuth(req, res, next) {
+    // Before any account exists the app is unusable until setup runs.
+    if (!hasUsers()) {
+      return res.status(409).json({ error: "Setup required.", setupRequired: true });
+    }
+
+    const identity = resolveIdentity(req);
+    if (!identity) {
+      return res.status(401).json({ error: "Not signed in." });
+    }
+
+    // CSRF: cookie-authenticated state changes must echo the session token.
+    if (!SAFE_METHODS.has(req.method) && !identity.viaProxy) {
+      const supplied = req.headers[CSRF_HEADER];
+      if (!supplied || !auth.safeEqual(supplied, identity.session.csrfToken)) {
+        return res.status(403).json({ error: "Invalid or missing CSRF token." });
+      }
+    }
+    // Behind an authentication proxy there is no token, but the proxy's own cookie still
+    // rides along on a cross-site request. The browser's Sec-Fetch-Site says where the
+    // request came from; a custom header (which forces a CORS preflight) is the fallback.
+    if (!SAFE_METHODS.has(req.method) && identity.viaProxy) {
+      const site = String(req.headers["sec-fetch-site"] || "").toLowerCase();
+      const sameSite = site === "same-origin" || site === "none";
+      if (!sameSite && !(site === "" && req.headers[CSRF_HEADER] !== undefined)) {
+        return res.status(403).json({ error: "Cross-site request refused." });
+      }
+    }
+
+    req.user = identity.user;
+    req.session = identity.session;
+    return next();
+  }
+
+  function requireAdmin(req, res, next) {
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({ error: "Administrator access required." });
+    }
+    return next();
+  }
+
+  // --- routes --------------------------------------------------------------
+
+  const router = express.Router();
+
+  // Address-based throttle on everything that takes a credential while signed out.
+  if (LOGIN_RATE_LIMIT > 0) {
+    const limiter = createRateLimiter({ maxFailures: LOGIN_RATE_LIMIT });
+    router.use(["/api/auth/setup", "/api/auth/login", "/api/auth/login/mfa", "/api/auth/login/recovery", "/api/auth/passkeys/login/verify"], limiter.middleware);
+  }
+
+  /** What the sign-in page needs to know about Entra: whether to show the button, and its label. */
+  function entraSignIn() {
+    if (!entra || !entra.isReady()) return { enabled: false };
+    return { enabled: true, label: entra.config().buttonLabel };
+  }
+
+  router.get("/api/auth/me", (req, res) => {
+    if (!hasUsers()) {
+      return res.json({ authenticated: false, setupRequired: true, entra: { enabled: false } });
+    }
+
+    const identity = resolveIdentity(req);
+    if (!identity) {
+      return res.json({ authenticated: false, setupRequired: false, entra: entraSignIn() });
+    }
+
+    return res.json({
+      authenticated: true,
+      setupRequired: false,
+      entra: entraSignIn(),
+      user: publicUser(identity.user),
+      csrfToken: identity.session ? identity.session.csrfToken : null,
+      viaProxy: identity.viaProxy
+    });
+  });
+
+  /** First-run only: creates the initial administrator. */
+  router.post("/api/auth/setup", (req, res) => {
+    if (hasUsers()) {
+      return res.status(409).json({ error: "Setup has already been completed." });
+    }
+
+    const username = String(req.body?.username || "").trim();
+    const password = String(req.body?.password || "");
+    const siteName = String(req.body?.siteName || "").trim().slice(0, 80);
+
+    if (!/^[a-zA-Z0-9._-]{3,32}$/.test(username)) {
+      return res.status(400).json({ error: "Username must be 3-32 characters (letters, numbers, . _ -)." });
+    }
+    if (password.length < 12) {
+      return res.status(400).json({ error: "Password must be at least 12 characters." });
+    }
+
+    const user = {
+      id: auth.randomToken(8),
+      username,
+      passwordHash: auth.hashPassword(password),
+      role: "admin",
+      totpSecret: null,
+      mfaEnrolled: false,
+      lastTotpCounter: 0,
+      recoveryCodes: [],
+      createdAt: Date.now(),
+      lastLoginAt: null,
+      failedAttempts: 0,
+      lockedUntil: null
+    };
+
+    saveUsers([user]);
+    log(req, "auth.setup", username, "first administrator created", username);
+    try {
+      onSetup({ siteName });
+    } catch (error) {
+      log(req, "auth.setup", username, `could not name the first site: ${error.message}`, username);
+    }
+
+    const session = createSession(user.id, req);
+    setSessionCookie(res, session.id);
+    return res.json({ ok: true, user: publicUser(user), csrfToken: session.csrfToken });
+  });
+
+  router.post("/api/auth/login", (req, res) => {
+    if (!hasUsers()) {
+      return res.status(409).json({ error: "Setup required.", setupRequired: true });
+    }
+
+    const username = String(req.body?.username || "").trim();
+    const password = String(req.body?.password || "");
+    // An Entra account has no password here; it answers like an unknown username.
+    const found = findUser(username);
+    const user = found && found.provider !== "entra" ? found : null;
+
+    // Same response whether the user exists or not, so usernames cannot be probed.
+    const invalid = () => res.status(401).json({ error: "Incorrect username or password." });
+
+    if (!user) {
+      // Spend comparable time so timing does not reveal existence.
+      auth.verifyPassword(password, "scrypt$16384$8$1$00$00");
+      return invalid();
+    }
+
+    // The password is checked before the lockout is mentioned, so a locked account with a
+    // wrong password answers exactly like an unknown username.
+    if (!auth.verifyPassword(password, user.passwordHash)) {
+      if (!isLockedOut(user)) registerFailure(user);
+      return invalid();
+    }
+
+    if (isLockedOut(user)) {
+      const mins = Math.ceil((user.lockedUntil - Date.now()) / 60000);
+      return res.status(429).json({ error: `Too many failed attempts. Try again in ${mins} minute(s).` });
+    }
+
+    clearFailures(user);
+
+    if (user.mfaEnrolled && user.totpSecret) {
+      const pendingToken = auth.randomToken(24);
+      pendingLogins.set(pendingToken, { userId: user.id, expiresAt: Date.now() + PENDING_LOGIN_TTL_MS });
+      return res.json({ ok: true, mfaRequired: true, pendingToken });
+    }
+
+    const session = createSession(user.id, req);
+    updateUser(user.id, { lastLoginAt: Date.now() });
+    log(req, "auth.login", user.username, "password", user.username);
+    setSessionCookie(res, session.id);
+    return res.json({ ok: true, mfaRequired: false, user: publicUser(user), csrfToken: session.csrfToken });
+  });
+
+  function consumePending(token) {
+    const pending = pendingLogins.get(token);
+    if (!pending) {
+      return null;
+    }
+    if (Date.now() > pending.expiresAt) {
+      pendingLogins.delete(token);
+      return null;
+    }
+    return pending;
+  }
+
+  router.post("/api/auth/login/mfa", (req, res) => {
+    const pending = consumePending(String(req.body?.pendingToken || ""));
+    if (!pending) {
+      return res.status(401).json({ error: "Sign-in expired. Start again." });
+    }
+
+    const user = findUserById(pending.userId);
+    if (!user) {
+      return res.status(401).json({ error: "Sign-in expired. Start again." });
+    }
+
+    if (isLockedOut(user)) {
+      return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+    }
+
+    const counter = auth.verifyTotp(user.totpSecret, req.body?.code);
+    if (counter === null) {
+      registerFailure(user);
+      return res.status(401).json({ error: "Incorrect authentication code." });
+    }
+
+    // Reject codes already used: a 30s window would otherwise allow replay.
+    if (counter <= (user.lastTotpCounter || 0)) {
+      return res.status(401).json({ error: "That code has already been used. Wait for the next one." });
+    }
+
+    pendingLogins.delete(String(req.body.pendingToken));
+    updateUser(user.id, { lastTotpCounter: counter, lastLoginAt: Date.now(), failedAttempts: 0, lockedUntil: null });
+    log(req, "auth.login", user.username, "password and authenticator code", user.username);
+
+    const session = createSession(user.id, req);
+    setSessionCookie(res, session.id);
+    return res.json({ ok: true, user: publicUser(user), csrfToken: session.csrfToken });
+  });
+
+  router.post("/api/auth/login/recovery", (req, res) => {
+    const pending = consumePending(String(req.body?.pendingToken || ""));
+    if (!pending) {
+      return res.status(401).json({ error: "Sign-in expired. Start again." });
+    }
+
+    const user = findUserById(pending.userId);
+    if (!user) {
+      return res.status(401).json({ error: "Sign-in expired. Start again." });
+    }
+
+    if (isLockedOut(user)) {
+      return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+    }
+
+    const supplied = auth.hashRecoveryCode(req.body?.code);
+    const remaining = (user.recoveryCodes || []).filter((h) => h !== supplied);
+
+    if (remaining.length === (user.recoveryCodes || []).length) {
+      registerFailure(user);
+      return res.status(401).json({ error: "Incorrect recovery code." });
+    }
+
+    // Single use.
+    pendingLogins.delete(String(req.body.pendingToken));
+    updateUser(user.id, { recoveryCodes: remaining, lastLoginAt: Date.now(), failedAttempts: 0, lockedUntil: null });
+    log(req, "auth.login", user.username, `password and recovery code (${remaining.length} left)`, user.username);
+
+    const session = createSession(user.id, req);
+    setSessionCookie(res, session.id);
+    return res.json({ ok: true, user: publicUser(user), csrfToken: session.csrfToken, recoveryCodesRemaining: remaining.length });
+  });
+
+  // --- Entra ID ------------------------------------------------------------
+
+  /** The callback URL registered in Entra: APP_URL when set, else this request's own origin. */
+  function entraRedirectUri(req) {
+    let base = appUrl;
+    if (!base) {
+      const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http").split(",")[0].trim();
+      base = `${proto}://${req.headers["x-forwarded-host"] || req.headers.host || "localhost"}`;
+    }
+    return `${String(base).replace(/\/+$/, "")}/api/auth/entra/callback`;
+  }
+
+  function entraStateCookie(res, value, maxAgeS) {
+    const attrs = [`${ENTRA_STATE_COOKIE}=${value}`, "Path=/api/auth/entra", "HttpOnly", "SameSite=Lax", `Max-Age=${maxAgeS}`];
+    if (cookieSecure) attrs.push("Secure");
+    return attrs.join("; ");
+  }
+
+  /** Back to the app with a message for the sign-in page. */
+  function entraFail(res, message) {
+    res.setHeader("Set-Cookie", entraStateCookie(res, "", 0));
+    res.redirect(302, `/?signin_error=${encodeURIComponent(message)}`);
+  }
+
+  router.get("/api/auth/entra/start", (req, res) => {
+    if (!entra || !entra.isReady()) return entraFail(res, "Sign-in with Microsoft is not configured.");
+    if (!hasUsers()) return entraFail(res, "Create the first administrator before using Microsoft sign-in.");
+    try {
+      const { state, url } = entra.begin({ redirectUri: entraRedirectUri(req) });
+      res.setHeader("Set-Cookie", entraStateCookie(res, state, 600));
+      res.redirect(302, url);
+    } catch (error) {
+      entraFail(res, error.message);
+    }
+  });
+
+  /** Finds or creates the account for a verified Entra identity; null (with a reason) when refused. */
+  function entraAccount(identity) {
+    const cfg = entra.config();
+    const users = loadUsers();
+    let user = users.find((u) => u.provider === "entra" && u.entraOid === identity.oid);
+    if (!user && identity.username) {
+      // Pre-added by an administrator under their UPN, and not yet linked to anyone.
+      user = users.find((u) => u.provider === "entra" && !u.entraOid && u.username.toLowerCase() === identity.username);
+    }
+    const patch = { entraOid: identity.oid, displayName: identity.name || null, email: identity.email || null, lastLoginAt: Date.now() };
+    if (identity.role) patch.role = identity.role;
+    if (user) return { user: updateUser(user.id, patch) };
+
+    const role = identity.role || (cfg.defaultRole !== "none" ? cfg.defaultRole : null);
+    if (!role) return { refused: `${identity.username || "This account"} has not been given access. Ask an administrator to add it under Settings > Users.` };
+    if (!identity.username) return { refused: "Microsoft did not say which account signed in." };
+    if (users.some((u) => u.username.toLowerCase() === identity.username)) {
+      return { refused: `A local account is already called ${identity.username}; an administrator must rename or remove it first.` };
+    }
+    const created = {
+      id: auth.randomToken(8),
+      username: identity.username,
+      provider: "entra",
+      passwordHash: null,
+      role,
+      createdAt: Date.now(),
+      failedAttempts: 0,
+      lockedUntil: null,
+      ...patch
+    };
+    saveUsers([...users, created]);
+    return { user: created, created: true };
+  }
+
+  router.get("/api/auth/entra/callback", async (req, res) => {
+    if (!entra || !entra.isReady()) return entraFail(res, "Sign-in with Microsoft is not configured.");
+    if (req.query.error) {
+      const description = String(req.query.error_description || req.query.error).split(/\r?\n/)[0].slice(0, 300);
+      return entraFail(res, `Microsoft sign-in did not complete: ${description}`);
+    }
+    let identity;
+    try {
+      identity = await entra.complete({
+        state: String(req.query.state || ""),
+        code: String(req.query.code || ""),
+        cookieState: parseCookies(req.headers.cookie)[ENTRA_STATE_COOKIE]
+      });
+    } catch (error) {
+      log(req, "auth.entra_failed", null, error.message, null);
+      return entraFail(res, error.message);
+    }
+    const result = entraAccount(identity);
+    if (!result.user) {
+      log(req, "auth.entra_refused", identity.username || identity.oid, result.refused, null);
+      return entraFail(res, result.refused);
+    }
+    if (result.created) log(req, "user.add", result.user.username, `role ${result.user.role}, created at first Microsoft sign-in`, result.user.username);
+    log(req, "auth.login", result.user.username, "Microsoft Entra ID", result.user.username);
+    const session = createSession(result.user.id, req);
+    res.setHeader("Set-Cookie", [entraStateCookie(res, "", 0), sessionCookieValue(session.id)]);
+    return res.redirect(302, "/");
+  });
+
+  // --- passkey routes ------------------------------------------------------
+
+  /** Passwords, codes and passkeys belong to local accounts; Entra accounts sign in through Microsoft. */
+  function requireLocal(req, res, next) {
+    if (req.user?.provider === "entra") {
+      return res.status(400).json({ error: "This account signs in with Microsoft; manage its password and MFA there." });
+    }
+    return next();
+  }
+
+  router.get("/api/auth/passkeys", requireAuth, (req, res) => {
+    const user = findUserById(req.user.id);
+    res.json({ passkeys: (user?.passkeys || []).map(publicPasskey) });
+  });
+
+  /** Step 1 of adding a passkey: options the browser hands to the authenticator. */
+  router.post("/api/auth/passkeys/register/options", requireAuth, requireLocal, async (req, res) => {
+    const ctx = passkeyContext(req);
+    if (!ctx) return res.status(400).json({ error: "Could not work out this site's origin." });
+    const user = findUserById(req.user.id);
+    if ((user.passkeys || []).length >= MAX_PASSKEYS_PER_USER) {
+      return res.status(400).json({ error: `At most ${MAX_PASSKEYS_PER_USER} passkeys per account; remove one first.` });
+    }
+    try {
+      const options = await webauthn.generateRegistrationOptions({
+        rpName: RP_NAME,
+        rpID: ctx.rpID,
+        userName: user.username,
+        userDisplayName: user.username,
+        userID: Buffer.from(user.id, "utf8"),
+        attestationType: "none",
+        excludeCredentials: (user.passkeys || []).map((p) => ({ id: p.id, transports: p.transports })),
+        // A discoverable credential with user verification, so it can sign in by itself;
+        // sign-in requires verification, so a key that cannot verify is refused here, not then.
+        authenticatorSelection: { residentKey: "required", userVerification: "required" }
+      });
+      rememberChallenge(`reg:${user.id}`, options.challenge);
+      res.json({ options });
+    } catch (error) {
+      res.status(500).json({ error: `Could not start passkey registration: ${error.message}` });
+    }
+  });
+
+  /** Step 2: the authenticator's answer, checked and stored. */
+  router.post("/api/auth/passkeys/register/verify", requireAuth, requireLocal, async (req, res) => {
+    const ctx = passkeyContext(req);
+    const expectedChallenge = takeChallenge(`reg:${req.user.id}`);
+    if (!ctx || !expectedChallenge) return res.status(400).json({ error: "Registration expired. Start again." });
+    const name = String(req.body?.name || "").trim().slice(0, 60) || "Passkey";
+    let verification;
+    try {
+      verification = await webauthn.verifyRegistrationResponse({
+        response: req.body?.response,
+        expectedChallenge,
+        expectedOrigin: ctx.origin,
+        expectedRPID: ctx.rpID,
+        requireUserVerification: true
+      });
+    } catch (error) {
+      return res.status(400).json({ error: `The passkey could not be verified: ${error.message}` });
+    }
+    if (!verification.verified || !verification.registrationInfo) {
+      return res.status(400).json({ error: "The passkey could not be verified." });
+    }
+    const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
+    if (findUserByPasskey(credential.id)) {
+      return res.status(409).json({ error: "That passkey is already registered." });
+    }
+    const user = findUserById(req.user.id);
+    const stored = {
+      id: credential.id,
+      publicKey: Buffer.from(credential.publicKey).toString("base64url"),
+      counter: credential.counter || 0,
+      transports: credential.transports || [],
+      deviceType: credentialDeviceType,
+      backedUp: Boolean(credentialBackedUp),
+      name,
+      createdAt: Date.now(),
+      lastUsedAt: null
+    };
+    const passkeys = [...(user.passkeys || []), stored];
+    updateUser(user.id, { passkeys });
+    log(req, "passkey.add", req.user.username, `"${name}" (${credentialDeviceType || "unknown device type"})`);
+    res.json({ ok: true, passkey: publicPasskey(stored), passkeys: passkeys.map(publicPasskey) });
+  });
+
+  router.delete("/api/auth/passkeys/:id", requireAuth, (req, res) => {
+    const user = findUserById(req.user.id);
+    const passkeys = (user?.passkeys || []).filter((p) => p.id !== req.params.id);
+    if (passkeys.length === (user?.passkeys || []).length) {
+      return res.status(404).json({ error: "No such passkey." });
+    }
+    const removed = (user.passkeys || []).find((p) => p.id === req.params.id);
+    updateUser(user.id, { passkeys });
+    log(req, "passkey.remove", req.user.username, removed ? `"${removed.name}"` : null);
+    res.json({ ok: true, passkeys: passkeys.map(publicPasskey) });
+  });
+
+  /** Sign-in step 1: a challenge any registered passkey may answer (no username needed). */
+  router.post("/api/auth/passkeys/login/options", async (req, res) => {
+    if (!hasUsers()) return res.status(409).json({ error: "Setup required.", setupRequired: true });
+    const ctx = passkeyContext(req);
+    if (!ctx) return res.status(400).json({ error: "Could not work out this site's origin." });
+    try {
+      const options = await webauthn.generateAuthenticationOptions({
+        rpID: ctx.rpID,
+        userVerification: "required",
+        allowCredentials: []
+      });
+      const token = auth.randomToken(24);
+      rememberChallenge(token, options.challenge);
+      res.json({ token, options });
+    } catch (error) {
+      res.status(500).json({ error: `Could not start passkey sign-in: ${error.message}` });
+    }
+  });
+
+  /** Sign-in step 2: the signed challenge, which identifies the account by credential ID. */
+  router.post("/api/auth/passkeys/login/verify", async (req, res) => {
+    const ctx = passkeyContext(req);
+    const expectedChallenge = takeChallenge(String(req.body?.token || ""));
+    const response = req.body?.response;
+    if (!ctx || !expectedChallenge || !response || typeof response.id !== "string") {
+      return res.status(401).json({ error: "Passkey sign-in expired. Try again." });
+    }
+    const refuse = () => res.status(401).json({ error: "That passkey is not recognised here." });
+    const found = findUserByPasskey(response.id);
+    if (!found) return refuse();
+    const { user, passkey } = found;
+    if (isLockedOut(user)) {
+      return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+    }
+    let verification;
+    try {
+      verification = await webauthn.verifyAuthenticationResponse({
+        response,
+        expectedChallenge,
+        expectedOrigin: ctx.origin,
+        expectedRPID: ctx.rpID,
+        // The passkey stands in for password + code, so the device must have checked the person.
+        requireUserVerification: true,
+        credential: {
+          id: passkey.id,
+          publicKey: Buffer.from(passkey.publicKey, "base64url"),
+          counter: passkey.counter || 0,
+          transports: passkey.transports || []
+        }
+      });
+    } catch (error) {
+      registerFailure(user);
+      return res.status(401).json({ error: `Passkey sign-in failed: ${error.message}` });
+    }
+    if (!verification.verified) {
+      registerFailure(user);
+      return refuse();
+    }
+    const passkeys = (user.passkeys || []).map((p) => (p.id === passkey.id
+      ? { ...p, counter: verification.authenticationInfo.newCounter, lastUsedAt: Date.now() }
+      : p));
+    updateUser(user.id, { passkeys, lastLoginAt: Date.now(), failedAttempts: 0, lockedUntil: null });
+    log(req, "auth.login", user.username, `passkey "${passkey.name}"`, user.username);
+    const session = createSession(user.id, req);
+    setSessionCookie(res, session.id);
+    return res.json({ ok: true, user: publicUser(findUserById(user.id)), csrfToken: session.csrfToken });
+  });
+
+  // --- sessions -------------------------------------------------------------
+
+  function publicSession(id, s, currentId) {
+    return { key: sessionKey(id), current: id === currentId, createdAt: s.createdAt, lastSeenAt: s.lastSeenAt, expiresAt: s.expiresAt, ip: s.ip || null, userAgent: s.userAgent || "" };
+  }
+
+  /** The caller's own open sessions, newest activity first. */
+  router.get("/api/auth/sessions", requireAuth, (req, res) => {
+    const sessions = loadSessions();
+    if (pruneSessions(sessions)) saveSessions(sessions);
+    const currentId = req.session ? req.session.id : null;
+    const mine = Object.entries(sessions)
+      .filter(([, s]) => s.userId === req.user.id)
+      .map(([id, s]) => publicSession(id, s, currentId))
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+    res.json({ sessions: mine, viaProxy: !req.session });
+  });
+
+  /** Ends one of the caller's other sessions, by its key. */
+  router.delete("/api/auth/sessions/:key", requireAuth, (req, res) => {
+    const sessions = loadSessions();
+    const hit = Object.entries(sessions).find(([id, s]) => s.userId === req.user.id && sessionKey(id) === req.params.key);
+    if (!hit) return res.status(404).json({ error: "No such session." });
+    if (req.session && hit[0] === req.session.id) return res.status(400).json({ error: "That is this session; use Sign out for it." });
+    delete sessions[hit[0]];
+    saveSessions(sessions);
+    log(req, "session.revoke", req.user.username, `from ${hit[1].ip || "unknown address"}`);
+    res.json({ ok: true });
+  });
+
+  /** Signs the caller out everywhere except here. */
+  router.post("/api/auth/sessions/sign-out-others", requireAuth, (req, res) => {
+    const sessions = loadSessions();
+    let ended = 0;
+    for (const [id, s] of Object.entries(sessions)) {
+      if (s.userId === req.user.id && (!req.session || id !== req.session.id)) {
+        delete sessions[id];
+        ended += 1;
+      }
+    }
+    saveSessions(sessions);
+    log(req, "session.sign_out_others", req.user.username, `${ended} session(s) ended`);
+    res.json({ ok: true, ended });
+  });
+
+  /** Signs the caller out everywhere, this session included. */
+  router.post("/api/auth/sessions/sign-out-all", requireAuth, (req, res) => {
+    const ended = destroySessionsForUser(req.user.id);
+    log(req, "session.sign_out_all", req.user.username, `${ended} session(s) ended`);
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  });
+
+  router.post("/api/auth/logout", requireAuth, (req, res) => {
+    if (req.session) {
+      destroySession(req.session.id);
+      log(req, "auth.logout", req.user.username, null);
+    }
+    clearSessionCookie(res);
+    return res.json({ ok: true });
+  });
+
+  /** Begins TOTP enrolment; nothing is stored until the code is confirmed. */
+  router.post("/api/auth/mfa/setup", requireAuth, requireLocal, async (req, res) => {
+    const secret = auth.generateTotpSecret();
+    const uri = auth.buildOtpauthUri({ secret, account: req.user.username });
+
+    // Held on the user record but not active until /confirm succeeds.
+    updateUser(req.user.id, { pendingTotpSecret: secret });
+
+    try {
+      const qrDataUrl = await QRCode.toDataURL(uri, { margin: 1, width: 220 });
+      return res.json({ ok: true, secret, uri, qrDataUrl });
+    } catch (error) {
+      return res.status(500).json({ error: `Could not render QR code: ${error.message}` });
+    }
+  });
+
+  router.post("/api/auth/mfa/confirm", requireAuth, requireLocal, (req, res) => {
+    const user = findUserById(req.user.id);
+    if (!user?.pendingTotpSecret) {
+      return res.status(400).json({ error: "Start enrolment first." });
+    }
+
+    const counter = auth.verifyTotp(user.pendingTotpSecret, req.body?.code);
+    if (counter === null) {
+      return res.status(400).json({ error: "That code did not match. Check your device's clock and try again." });
+    }
+
+    const recoveryCodes = auth.generateRecoveryCodes(10);
+    updateUser(user.id, {
+      totpSecret: user.pendingTotpSecret,
+      pendingTotpSecret: null,
+      mfaEnrolled: true,
+      lastTotpCounter: counter,
+      recoveryCodes: recoveryCodes.map(auth.hashRecoveryCode)
+    });
+
+    log(req, "mfa.enable", req.user.username, "authenticator enrolled, recovery codes issued");
+    // The only time the plaintext codes are ever returned.
+    return res.json({ ok: true, recoveryCodes });
+  });
+
+  router.post("/api/auth/mfa/disable", requireAuth, requireLocal, (req, res) => {
+    const user = findUserById(req.user.id);
+    if (!auth.verifyPassword(req.body?.password, user.passwordHash)) {
+      return res.status(401).json({ error: "Password is incorrect." });
+    }
+
+    updateUser(user.id, { totpSecret: null, pendingTotpSecret: null, mfaEnrolled: false, recoveryCodes: [], lastTotpCounter: 0 });
+    log(req, "mfa.disable", req.user.username, "by the account holder");
+    return res.json({ ok: true });
+  });
+
+  router.post("/api/auth/password", requireAuth, requireLocal, (req, res) => {
+    const user = findUserById(req.user.id);
+    const next = String(req.body?.newPassword || "");
+
+    if (!auth.verifyPassword(req.body?.currentPassword, user.passwordHash)) {
+      return res.status(401).json({ error: "Current password is incorrect." });
+    }
+    if (next.length < 12) {
+      return res.status(400).json({ error: "New password must be at least 12 characters." });
+    }
+
+    updateUser(user.id, { passwordHash: auth.hashPassword(next) });
+    // Whoever else holds a session on the old password is signed out; this session stays.
+    const ended = destroySessionsForUser(user.id, { except: req.session ? req.session.id : null });
+    log(req, "password.change", req.user.username, ended ? `${ended} other session(s) ended` : null);
+    return res.json({ ok: true, otherSessionsEnded: ended });
+  });
+
+  // --- user management (admin) ---------------------------------------------
+
+  router.get("/api/users", requireAuth, requireAdmin, (req, res) => {
+    res.json({ users: loadUsers().map(publicUser) });
+  });
+
+  router.post("/api/users", requireAuth, requireAdmin, (req, res) => {
+    const username = String(req.body?.username || "").trim();
+    const password = String(req.body?.password || "");
+    const role = roles.isAssignable(req.body?.role) ? req.body.role : "viewer";
+    let siteLimit;
+    try {
+      siteLimit = cleanSites(req.body?.sites, role);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    // An Entra account is added by its sign-in name (UPN) and linked at first sign-in.
+    if (req.body?.provider === "entra") {
+      const upn = username.toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(upn) || upn.length > 254) {
+        return res.status(400).json({ error: "Enter the person's Microsoft sign-in name, such as jane@contoso.com." });
+      }
+      if (findUser(upn)) {
+        return res.status(409).json({ error: "That username is already taken." });
+      }
+      const user = { id: auth.randomToken(8), username: upn, provider: "entra", passwordHash: null, entraOid: null, role, sites: siteLimit, createdAt: Date.now(), lastLoginAt: null, failedAttempts: 0, lockedUntil: null };
+      saveUsers([...loadUsers(), user]);
+      log(req, "user.add", upn, `role ${role}, Microsoft Entra ID`);
+      return res.json({ ok: true, user: publicUser(user) });
+    }
+
+    if (!/^[a-zA-Z0-9._-]{3,32}$/.test(username)) {
+      return res.status(400).json({ error: "Username must be 3-32 characters (letters, numbers, . _ -)." });
+    }
+    if (password.length < 12) {
+      return res.status(400).json({ error: "Password must be at least 12 characters." });
+    }
+    if (findUser(username)) {
+      return res.status(409).json({ error: "That username is already taken." });
+    }
+
+    const users = loadUsers();
+    const user = {
+      id: auth.randomToken(8),
+      username,
+      passwordHash: auth.hashPassword(password),
+      role,
+      sites: siteLimit,
+      totpSecret: null,
+      mfaEnrolled: false,
+      lastTotpCounter: 0,
+      recoveryCodes: [],
+      createdAt: Date.now(),
+      lastLoginAt: null,
+      failedAttempts: 0,
+      lockedUntil: null
+    };
+
+    users.push(user);
+    saveUsers(users);
+    log(req, "user.add", username, `role ${role}`);
+    return res.json({ ok: true, user: publicUser(user) });
+  });
+
+  router.delete("/api/users/:id", requireAuth, requireAdmin, (req, res) => {
+    const id = String(req.params.id);
+    const users = loadUsers();
+    const target = users.find((u) => u.id === id);
+
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    if (target.id === req.user.id) {
+      return res.status(400).json({ error: "You cannot delete your own account." });
+    }
+    if (target.role === "admin" && users.filter((u) => u.role === "admin").length === 1) {
+      return res.status(400).json({ error: "Cannot remove the last administrator." });
+    }
+
+    saveUsers(users.filter((u) => u.id !== id));
+    destroySessionsForUser(id);
+    log(req, "user.remove", target.username, `was ${target.role}`);
+    return res.json({ ok: true });
+  });
+
+  router.post("/api/users/:id/role", requireAuth, requireAdmin, (req, res) => {
+    const role = String(req.body?.role || "");
+    if (!roles.isAssignable(role)) {
+      return res.status(400).json({ error: "Choose one of the roles listed under Settings > Roles." });
+    }
+
+    const users = loadUsers();
+    const target = users.find((u) => u.id === String(req.params.id));
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    if (target.id === req.user.id) {
+      return res.status(400).json({ error: "You cannot change your own role." });
+    }
+    if (target.role === "admin" && role !== "admin" && users.filter((u) => u.role === "admin").length === 1) {
+      return res.status(400).json({ error: "Cannot demote the last administrator." });
+    }
+
+    updateUser(target.id, { role });
+    log(req, "user.role", target.username, `${target.role} to ${role}`);
+    return res.json({ ok: true, user: publicUser({ ...target, role }) });
+  });
+
+  /**
+   * The sites an account is limited to: null for every site, else a non-empty list of
+   * existing site ids. Administrators are never limited.
+   */
+  function cleanSites(value, role) {
+    if (value === null || value === undefined || role === "admin") return null;
+    if (!Array.isArray(value)) throw new Error("Sites must be a list of site ids, or null for every site.");
+    const ids = [...new Set(value.map(Number))];
+    if (!ids.length) throw new Error("Choose at least one site, or every site.");
+    for (const id of ids) {
+      if (!Number.isInteger(id) || !sites.exists(id)) throw new Error("One of the chosen sites does not exist.");
+    }
+    return ids;
+  }
+
+  router.post("/api/users/:id/sites", requireAuth, requireAdmin, (req, res) => {
+    const target = findUserById(String(req.params.id));
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    if (target.role === "admin") {
+      return res.status(400).json({ error: "Administrators always see every site." });
+    }
+    let siteLimit;
+    try {
+      siteLimit = cleanSites(req.body?.sites, target.role);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+    const updated = updateUser(target.id, { sites: siteLimit });
+    log(req, "user.sites", target.username, siteLimit ? `limited to site ids ${siteLimit.join(", ")}` : "every site");
+    return res.json({ ok: true, user: publicUser(updated) });
+  });
+
+  /** Admin escape hatch for a user who has lost their authenticator. */
+  router.post("/api/users/:id/reset-mfa", requireAuth, requireAdmin, (req, res) => {
+    const target = findUserById(String(req.params.id));
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    updateUser(target.id, {
+      totpSecret: null, pendingTotpSecret: null, mfaEnrolled: false,
+      recoveryCodes: [], lastTotpCounter: 0, failedAttempts: 0, lockedUntil: null
+    });
+    destroySessionsForUser(target.id);
+    log(req, "user.reset_mfa", target.username, "two-factor cleared and sessions ended by an administrator");
+    return res.json({ ok: true });
+  });
+
+  /** Admin sets a new password for a local account that has forgotten its own. */
+  router.post("/api/users/:id/password", requireAuth, requireAdmin, (req, res) => {
+    const target = findUserById(String(req.params.id));
+    if (!target) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    if (target.provider === "entra") {
+      return res.status(400).json({ error: "This account signs in with Microsoft and has no password here." });
+    }
+    const next = String(req.body?.password || "");
+    if (next.length < 12) {
+      return res.status(400).json({ error: "Password must be at least 12 characters." });
+    }
+    updateUser(target.id, { passwordHash: auth.hashPassword(next), failedAttempts: 0, lockedUntil: null });
+    const ended = target.id === req.user.id ? 0 : destroySessionsForUser(target.id);
+    log(req, "user.reset_password", target.username, ended ? `by an administrator; ${ended} session(s) ended` : "by an administrator");
+    return res.json({ ok: true });
+  });
+
+  return {
+    router,
+    requireAuth,
+    requireAdmin,
+    hasUsers,
+    loadUsers,
+    findUser,
+    findUserById,
+    publicUser,
+    trustProxyAuth,
+    proxyUserHeader,
+    cookieSecure,
+    SESSION_COOKIE,
+    CSRF_HEADER
+  };
+}
+
+module.exports = { createAuth };

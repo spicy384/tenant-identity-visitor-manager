@@ -1,0 +1,13 @@
+{
+  "name": "Visitor check-in",
+  "short_name": "Visitors",
+  "start_url": "/kiosk/",
+  "scope": "/kiosk/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f6f5f2",
+  "theme_color": "#f6f5f2",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

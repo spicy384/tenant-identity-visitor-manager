@@ -1,0 +1,5 @@
+# Files run or read on the Linux host keep Linux line endings, even in a Windows checkout.
+*.sh       text eol=lf
+*.in       text eol=lf
+*.yml      text eol=lf
+Dockerfile text eol=lf

@@ -1,0 +1,102 @@
+# The project name fixes the volume name (identity-visitor-manager_identity-data) whatever the folder is called.
+name: identity-visitor-manager
+
+services:
+  identity:
+    # Build from this checkout:
+    #   docker compose up -d --build
+    image: identity-visitor-manager:latest
+    build: .
+    container_name: identity-visitor-manager
+    restart: unless-stopped
+
+    # Nginx Proxy Manager runs on another host, so the port is published on the LAN.
+    # Allow only the NPM host to reach it (host firewall, or bind to the one interface
+    # NPM uses, e.g. "192.168.1.20:3000:3000").
+    ports:
+      - "3000:3000"
+      # The lobby kiosks, on their own port: it serves the kiosk page and its API and
+      # nothing else, and port 3000 has no kiosk. Give it its own host in NPM
+      # (visitors.example.com) and keep 3000 off the lobby network.
+      - "3001:3001"
+
+    environment:
+      PORT: 3000
+      DATA_DIR: /data
+      TZ: ${TZ:-UTC}
+
+      # The public address, as NPM serves it (https://directory.example.com).
+      APP_URL: ${APP_URL:-}
+
+      # The kiosks' own port, and their public address (shown on Settings > Kiosks).
+      # Set KIOSK_PORT empty to serve the kiosk at /kiosk/ on port 3000 instead.
+      KIOSK_PORT: ${KIOSK_PORT-3001}
+      KIOSK_URL: ${KIOSK_URL:-}
+
+      # Hours the last four of an SSN, given with a clearance validation request, stay in
+      # memory if Security hasn't validated or cancelled by then (at most 168).
+      CLEARANCE_DIGITS_HOURS: ${CLEARANCE_DIGITS_HOURS:-36}
+
+      # HTTPS between NPM and this container. The app generates a self-signed
+      # certificate in /data/tls; in NPM set the scheme to https. NPM does not verify
+      # upstream certificates, so self-signed is fine there.
+      TLS_ENABLED: ${TLS_ENABLED:-true}
+      # Extra names or IPs for that certificate (the Docker host's), comma separated.
+      TLS_HOSTS: ${TLS_HOSTS:-}
+
+      # Browsers reach the app over HTTPS (NPM), so the session cookie is Secure.
+      # Set false only to try the app over plain http://host:3000 directly.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+
+      # Which proxy addresses may set X-Forwarded-For. The default trusts private
+      # networks, which covers NPM on the LAN. Set NPM's address to be strict.
+      # TRUST_PROXY: 192.168.1.10
+
+      # --- Microsoft Entra ID sign-in (optional; or set it up in the app) ---------
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+      ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
+      ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
+      ENTRA_DEFAULT_ROLE: ${ENTRA_DEFAULT_ROLE:-none}
+
+    # The database key, read from /run/secrets/db_key. Make it once with
+    #   docker run --rm identity-visitor-manager node scripts/new-key.js > secrets/db_key
+    # (or `npm run new-key` anywhere Node runs), keep a copy in your password manager,
+    # and let the container's user read it: chown 1000:1000 secrets/db_key && chmod 400 secrets/db_key
+    secrets:
+      - db_key
+
+    # The encrypted database (with users, settings and logos inside) and the generated
+    # certificate. Back it up; without the key it cannot be read.
+    volumes:
+      - identity-data:/data
+
+    # One instance: SQLite wants a single writer.
+    deploy:
+      replicas: 1
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Keep the process's memory off disk: SSN digits given with a clearance validation
+    # request live only in memory (see README, "Host hardening"). memswap_limit equal to
+    # mem_limit means no swap at all for this container; raise both together if needed.
+    mem_limit: 512m
+    memswap_limit: 512m
+    # And no core files from the container if Node crashes.
+    ulimits:
+      core: 0
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  db_key:
+    file: ./secrets/db_key
+
+volumes:
+  identity-data:

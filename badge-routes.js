@@ -1,0 +1,260 @@
+/**
+ * Staff routes for badges (who holds which, assigning and taking back), the clearance
+ * levels and badge classifications (administrators), and visitor events (expected guests).
+ * Mounted after the sign-in check, so req.user and req.ctx are set.
+ *
+ * Badges need the role's badge access (read to look, edit to add, assign and take back);
+ * events need visitor access. Assigning checks the holder is someone the caller can see,
+ * and badges.js refuses anyone the badge's type or clearance level doesn't allow.
+ */
+const express = require("express");
+const { TYPES, TYPE_LABELS, STATUSES } = require("./badges");
+
+function fail(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function str(value, max = 200) {
+  const v = Array.isArray(value) ? value[0] : value;
+  return v === undefined || v === null || v === "" ? undefined : String(v).slice(0, max);
+}
+
+function positiveInt(value, fallback = null) {
+  const n = Number(str(value));
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+function createBadgeRoutes({ access, badges, clearance, events, visitors, directory, admin, auditFrom }) {
+  const router = express.Router();
+  const staffName = (req) => req.user?.displayName || req.user?.username || null;
+
+  const need = (test, message) => (req, res, next) => (test(req.ctx) ? next() : res.status(403).json({ error: message }));
+  const readBadges = need(access.canReadBadges, "This account can't see badges.");
+  const editBadges = need(access.canEditBadges, "This account can't change badges.");
+  const readVisitors = need(access.canReadVisitors, "This account can't see visitors.");
+  const editVisitors = need(access.canEditVisitors, "This account can't change visitors.");
+
+  function siteParam(req, value) {
+    const siteId = positiveInt(value);
+    if (siteId && !access.siteVisible(req.ctx, siteId)) throw fail(403, "This account can't see that site.");
+    return siteId;
+  }
+
+  /** The holder, if the caller can see them (people through the directory's site limits). */
+  function visibleHolder(req, kind, id) {
+    if (kind === "person") return directory.getPerson(id, { sites: req.ctx.sites });
+    if (kind === "visitor") return visitors.get(id, { sites: req.ctx.sites });
+    throw fail(400, "A badge goes to a person or a visitor.");
+  }
+
+  // --- clearance levels and classifications -----------------------------------------------
+
+  router.get("/api/clearance", (req, res) => {
+    res.json({ levels: clearance.levels(), classifications: clearance.classifications(), badgeTypes: TYPES.map((t) => ({ value: t, label: TYPE_LABELS[t] })), badgeStatuses: STATUSES });
+  });
+
+  router.post("/api/clearance/levels", admin, (req, res) => {
+    const level = clearance.createLevel(req.body || {});
+    auditFrom(req, "clearance.level_add", level.name, `order ${level.rank}`);
+    res.json({ ok: true, level });
+  });
+
+  router.put("/api/clearance/levels/:id", admin, (req, res) => {
+    const level = clearance.updateLevel(positiveInt(req.params.id), req.body || {});
+    auditFrom(req, "clearance.level_update", level.name, `order ${level.rank}`);
+    res.json({ ok: true, level });
+  });
+
+  router.delete("/api/clearance/levels/:id", admin, (req, res) => {
+    const level = clearance.removeLevel(positiveInt(req.params.id));
+    auditFrom(req, "clearance.level_remove", level.name);
+    res.json({ ok: true });
+  });
+
+  router.post("/api/clearance/classifications", admin, (req, res) => {
+    const c = clearance.createClassification(req.body || {});
+    auditFrom(req, "clearance.classification_add", c.name, c.requiresClearance ? "needs a clearance level" : "no clearance level");
+    res.json({ ok: true, classification: c });
+  });
+
+  router.put("/api/clearance/classifications/:id", admin, (req, res) => {
+    const c = clearance.updateClassification(positiveInt(req.params.id), req.body || {});
+    auditFrom(req, "clearance.classification_update", c.name, c.requiresClearance ? "needs a clearance level" : "no clearance level");
+    res.json({ ok: true, classification: c });
+  });
+
+  router.delete("/api/clearance/classifications/:id", admin, (req, res) => {
+    const c = clearance.removeClassification(positiveInt(req.params.id));
+    auditFrom(req, "clearance.classification_remove", c.name);
+    res.json({ ok: true });
+  });
+
+  // --- badges ------------------------------------------------------------------------------
+
+  router.get("/api/badges", readBadges, (req, res) => {
+    res.json(badges.list({
+      q: str(req.query.q),
+      type: str(req.query.type),
+      state: str(req.query.state),
+      classificationId: positiveInt(req.query.classificationId),
+      levelId: positiveInt(req.query.levelId),
+      siteId: siteParam(req, req.query.site),
+      sites: req.ctx.sites,
+      limit: Math.min(positiveInt(req.query.limit, 200), 5000),
+      offset: Math.max(0, Number(str(req.query.offset)) || 0)
+    }));
+  });
+
+  router.get("/api/badges/:id", readBadges, (req, res) => {
+    const badge = badges.get(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!badge) throw fail(404, "No such badge.");
+    res.json({ badge, history: badges.history(badge.id) });
+  });
+
+  router.post("/api/badges", editBadges, (req, res) => {
+    const badge = badges.create(req.body || {}, { sites: req.ctx.sites });
+    auditFrom(req, "badge.add", badge.number, `${badge.type}; ${badge.classificationName}${badge.clearanceLevelName ? ` ${badge.clearanceLevelName}` : ""}`);
+    res.json({ ok: true, badge });
+  });
+
+  router.post("/api/badges/range", editBadges, (req, res) => {
+    const made = badges.createRange(req.body || {}, { sites: req.ctx.sites });
+    auditFrom(req, "badge.add", `${made.length} badges`, `${made[0]?.number} to ${made[made.length - 1]?.number}`);
+    res.json({ ok: true, count: made.length, first: made[0], last: made[made.length - 1] });
+  });
+
+  router.put("/api/badges/:id", editBadges, (req, res) => {
+    const badge = badges.update(positiveInt(req.params.id), req.body || {}, { sites: req.ctx.sites });
+    auditFrom(req, "badge.update", badge.number, Object.keys(req.body || {}).join(", "));
+    res.json({ ok: true, badge });
+  });
+
+  router.delete("/api/badges/:id", admin, (req, res) => {
+    const badge = badges.remove(positiveInt(req.params.id));
+    auditFrom(req, "badge.remove", badge.number);
+    res.json({ ok: true });
+  });
+
+  router.post("/api/badges/:id/assign", editBadges, (req, res) => {
+    const body = req.body || {};
+    const holderId = positiveInt(body.holderId);
+    if (!visibleHolder(req, body.kind, holderId)) throw fail(404, "No such person or visitor.");
+    const badge = badges.assign(positiveInt(req.params.id), { kind: body.kind, holderId, visitId: positiveInt(body.visitId), replacesBadgeId: positiveInt(body.replacesBadgeId) }, { by: staffName(req), sites: req.ctx.sites });
+    auditFrom(req, "badge.assign", badge.number, `to ${badge.holder.name}${badge.holder.company ? ` (${badge.holder.company})` : ""}${badge.holder.temporary ? `; temporary, in place of ${badge.holder.replacesNumber}, due back ${new Date(badge.holder.dueAt).toISOString()}` : ""}`);
+    res.json({ ok: true, badge });
+  });
+
+  router.post("/api/badges/:id/return", editBadges, (req, res) => {
+    const { badge, from } = badges.takeBack(positiveInt(req.params.id), { outcome: req.body?.outcome || "returned", note: req.body?.note }, { by: staffName(req), sites: req.ctx.sites });
+    auditFrom(req, req.body?.outcome === "lost" ? "badge.lost" : "badge.return", badge.number, `from ${from.name}`);
+    res.json({ ok: true, badge });
+  });
+
+  /** A person's or visitor's badges, and (for those who may assign) the ones they could be given. */
+  router.get("/api/badge-holders/:kind/:id", readBadges, (req, res) => {
+    const kind = req.params.kind;
+    const id = positiveInt(req.params.id);
+    if (!visibleHolder(req, kind, id)) throw fail(404, "No such person or visitor.");
+    const held = badges.forHolder(kind, id);
+    const short = (b) => ({ id: b.id, number: b.number, type: b.type, classificationName: b.classificationName, clearanceLevelName: b.clearanceLevelName, sites: b.sites });
+    const canGive = access.canEditBadges(req.ctx);
+    res.json({
+      current: held.filter((a) => !a.returnedAt),
+      past: held.filter((a) => a.returnedAt),
+      available: canGive ? badges.availableFor(kind, id, { sites: req.ctx.sites }).map(short) : [],
+      // Temporary badges they could borrow for the day: only someone holding a badge of their own.
+      temporary: canGive && kind === "person" ? badges.availableFor(kind, id, { sites: req.ctx.sites, temporary: true }).map(short) : []
+    });
+  });
+
+  // --- visitor events ----------------------------------------------------------------------------
+
+  /** YYYY-MM-DD from the query, or today on the server. */
+  function day(value) {
+    const v = str(value, 10);
+    if (!v) return new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw fail(400, "Dates look like 2026-10-14.");
+    return v;
+  }
+
+  router.get("/api/events", readVisitors, (req, res) => {
+    const from = day(req.query.from || req.query.date);
+    const to = day(req.query.to || req.query.date || from);
+    res.json({ events: events.list({ from, to, siteId: siteParam(req, req.query.site), sites: req.ctx.sites }) });
+  });
+
+  router.get("/api/events/:id", readVisitors, (req, res) => {
+    const event = events.get(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!event) throw fail(404, "No such event.");
+    res.json({ event });
+  });
+
+  router.post("/api/events", editVisitors, (req, res) => {
+    const event = events.create(req.body || {}, { by: staffName(req), sites: req.ctx.sites });
+    auditFrom(req, "event.add", event.title, `${event.siteName} ${event.date}${event.companyName ? `; ${event.companyName}` : ""}`);
+    res.json({ ok: true, event });
+  });
+
+  router.put("/api/events/:id", editVisitors, (req, res) => {
+    const event = events.update(positiveInt(req.params.id), req.body || {}, { sites: req.ctx.sites });
+    auditFrom(req, "event.update", event.title, Object.keys(req.body || {}).join(", "));
+    res.json({ ok: true, event });
+  });
+
+  router.delete("/api/events/:id", editVisitors, (req, res) => {
+    const event = events.remove(positiveInt(req.params.id), { sites: req.ctx.sites });
+    auditFrom(req, "event.remove", event.title, `${event.siteName} ${event.date}`);
+    res.json({ ok: true });
+  });
+
+  /**
+   * Adds an expected guest: { visitorId } for someone on record, or { visitor: { firstName,
+   * lastName, organisation, email, phone } } for someone new, who is added as a checked
+   * visitor (so the kiosk finds them) and linked to the event's company and host.
+   */
+  router.post("/api/events/:id/guests", editVisitors, (req, res) => {
+    const event = events.get(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!event) throw fail(404, "No such event.");
+    let visitorId = positiveInt(req.body?.visitorId);
+    if (visitorId && !visitors.get(visitorId, { sites: req.ctx.sites })) throw fail(404, "No such visitor.");
+    if (!visitorId) {
+      const v = req.body?.visitor || {};
+      // Someone of that name may be on record already: say so, unless told to add anyway.
+      if (!req.body?.addAnyway && v.firstName && v.lastName) {
+        const same = visitors.findByName(`${v.firstName} ${v.lastName}`).map((id) => visitors.get(id, { sites: req.ctx.sites })).filter(Boolean).slice(0, 3);
+        if (same.length) {
+          const err = fail(409, `Already on record: ${same.map((x) => `${x.firstName} ${x.lastName}${x.organisation ? ` (${x.organisation})` : ""}`).join("; ")}. Pick them from the list, or add a new visitor anyway.`);
+          err.duplicate = true;
+          throw err;
+        }
+      }
+      const links = event.companyId ? [{ companyId: event.companyId, hostId: event.hostId }] : [];
+      const created = visitors.create({ firstName: v.firstName, lastName: v.lastName, organisation: v.organisation, email: v.email, phone: v.phone, links }, { sites: req.ctx.sites, source: "staff", verified: true });
+      visitorId = created.id;
+      auditFrom(req, "visitor.add", `${created.firstName} ${created.lastName}`, `expected at ${event.title}`);
+    } else if (event.companyId) {
+      // Someone on record: the event's company joins those they visit, if it isn't there yet.
+      const known = visitors.get(visitorId);
+      if (!known.companies.some((c) => c.companyId === event.companyId)) visitors.setLink(visitorId, { companyId: event.companyId, hostId: event.hostId });
+    }
+    const updated = events.addGuest(event.id, visitorId, { sites: req.ctx.sites });
+    const guest = updated.guests.find((g) => g.visitorId === visitorId);
+    auditFrom(req, "event.guest_add", event.title, `${guest.firstName} ${guest.lastName}`);
+    res.json({ ok: true, event: updated });
+  });
+
+  router.delete("/api/events/:id/guests/:visitorId", editVisitors, (req, res) => {
+    const before = events.get(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!before) throw fail(404, "No such event.");
+    const guest = before.guests.find((g) => g.visitorId === positiveInt(req.params.visitorId));
+    const event = events.removeGuest(before.id, positiveInt(req.params.visitorId), { sites: req.ctx.sites });
+    if (guest) auditFrom(req, "event.guest_remove", event.title, `${guest.firstName} ${guest.lastName}`);
+    res.json({ ok: true, event });
+  });
+
+  return router;
+}
+
+module.exports = { createBadgeRoutes };

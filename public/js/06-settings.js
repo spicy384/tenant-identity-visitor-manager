@@ -1,0 +1,522 @@
+// 06-settings.js: administrator settings: sites, custom fields, roles, users,
+// Microsoft Entra ID, import/export/backup and the audit log. The field access grid
+// is in 07-access.js.
+
+let settingsTab = "sites";
+
+/**
+ * An inline settings form. fields as for formDialog, plus { section } headings and
+ * { note } paragraphs. onSave(values) returns a message to show, or throws.
+ */
+function settingsForm({ title, intro, fields, onSave, saveLabel = "Save", extra = null }) {
+  const form = h("form", { class: "panel settings-form", autocomplete: "off" });
+  if (title) form.append(h("h3", { text: title }));
+  if (intro) form.append(typeof intro === "string" ? h("p", { class: "muted", text: intro }) : intro);
+  const msg = h("p", { class: "message", hidden: true });
+  const inputs = {};
+  const grid = h("div", { class: "form-grid" });
+  for (const f of fields) {
+    if (f.section) { grid.append(h("h4", { class: "form-heading", text: f.section })); continue; }
+    if (f.note) { grid.append(h("p", { class: "muted full-row", text: f.note })); continue; }
+    if (f.node) { grid.append(f.node); continue; }
+    let input;
+    if (f.type === "textarea") {
+      input = h("textarea", { name: f.name, rows: f.rows || 3 });
+      input.value = f.value ?? "";
+    } else if (f.type === "select") {
+      input = h("select", { name: f.name }, f.options.map((o) => h("option", { value: o.value, text: o.label })));
+      input.value = f.value ?? f.options[0].value;
+    } else if (f.type === "checkbox") {
+      input = h("input", { type: "checkbox", name: f.name });
+      input.checked = Boolean(f.value);
+    } else {
+      input = h("input", { type: f.type || "text", name: f.name, placeholder: f.placeholder || "", autocomplete: f.type === "password" ? "new-password" : "off" });
+      input.value = f.value ?? "";
+    }
+    if (f.disabled) input.disabled = true;
+    inputs[f.name] = input;
+    const hint = f.hint ? h("span", { class: "hint", text: f.hint }) : null;
+    grid.append(f.type === "checkbox"
+      ? h("label", { class: "check-row full-row" }, input, h("span", { text: f.label }), hint)
+      : h("label", { class: f.half ? "half" : "full-row" }, h("span", { text: f.label }), input, hint));
+  }
+  const values = () => Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.type === "checkbox" ? el.checked : el.value]));
+  const save = h("button", { type: "submit", class: "primary", text: saveLabel });
+  form.append(grid, msg, h("div", { class: "btn-row" }, save, extra ? extra(values, msg) : null));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    save.disabled = true;
+    msg.hidden = true;
+    try {
+      const text = await onSave(values());
+      msg.className = "message success";
+      msg.textContent = text || "Saved.";
+      msg.hidden = false;
+    } catch (error) {
+      msg.className = "message error";
+      msg.textContent = error.message;
+      msg.hidden = false;
+    } finally {
+      save.disabled = false;
+    }
+  });
+  return { form, inputs, values, msg };
+}
+
+async function reloadConfig() {
+  state.config = await api("/api/config");
+  await loadSchema();
+  applyConfig();
+}
+
+async function renderSettings() {
+  for (const b of $("settings-tabs").children) b.classList.toggle("is-active", b.dataset.tab === settingsTab);
+  const body = clear($("settings-body"));
+  try {
+    const render = { sites: settingsSites, fields: settingsFields, access: settingsAccess, visits: settingsVisits, kiosks: settingsKiosks, badges: settingsBadges, api: settingsApiClients, roles: settingsRoles, users: settingsUsers, entra: settingsEntra, data: settingsData, audit: settingsAudit }[settingsTab] || settingsSites;
+    await render(body);
+  } catch (error) {
+    body.append(h("p", { class: "message error", text: error.message }));
+  }
+}
+
+$("settings-tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-tab]");
+  if (!b) return;
+  location.hash = `#settings/${b.dataset.tab}`;
+});
+
+// --- sites ------------------------------------------------------------------------------
+
+async function settingsSites(body) {
+  const { sites, timeZones } = await api("/api/sites");
+  const panel = h("div", { class: "panel" },
+    h("div", { class: "panel-head" }, h("h3", { text: "Sites" }), h("button", { type: "button", class: "primary small", text: "Add site", onclick: () => editSite(null, timeZones) })),
+    h("p", { class: "muted", text: "Each building has its own name and logo on its kiosk, its own time zone, and the time its visitors are checked out automatically at the end of the day. Visitors and kiosks arrive in the next phase; the settings are kept from now." }),
+    h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+      h("thead", {}, h("tr", {}, ["", "Site", "Time zone", "End of day", "Companies", ""].map((t) => h("th", { text: t })))),
+      h("tbody", {}, sites.map((s) => h("tr", { class: s.active ? "" : "inactive" },
+        h("td", { class: "logo-cell" }, s.hasLogo ? h("img", { class: "site-logo-thumb", src: `/api/sites/${s.id}/logo?v=${s.logoUpdatedAt}`, alt: "" }) : null),
+        h("td", {}, h("strong", { text: s.name }), s.kioskName && s.kioskName !== s.name ? h("div", { class: "muted small-text", text: `Kiosk: ${s.kioskName}` }) : null, s.active ? null : h("span", { class: "badge muted", text: "Inactive" })),
+        h("td", { class: "small-text", text: s.timeZone }),
+        h("td", { class: "small-text", text: s.endOfDay || "Off" }),
+        h("td", { text: String(s.companies) }),
+        h("td", {}, h("button", { type: "button", class: "link-btn", text: "Edit", onclick: () => editSite(s, timeZones) }))))))));
+  body.append(panel);
+}
+
+/**
+ * Turns an image file into a PNG data: URL no larger than 600 px a side, so any
+ * format the browser can show (SVG included) is stored as a plain bitmap.
+ */
+function imageToPng(file, max = 600) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth || 600;
+      const hgt = img.naturalHeight || 300;
+      const scale = Math.min(1, max / Math.max(w, hgt));
+      const canvas = h("canvas", { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(hgt * scale)) });
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      let data = canvas.toDataURL("image/png");
+      // A photo can make a large PNG; JPEG keeps it under the server's 1 MB limit.
+      if (data.length > 1300000) data = canvas.toDataURL("image/jpeg", 0.88);
+      resolve(data);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That file isn't an image this browser can read.")); };
+    img.src = url;
+  });
+}
+
+async function editSite(site, timeZones) {
+  let logoData = null;   // a new logo, as a data: URL
+  let removeLogo = false;
+  const preview = h("div", { class: "logo-preview" });
+  const showPreview = () => {
+    clear(preview);
+    if (logoData) preview.append(h("img", { src: logoData, alt: "New logo" }));
+    else if (site?.hasLogo && !removeLogo) preview.append(h("img", { src: `/api/sites/${site.id}/logo?v=${site.logoUpdatedAt}`, alt: "Current logo" }));
+    else preview.append(h("span", { class: "muted", text: "No logo. The kiosk shows the name only." }));
+  };
+  showPreview();
+  const fileInput = h("input", { type: "file", accept: "image/png,image/jpeg,image/svg+xml,image/webp,image/gif", hidden: true });
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    try {
+      logoData = await imageToPng(file);
+      removeLogo = false;
+      showPreview();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+  const logoBlock = h("div", { class: "full-row logo-block" },
+    h("span", { class: "label", text: "Logo on the kiosk" }),
+    preview,
+    h("div", { class: "btn-row" },
+      h("button", { type: "button", class: "secondary small", text: "Choose image", onclick: () => fileInput.click() }),
+      h("button", { type: "button", class: "link-btn danger-text", text: "Remove logo", onclick: () => { logoData = null; removeLogo = true; showPreview(); } })),
+    h("span", { class: "hint", text: "PNG, JPEG, SVG or WebP. It is resized to fit 600 pixels and stored, encrypted, in the database." }),
+    fileInput);
+
+  const tz = site?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const saved = await formDialog({
+    title: site ? `Edit ${site.name}` : "Add site",
+    wide: true,
+    fields: [
+      { name: "name", label: "Site name", value: site?.name, required: true, half: true },
+      { name: "kioskName", label: "Name shown on the kiosk", value: site?.kioskName, half: true, placeholder: site?.name || "Defaults to the site name" },
+      { name: "welcome", label: "Welcome line on the kiosk", value: site?.welcome, placeholder: "Please sign in at reception" },
+      { node: logoBlock },
+      { name: "address", label: "Address", type: "textarea", rows: 2, value: site?.address },
+      { name: "timeZone", label: "Time zone", type: "select", value: tz, half: true, options: (timeZones || [tz]).map((z) => ({ value: z, label: z.replace(/_/g, " ") })) },
+      { name: "endOfDay", label: "Check visitors out automatically at", type: "time", value: site?.endOfDay || "", half: true, hint: "Leave empty to keep visits open until someone checks out." },
+      ...(site ? [{ name: "active", label: "Active", type: "checkbox", value: site.active }] : [])
+    ],
+    submitLabel: site ? "Save" : "Add site",
+    extraActions: site ? [{ label: "Delete site", kind: "danger", close: true, onClick: async () => {
+      if (!(await confirmDialog(`Delete ${site.name}? Only possible while no company or person is there; otherwise make it inactive.`, { danger: true, confirmLabel: "Delete" }))) throw new Error("Not deleted.");
+      await api(`/api/sites/${site.id}`, { method: "DELETE" });
+      return "deleted";
+    } }] : [],
+    onSubmit: async (v) => {
+      const result = site
+        ? await api(`/api/sites/${site.id}`, { method: "PUT", body: v })
+        : await api("/api/sites", { method: "POST", body: v });
+      if (logoData) await api(`/api/sites/${result.site.id}/logo`, { method: "PUT", body: { dataUrl: logoData } });
+      else if (removeLogo && site?.hasLogo) await api(`/api/sites/${result.site.id}/logo`, { method: "DELETE" });
+      return result.site;
+    }
+  });
+  if (saved) {
+    toast(saved === "deleted" ? "Site deleted." : "Saved.");
+    await reloadConfig();
+    renderSettings();
+  }
+}
+
+// --- custom fields --------------------------------------------------------------------------
+
+const ENTITY_TITLES = { company: "Company fields", person: "People fields", visitor: "Visitor fields" };
+const ENTITY_ONE = { company: "company", person: "person", visitor: "visitor" };
+const ENTITY_EVERY = { company: "Every company", person: "Everyone", visitor: "Every visitor" };
+
+async function settingsFields(body) {
+  const { fields, types, visibility } = await api("/api/fields");
+  const typeLabel = Object.fromEntries(types.map((t) => [t.value, t.label]));
+  body.append(h("div", { class: "panel" },
+    h("p", { class: "muted", text: "Custom fields add to the built-in ones. A field for every record can be required and is searched and exported; a field added from a single record shows on that record only, until you make it a field for every record. Set who sees each field under Field access." })));
+  for (const entity of ["company", "person", "visitor"]) {
+    const list = fields[entity];
+    body.append(h("div", { class: "panel" },
+      h("div", { class: "panel-head" }, h("h3", { text: ENTITY_TITLES[entity] }), h("button", { type: "button", class: "primary small", text: "Add field", onclick: () => editField(entity, null, types, visibility) })),
+      list.length
+        ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+          h("thead", {}, h("tr", {}, ["Field", "Key", "Type", "On", ""].map((t) => h("th", { text: t })))),
+          h("tbody", {}, list.map((f) => h("tr", {},
+            h("td", {}, h("strong", { text: f.label }), f.required ? h("span", { class: "badge", text: "Required" }) : null, f.type === "choice" ? h("div", { class: "muted small-text", text: f.choices.join(", ") }) : null),
+            h("td", { class: "mono small-text", text: f.key }),
+            h("td", { class: "small-text", text: typeLabel[f.type] || f.type }),
+            h("td", { class: "small-text", text: f.recordId === null ? ENTITY_EVERY[entity] : `${f.recordName} only` }),
+            h("td", {}, h("div", { class: "btn-row" },
+              f.recordId !== null ? h("button", { type: "button", class: "link-btn", text: "Use for every record", onclick: () => promoteField(f) }) : null,
+              h("button", { type: "button", class: "link-btn", text: "Edit", onclick: () => editField(entity, f, types, visibility) }),
+              h("button", { type: "button", class: "link-btn danger-text", text: "Delete", onclick: () => deleteField(f) }))))))))
+        : h("p", { class: "muted", text: "No custom fields yet." })));
+  }
+}
+
+async function editField(entity, field, types) {
+  const saved = await formDialog({
+    title: field ? `Edit "${field.label}"` : `Add a field for every ${ENTITY_ONE[entity]}`,
+    fields: [
+      { name: "label", label: "Field name", value: field?.label, required: true },
+      ...(field ? [{ type: "readonly", name: "type", label: "Type", value: types.find((t) => t.value === field.type)?.label, half: true }] : [
+        { name: "type", label: "Type", type: "select", value: "text", options: types, half: true, onChange: (input, inputs) => { inputs.choices.closest("label").hidden = input.value !== "choice"; } }]),
+      ...(field ? [] : [{ name: "visibility", label: "Who sees it", type: "select", value: "all", half: true, options: VISIBILITY_OPTIONS }]),
+      ...(!field || field.type === "choice" ? [{ name: "choices", label: "Choices, one per line", type: "textarea", rows: 4, value: field?.choices?.join("\n") || "" }] : []),
+      ...(!field || field.recordId === null ? [{ name: "required", label: "Required (it must be filled in when a record is added or changed)", type: "checkbox", value: field?.required }] : [])
+    ],
+    submitLabel: field ? "Save" : "Add field",
+    onSubmit: async (v) => (field
+      ? await api(`/api/fields/${field.id}`, { method: "PUT", body: v })
+      : await api("/api/fields", { method: "POST", body: { ...v, entity } })).field
+  });
+  if (saved) {
+    toast("Saved.");
+    await loadSchema();
+    renderSettings();
+  }
+}
+
+async function promoteField(field) {
+  if (!(await confirmDialog(`Make "${field.label}" a field every record has? ${field.recordName} keeps its value; the others start empty.`, { confirmLabel: "Use for every record" }))) return;
+  try {
+    await api(`/api/fields/${field.id}`, { method: "PUT", body: { promote: true } });
+    await loadSchema();
+    renderSettings();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function deleteField(field) {
+  if (!(await confirmDialog(`Delete "${field.label}" and every value stored in it? This can't be undone.`, { danger: true, confirmLabel: "Delete" }))) return;
+  try {
+    await api(`/api/fields/${field.id}`, { method: "DELETE" });
+    toast(`Deleted "${field.label}".`);
+    await loadSchema();
+    renderSettings();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+// --- roles --------------------------------------------------------------------------------------
+
+const KIND_LABELS = { user: "Staff", kiosk: "Kiosk devices", api: "API clients" };
+
+async function settingsRoles(body) {
+  const { roles } = await api("/api/roles");
+  const staff = roles.filter((r) => r.kind === "user");
+  body.append(h("div", { class: "panel" },
+    h("div", { class: "panel-head" }, h("h3", { text: "Roles" }), h("button", { type: "button", class: "primary small", text: "Add role", onclick: () => editRole(null, staff) })),
+    h("p", { class: "muted", text: "A role sets how far an account reaches: whether it can see or change the directory (companies and people) and visitors (visitors, visits, checking in and out). Which fields each role sees is set under Field access. Administrators can do everything. The kiosk only ever shows names; Equipment Checkout's fields are set under Field access." }),
+    h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+      h("thead", {}, h("tr", {}, ["Role", "For", "Directory", "Visitors", "Badges", "Accounts", ""].map((t) => h("th", { text: t })))),
+      h("tbody", {}, roles.map((r) => h("tr", {},
+        h("td", {}, h("strong", { text: r.name }), r.builtIn ? h("span", { class: "badge muted", text: "Built in" }) : null),
+        h("td", { class: "small-text", text: r.kind === "api" && r.builtIn ? "Template for new API clients" : KIND_LABELS[r.kind] }),
+        h("td", { class: "small-text", text: AREA_LABELS[r.directory] }),
+        h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.visitors] : "—" }),
+        h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.badges] : "—" }),
+        h("td", { text: r.kind === "user" ? String(r.accounts) : "—" }),
+        h("td", {}, r.id === "admin" || r.kind !== "user" ? (r.kind === "api" && !r.builtIn ? h("a", { href: "#settings/api", class: "small-text", text: "Set under API clients" }) : null) : h("div", { class: "btn-row" },
+          h("button", { type: "button", class: "link-btn", text: "Edit", onclick: () => editRole(r, staff) }),
+          r.builtIn ? null : h("button", { type: "button", class: "link-btn danger-text", text: "Delete", onclick: () => deleteRole(r) }))))))))));
+}
+
+async function editRole(role, staff) {
+  const levels = ["none", "read", "edit"].map((v) => ({ value: v, label: AREA_LABELS[v] }));
+  const saved = await formDialog({
+    title: role ? `Edit ${role.name}` : "Add role",
+    fields: [
+      role?.builtIn ? { type: "readonly", name: "name", label: "Name", value: role.name } : { name: "name", label: "Name", value: role?.name, required: true },
+      { name: "directory", label: "Companies and people", type: "select", value: role?.directory || "read", options: levels, half: true },
+      { name: "visitors", label: "Visitors and visits", type: "select", value: role?.visitors || "none", options: levels, half: true },
+      { name: "badges", label: "Badges", type: "select", value: role?.badges || "none", options: levels, half: true, hint: "Read to look; change to add badges, give them out and take them back." },
+      ...(role ? [] : [{ name: "copyFrom", label: "Start its field access from", type: "select", value: "viewer", options: staff.map((r) => ({ value: r.id, label: r.name })), hint: "You can change any cell afterwards under Field access." }])
+    ],
+    submitLabel: role ? "Save" : "Add role",
+    onSubmit: async (v) => (role
+      ? await api(`/api/roles/${role.id}`, { method: "PUT", body: role.builtIn ? { directory: v.directory, visitors: v.visitors, badges: v.badges } : v })
+      : await api("/api/roles", { method: "POST", body: v })).role
+  });
+  if (saved) {
+    toast("Saved.");
+    renderSettings();
+  }
+}
+
+async function deleteRole(role) {
+  if (!(await confirmDialog(`Delete the role ${role.name}?`, { danger: true, confirmLabel: "Delete" }))) return;
+  try {
+    await api(`/api/roles/${role.id}`, { method: "DELETE" });
+    renderSettings();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+// --- users ------------------------------------------------------------------------------------------
+
+async function settingsUsers(body) {
+  const [{ users }, { roles }] = await Promise.all([api("/api/users"), api("/api/roles")]);
+  const staffRoles = roles.filter((r) => r.kind === "user");
+  const siteName = (id) => state.config.sites.find((s) => s.id === id)?.name || `site ${id}`;
+  const panel = h("div", { class: "panel" },
+    h("div", { class: "panel-head" }, h("h3", { text: "Users" }), h("div", { class: "btn-row" },
+      h("button", { type: "button", class: "secondary small", text: "Add Microsoft user", onclick: () => addUser("entra", staffRoles) }),
+      h("button", { type: "button", class: "primary small", text: "Add local user", onclick: () => addUser("local", staffRoles) }))),
+    h("p", { class: "muted", text: multiSite() ? "Each account has a role (see Roles) and sees every site unless limited to some. A limited account sees only the companies at its sites, and their people who work there." : "Each account has a role; see Roles for what each can do." }),
+    h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+      h("thead", {}, h("tr", {}, ["User", "Sign-in", "Role", ...(multiSite() ? ["Sites"] : []), "Last sign-in", ""].map((t) => h("th", { text: t })))),
+      h("tbody", {}, users.map((u) => {
+        const role = h("select", { "aria-label": `Role of ${u.username}`, disabled: u.id === state.me.id }, staffRoles.map((r) => h("option", { value: r.id, text: r.name })));
+        role.value = u.role;
+        role.addEventListener("change", async () => {
+          try {
+            await api(`/api/users/${u.id}/role`, { method: "POST", body: { role: role.value } });
+            toast(`${u.username} is now ${role.selectedOptions[0].text}.`);
+            renderSettings();
+          } catch (error) {
+            role.value = u.role;
+            toast(error.message, "error");
+          }
+        });
+        const actions = h("div", { class: "btn-row" });
+        if (u.provider === "local" && u.mfaEnrolled) actions.append(h("button", { type: "button", class: "link-btn", text: "Reset 2FA", onclick: async () => { if (await confirmDialog(`Clear two-factor sign-in for ${u.username}? They will be signed out.`)) { await api(`/api/users/${u.id}/reset-mfa`, { method: "POST", body: {} }); renderSettings(); } } }));
+        if (u.provider === "local") actions.append(h("button", { type: "button", class: "link-btn", text: "Set password", onclick: () => formDialog({ title: `New password for ${u.username}`, fields: [{ name: "password", label: "New password (12 characters or more)", type: "password", required: true, autocomplete: "new-password" }], onSubmit: async (v) => { await api(`/api/users/${u.id}/password`, { method: "POST", body: v }); toast("Password set."); return true; } }) }));
+        if (u.id !== state.me.id) actions.append(h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: async () => { if (await confirmDialog(`Remove ${u.username}? They will be signed out.`, { danger: true, confirmLabel: "Remove" })) { try { await api(`/api/users/${u.id}`, { method: "DELETE" }); renderSettings(); } catch (error) { toast(error.message, "error"); } } } }));
+        return h("tr", {},
+          h("td", {}, h("strong", { text: u.displayName || u.username }), u.displayName ? h("div", { class: "muted small-text", text: u.username }) : null, u.id === state.me.id ? h("span", { class: "badge", text: "You" }) : null),
+          h("td", { class: "small-text" }, u.provider === "entra" ? (u.entraLinked ? "Microsoft" : "Microsoft (not signed in yet)") : ["Password", u.mfaEnrolled ? "+ code" : null, u.passkeys ? `+ ${u.passkeys} passkey${u.passkeys === 1 ? "" : "s"}` : null].filter(Boolean).join(" ")),
+          h("td", {}, role),
+          multiSite() ? h("td", { class: "small-text" }, u.role === "admin" ? "Every site" : h("button", { type: "button", class: "link-btn", text: u.sites ? u.sites.map(siteName).join(", ") : "Every site", onclick: () => editUserSites(u) })) : null,
+          h("td", { class: "small-text", text: u.lastLoginAt ? fmtDateTime(u.lastLoginAt) : "Never" }),
+          h("td", {}, actions));
+      })))));
+  body.append(panel);
+}
+
+/** A site chooser for an account: "Every site", or ticks for some. Returns { node, value() }. */
+function siteLimitPicker(current = null) {
+  const every = h("input", { type: "checkbox" });
+  every.checked = !current;
+  const ticks = state.config.sites.map((s) => {
+    const tick = h("input", { type: "checkbox" });
+    tick.checked = Boolean(current && current.includes(s.id));
+    return { site: s, tick };
+  });
+  const list = h("div", { class: "site-ticks" }, ticks.map((t) => h("label", { class: "check-row" }, t.tick, h("span", { text: t.site.name }))));
+  const sync = () => { list.hidden = every.checked; };
+  every.addEventListener("change", sync);
+  sync();
+  return {
+    node: h("div", { class: "full-row" }, h("span", { class: "label", text: "Sites" }), h("label", { class: "check-row" }, every, h("span", { text: "Every site" })), list),
+    value: () => (every.checked ? null : ticks.filter((t) => t.tick.checked).map((t) => t.site.id))
+  };
+}
+
+async function editUserSites(user) {
+  const picker = siteLimitPicker(user.sites);
+  const saved = await formDialog({
+    title: `Sites for ${user.username}`,
+    fields: [{ node: picker.node }],
+    onSubmit: async () => (await api(`/api/users/${user.id}/sites`, { method: "POST", body: { sites: picker.value() } })).user
+  });
+  if (saved) renderSettings();
+}
+
+async function addUser(provider, staffRoles) {
+  const picker = multiSite() ? siteLimitPicker(null) : null;
+  const roleField = { name: "role", label: "Role", type: "select", value: "viewer", options: staffRoles.map((r) => ({ value: r.id, label: r.name })) };
+  const created = await formDialog({
+    title: provider === "entra" ? "Add Microsoft user" : "Add local user",
+    intro: provider === "entra" ? h("p", { class: "muted", text: "They sign in with \"Sign in with Microsoft\"; the account links to them the first time they do." }) : null,
+    fields: [
+      ...(provider === "entra"
+        ? [{ name: "username", label: "Microsoft sign-in name (UPN)", type: "email", required: true, placeholder: "jane@contoso.com" }]
+        : [{ name: "username", label: "Username", required: true, hint: "3 to 32 letters, digits, dots, dashes or underscores." },
+          { name: "password", label: "Password (12 characters or more)", type: "password", required: true, autocomplete: "new-password" }]),
+      roleField,
+      ...(picker ? [{ node: picker.node }] : [])
+    ],
+    submitLabel: "Add user",
+    onSubmit: async (v) => (await api("/api/users", { method: "POST", body: { ...v, provider, sites: picker ? picker.value() : null } })).user
+  });
+  if (created) {
+    toast(`Added ${created.username}.`);
+    renderSettings();
+  }
+}
+
+// --- Microsoft Entra ID -----------------------------------------------------------------------------------
+
+async function settingsEntra(body) {
+  const { entra, redirectUri, appUrlSet, roles } = await api("/api/entra");
+  const steps = h("div", { class: "panel" },
+    h("h3", { text: "Setting up the app registration" }),
+    h("ol", { class: "plain-list numbered" },
+      h("li", {}, "In the Entra admin center: App registrations > New registration. Supported account types: this organisational directory only."),
+      h("li", {}, "Redirect URI: platform Web, ", h("code", { class: "copy", text: redirectUri }), appUrlSet ? null : h("span", { class: "muted", text: " (taken from the address you are using now; set APP_URL to fix it)" })),
+      h("li", {}, "Certificates & secrets > New client secret. Copy the value (not the ID) into the form below."),
+      h("li", {}, `Optional: App roles whose value is a role's name without spaces (${roles.map((r) => r.name.replace(/\s+/g, "")).join(", ")}), assigned to users or groups under Enterprise applications. A role in the sign-in overrides the role stored here.`),
+      h("li", {}, "Optional: Enterprise applications > this app > Properties > Assignment required = Yes, so only assigned people can sign in at all.")));
+  const { form } = settingsForm({
+    title: "Microsoft Entra ID sign-in",
+    intro: entra.readOnly ? "Configured with ENTRA_* environment variables; change it there." : "People sign in with their Microsoft work account. Local accounts keep working alongside.",
+    fields: [
+      { name: "enabled", label: "Allow sign-in with Microsoft", type: "checkbox", value: entra.enabled, disabled: entra.readOnly },
+      { name: "tenantId", label: "Directory (tenant) ID", value: entra.tenantId, half: true, disabled: entra.readOnly },
+      { name: "clientId", label: "Application (client) ID", value: entra.clientId, half: true, disabled: entra.readOnly },
+      { name: "clientSecret", label: "Client secret", type: "password", half: true, placeholder: entra.hasSecret ? "Saved; type to replace" : "", disabled: entra.readOnly },
+      { name: "buttonLabel", label: "Button text", value: entra.buttonLabel, half: true, disabled: entra.readOnly },
+      { name: "defaultRole", label: "Someone who signs in for the first time", type: "select", value: entra.defaultRole, disabled: entra.readOnly, options: [
+        { value: "none", label: "Is refused unless an administrator added them under Users (or they have an app role)" },
+        ...roles.filter((r) => r.id !== "admin").map((r) => ({ value: r.id, label: `Gets an account with the ${r.name} role, at every site` }))] }
+    ],
+    onSave: async (v) => {
+      if (entra.readOnly) throw new Error("Configured by environment variables.");
+      await api("/api/entra", { method: "PUT", body: v });
+      return v.enabled ? "Saved. Sign out and use \"Sign in with Microsoft\" to try it." : "Saved.";
+    }
+  });
+  body.append(form, steps);
+}
+
+// --- import, export and backup ----------------------------------------------------------------------------
+
+async function settingsData(body) {
+  const run = (fn) => async () => {
+    try {
+      await fn();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+  body.append(
+    h("div", { class: "panel" },
+      h("h3", { text: "Import" }),
+      h("p", { class: "muted", text: "Add or update companies and people from a CSV file. Import companies first if the people file names companies that don't exist yet, or let the people import add them." }),
+      h("div", { class: "btn-row" },
+        h("button", { type: "button", class: "secondary", text: "Import companies", onclick: run(async () => { if (await importDialog("companies")) loadCompanies(); }) }),
+        h("button", { type: "button", class: "secondary", text: "Import people", onclick: run(() => importDialog("people")) }))),
+    h("div", { class: "panel" },
+      h("h3", { text: "Export" }),
+      h("p", { class: "muted", text: "Every field, custom ones included, as CSV. An export is plain text: keep it somewhere safe and delete it when done. Each export is recorded in the audit log." }),
+      h("div", { class: "btn-row" },
+        h("button", { type: "button", class: "secondary", text: "Export companies", onclick: run(() => download("/api/companies.csv")) }),
+        h("button", { type: "button", class: "secondary", text: "Export people", onclick: run(() => download("/api/people.csv")) }))),
+    h("div", { class: "panel" },
+      h("h3", { text: "Backup" }),
+      h("p", { text: "A copy of the whole database: directory, fields, roles, accounts, sites and logos. It is encrypted with the same key as the live database and is useless without it. The key is not in the backup." }),
+      h("p", { class: "muted", text: "To restore: stop the app, put the file in the data directory as identity.db, and start the app with the key that was in use when the backup was made." }),
+      h("button", { type: "button", class: "primary", text: "Download backup", onclick: run(() => download("/api/backup")) })));
+}
+
+// --- audit log -------------------------------------------------------------------------------------------------
+
+async function settingsAudit(body) {
+  let before = null;
+  const tbody = h("tbody");
+  const more = h("button", { type: "button", class: "secondary small", text: "Older entries", hidden: true });
+  async function page() {
+    const data = await api(`/api/audit?limit=100${before ? `&before=${before}` : ""}`);
+    for (const e of data.entries) {
+      tbody.append(h("tr", {},
+        h("td", { class: "small-text nowrap", text: fmtDateTime(e.at) }),
+        h("td", { class: "small-text", text: e.username || "" }),
+        h("td", { class: "mono small-text", text: e.action }),
+        h("td", { class: "small-text", text: [e.target, e.detail].filter(Boolean).join(": ") }),
+        h("td", { class: "muted small-text mono", text: e.ip || "" })));
+      before = e.id;
+    }
+    if (!tbody.children.length) tbody.append(emptyRow(5, "Nothing recorded yet."));
+    more.hidden = !data.more;
+  }
+  more.addEventListener("click", page);
+  body.append(h("div", { class: "panel" }, h("h3", { text: "Audit log" }),
+    h("p", { class: "muted", text: "Who changed what, and from where. Changes name the fields that changed, never their values." }),
+    h("div", { class: "table-wrap" }, h("table", { class: "table compact" }, h("thead", {}, h("tr", {}, ["When", "Who", "Action", "Detail", "From"].map((t) => h("th", { text: t })))), tbody)),
+    more));
+  await page();
+}
+
+function showSettings(sub) {
+  if (sub) settingsTab = sub;
+  renderSettings();
+}

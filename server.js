@@ -1,0 +1,931 @@
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const express = require("express");
+
+const { loadKey } = require("./db-key");
+const { openDatabase } = require("./db");
+const { createFields, TYPES: FIELD_TYPES, TYPE_LABELS: FIELD_TYPE_LABELS } = require("./fields");
+const { createAccess, AREA_LEVELS, NEW_FIELD_VISIBILITY } = require("./access");
+const { createSites } = require("./sites");
+const { createDirectory } = require("./directory");
+const { createVisitors } = require("./visitors");
+const { createKiosks } = require("./kiosks");
+const { createVisitClock } = require("./visit-clock");
+const { createKioskRoutes } = require("./kiosk-routes");
+const { createVisitorRoutes } = require("./visitor-routes");
+const { createApiClients } = require("./api-clients");
+const { createApiV1 } = require("./api-v1");
+const { createClearance, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS } = require("./clearance");
+const { createBadges } = require("./badges");
+const { createEvents } = require("./events");
+const { createBadgeRoutes } = require("./badge-routes");
+const { createClearanceRoutes } = require("./clearance-routes");
+const { createAuth } = require("./auth-routes");
+const { createEntra } = require("./entra");
+const { resolveTlsOptions } = require("./tls-setup");
+const { parseCsvObjects, toCsv } = require("./csv");
+const { ENTITIES } = require("./catalog");
+const pkg = require("./package.json");
+
+const app = express();
+// The kiosk's own listener, when KIOSK_PORT is set (see below).
+const kioskApp = express();
+// Which proxies may set X-Forwarded-For (and so what req.ip means for the sign-in
+// throttle, the sessions list and the audit log). The default trusts a proxy on this
+// host or on a private network, which covers Nginx Proxy Manager on another LAN host;
+// TRUST_PROXY takes Express's forms: "false", a hop count, or a comma-separated list
+// of addresses/CIDRs/"loopback"/"uniquelocal".
+const TRUST_PROXY = process.env.TRUST_PROXY === undefined || process.env.TRUST_PROXY === "" ? "loopback, uniquelocal" : process.env.TRUST_PROXY;
+const TRUST_PROXY_SETTING = /^\d+$/.test(TRUST_PROXY) ? Number(TRUST_PROXY) : TRUST_PROXY === "false" ? false : TRUST_PROXY === "true" ? true : TRUST_PROXY;
+app.set("trust proxy", TRUST_PROXY_SETTING);
+kioskApp.set("trust proxy", TRUST_PROXY_SETTING);
+
+const PORT = process.env.PORT || 3000;
+// Override with DATA_DIR when running in a container so the database lives on a volume.
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
+// The public address people use (https://directory.example.com). Used for the Entra
+// redirect URI; without it the address is taken from each request's Host header.
+const APP_URL = String(process.env.APP_URL || "").trim().replace(/\/+$/, "");
+// KIOSK_PORT puts the lobby kiosks on a port of their own, serving the kiosk page and its
+// API and nothing else; the main port then has no /kiosk at all. The kiosk and the staff
+// pages can then have separate hostnames in the proxy, and the staff port can be closed
+// to the lobby network. Unset, the kiosk lives at /kiosk/ on the main port.
+const KIOSK_PORT = (() => {
+  const raw = String(process.env.KIOSK_PORT || "").trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535 || String(n) === String(PORT)) {
+    console.error(`\n  !! KIOSK_PORT must be a port number different from PORT (${PORT}); got "${raw}".\n`);
+    process.exit(1);
+  }
+  return n;
+})();
+// How long the SSN digits given with a clearance validation request are held in memory
+// before they are wiped, if Security hasn't validated or cancelled by then.
+const CLEARANCE_DIGITS_HOURS = (() => {
+  const raw = String(process.env.CLEARANCE_DIGITS_HOURS || "").trim();
+  if (!raw) return DEFAULT_DIGITS_HOURS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || n > MAX_DIGITS_HOURS) {
+    console.error(`\n  !! CLEARANCE_DIGITS_HOURS must be a number of hours above 0 and at most ${MAX_DIGITS_HOURS}; got "${raw}".\n`);
+    process.exit(1);
+  }
+  return n;
+})();
+// The kiosk's public address (https://visitors.example.com), shown on Settings > Kiosks.
+const KIOSK_URL = String(process.env.KIOSK_URL || "").trim().replace(/\/+$/, "");
+
+/** One string out of a query value (Express 5 may hand over an array for a repeated key). */
+function str(value, max = 200) {
+  const v = Array.isArray(value) ? value[0] : value;
+  return v === undefined || v === null || v === "" ? undefined : String(v).slice(0, max);
+}
+
+function positiveInt(value, fallback = null) {
+  const n = Number(str(value));
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+function fail(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+// Security headers. The page loads only its own scripts and styles; inline styles are
+// allowed because dialogs set element styles from JavaScript, and data: and blob:
+// images carry logos being resized before upload.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self'",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'"
+].join("; ");
+function securityHeaders(req, res, next) {
+  res.setHeader("Content-Security-Policy", CSP);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "same-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  next();
+}
+app.use(securityHeaders);
+kioskApp.use(securityHeaders);
+
+/** Not found, as JSON under an API path and plain text elsewhere. */
+function notFound(req, res) {
+  if (req.path.startsWith("/kiosk/api") || req.path.startsWith("/api")) return res.status(404).json({ error: "Not found." });
+  return res.status(404).type("text/plain").send("Not found.");
+}
+
+// With a kiosk port, the main port has no kiosk: not its page, not its API.
+if (KIOSK_PORT) app.use("/kiosk", notFound);
+
+// A clearance validation request may carry the last four of an SSN. Its body stays bytes,
+// never a string, so clearance-routes.js can take the digits out and wipe them; every other
+// body is JSON as usual. (The route refuses a body that arrives parsed, so a path spelt
+// differently can't slip past this.)
+const rawClearanceRequest = express.raw({ type: () => true, limit: "8kb" });
+app.use((req, res, next) => {
+  if (req.method !== "POST" || req.path !== "/api/clearance/requests") return next();
+  // Wiped however the request ends: refused at sign-in, failed, or answered.
+  const wipe = () => { if (Buffer.isBuffer(req.body)) req.body.fill(0); };
+  res.once("finish", wipe);
+  res.once("close", wipe);
+  return rawClearanceRequest(req, res, next);
+});
+// 4 MB: a CSV import of a large directory, or a logo as a data: URL.
+app.use(express.json({ limit: "4mb" }));
+app.use(express.static(path.join(__dirname, "public"), { index: "index.html" }));
+
+// The kiosk port: the kiosk page (at /kiosk/, where its files expect to be), its icon, and
+// its API. Nothing of the staff pages, the staff API or /api/v1 is reachable here.
+kioskApp.use(express.json({ limit: "64kb" }));
+kioskApp.get("/", (req, res) => res.redirect(302, "/kiosk/"));
+kioskApp.get("/icon.svg", (req, res) => res.sendFile(path.join(__dirname, "public", "icon.svg")));
+kioskApp.use("/kiosk", express.static(path.join(__dirname, "public", "kiosk"), { index: "index.html" }));
+
+// --- the database and everything built on it ------------------------------------------
+
+fs.mkdirSync(DATA_DIR, { recursive: true });
+let keyInfo;
+try {
+  keyInfo = loadKey({ dataDir: DATA_DIR });
+} catch (error) {
+  if (require.main === module) {
+    console.error(`\n  !! ${error.message}\n`);
+    process.exit(1);
+  }
+  throw error;
+}
+const db = openDatabase({ dataDir: DATA_DIR, key: keyInfo.key });
+const fields = createFields({ db });
+const access = createAccess({ db, fields });
+const sites = createSites({ db });
+sites.ensureDefault();
+const directory = createDirectory({ db, fields });
+const visitors = createVisitors({ db, fields });
+const kiosks = createKiosks({ db });
+const clock = createVisitClock({ db, visitors, log: (message) => console.error(message) });
+const apiClients = createApiClients({ db, access, sites });
+const clearance = createClearance({ db, digitsHours: CLEARANCE_DIGITS_HOURS });
+const badges = createBadges({ db, clearance });
+const events = createEvents({ db });
+const store = { read: db.readDoc, write: db.writeDoc };
+const entra = createEntra({ store, roles: () => access.listRoles({ kind: "user" }) });
+const authGuard = createAuth({
+  store,
+  roles: access,
+  sites: { exists: (id) => Boolean(sites.get(id)) },
+  audit: (entry) => db.audit(entry),
+  entra,
+  appUrl: APP_URL,
+  // The setup form asks for the building's name; it becomes the first site's.
+  onSetup: ({ siteName }) => {
+    const [only] = sites.list();
+    if (siteName && only && sites.count() === 1) sites.update(only.id, { name: siteName });
+  }
+});
+
+/** Writes an audit entry attributed to the signed-in user. */
+function auditFrom(req, action, target, detail = null) {
+  try {
+    db.audit({ username: req.user?.username || null, ip: req.ip || null, action, target, detail });
+  } catch (error) {
+    console.error(`audit: could not record ${action}: ${error.message}`);
+  }
+}
+
+// Other systems (Equipment Checkout) sign in with an API key, not a session.
+app.use("/api/v1", createApiV1({ db, access, directory, sites, apiClients }));
+
+// The kiosk signs in as a device, not a person, so its API sits outside /api: on the
+// kiosk port when there is one, else on the main port.
+const kioskRoutes = createKioskRoutes({ db, kiosks, visitors, events, sites, clock, cookieSecure: authGuard.cookieSecure });
+(KIOSK_PORT ? kioskApp : app).use("/kiosk/api", kioskRoutes.router);
+kioskApp.use(notFound);
+
+app.use(authGuard.router);
+app.use("/api", authGuard.requireAuth, (req, res, next) => {
+  req.ctx = access.contextFor(req.user);
+  next();
+});
+const admin = authGuard.requireAdmin;
+const clearanceRoutes = createClearanceRoutes({ access, clearance, directory, visitors, admin, auditFrom });
+
+/** Requires at least `level` ("read" or "edit") on the directory. */
+function directoryAccess(level) {
+  return (req, res, next) => {
+    const ok = level === "edit" ? access.canEditDirectory(req.ctx) : access.canReadDirectory(req.ctx);
+    if (!ok) return res.status(403).json({ error: level === "edit" ? "This account can't change the directory." : "This account can't see the directory." });
+    return next();
+  };
+}
+const readDir = directoryAccess("read");
+const editDir = directoryAccess("edit");
+
+// --- what leaves the server ------------------------------------------------------------
+
+/** Fields the caller sees, in the shape the pages build forms and columns from. */
+function publicFields(list) {
+  return list.map((f) => ({
+    key: f.builtIn ? f.key : f.apiKey,
+    id: f.id ?? null,
+    label: f.label,
+    type: f.type,
+    builtIn: f.builtIn,
+    locked: f.locked,
+    required: f.required,
+    choices: f.choices,
+    recordOnly: f.recordId !== null,
+    access: f.access
+  }));
+}
+
+function companiesOut(ctx, records) {
+  const list = access.fieldsFor(ctx, "company");
+  return records.map((r) => ({ ...access.project(ctx, "company", r, list), peopleCount: r.people }));
+}
+
+function peopleOut(ctx, records) {
+  const list = access.fieldsFor(ctx, "person");
+  return records.map((r) => access.project(ctx, "person", r, list));
+}
+
+/** One record with its own one-record fields too, as a detail page or a save answers. */
+function recordOut(ctx, entity, record) {
+  const out = access.project(ctx, entity, record, access.fieldsFor(ctx, entity, { recordId: record.id }));
+  return entity === "company" ? { ...out, peopleCount: record.people } : out;
+}
+
+/** The sites the caller can see, in the short form lists and pickers use. */
+function visibleSites(ctx, { includeInactive = true } = {}) {
+  return sites.list({ includeInactive }).filter((s) => access.siteVisible(ctx, s.id));
+}
+
+/** A site filter from the query string, refused when it is outside the caller's sites. */
+function siteFilter(req) {
+  const siteId = positiveInt(req.query.site);
+  if (siteId && !access.siteVisible(req.ctx, siteId)) throw fail(403, "This account can't see that site.");
+  return siteId;
+}
+
+// --- configuration ---------------------------------------------------------------------
+
+app.get("/api/config", (req, res) => {
+  const ctx = req.ctx;
+  res.json({
+    version: pkg.version,
+    access: { role: ctx.role?.id || null, roleName: ctx.role?.name || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, sitesLimited: Boolean(ctx.sites) },
+    visits: access.canReadVisitors(ctx) ? { here: visitors.hereNow(ctx.sites), review: visitors.reviewCount(ctx.sites), expected: events.expectedCount(ctx.sites), badgesLeft: access.canReadBadges(ctx) ? badges.leftCount(ctx.sites) : 0, tempOverdue: access.canReadBadges(ctx) ? badges.overdueCount(ctx.sites) : 0 } : null,
+    clearanceLevels: clearance.levels().map((l) => ({ id: l.id, name: l.name, rank: l.rank })),
+    clearance: { security: access.isSecurity(ctx), queue: clearanceRoutes.queueCount(req), digitsHeldHours: clearance.DIGITS_TTL_HOURS, ...clearance.settings() },
+    sites: visibleSites(ctx).map((s) => ({ id: s.id, name: s.name, active: s.active, hasLogo: s.hasLogo, logoUpdatedAt: s.logoUpdatedAt })),
+    siteCount: sites.count()
+  });
+});
+
+/** The fields the caller sees for each record type, with whether each is editable. */
+app.get("/api/schema", (req, res) => {
+  res.json(Object.fromEntries(ENTITIES.map((e) => [e, publicFields(access.fieldsFor(req.ctx, e))])));
+});
+
+// --- sites -------------------------------------------------------------------------------
+
+app.get("/api/sites", (req, res) => {
+  res.json({ sites: visibleSites(req.ctx), timeZones: req.ctx.isAdmin ? Intl.supportedValuesOf("timeZone") : undefined });
+});
+
+app.get("/api/sites/:id/logo", (req, res) => {
+  const id = positiveInt(req.params.id);
+  if (!id || !access.siteVisible(req.ctx, id)) throw fail(404, "No such site.");
+  const logo = sites.getLogo(id);
+  if (!logo) throw fail(404, "This site has no logo.");
+  res.setHeader("Content-Type", logo.type);
+  res.setHeader("Cache-Control", "private, max-age=300");
+  res.send(logo.data);
+});
+
+app.post("/api/sites", admin, (req, res) => {
+  const site = sites.create(req.body || {});
+  auditFrom(req, "site.add", site.name, site.timeZone);
+  res.json({ ok: true, site });
+});
+
+app.put("/api/sites/:id", admin, (req, res) => {
+  const site = sites.update(positiveInt(req.params.id), req.body || {});
+  auditFrom(req, "site.update", site.name, `${site.timeZone}; end of day ${site.endOfDay || "off"}${site.active ? "" : "; inactive"}`);
+  res.json({ ok: true, site });
+});
+
+app.delete("/api/sites/:id", admin, (req, res) => {
+  const site = sites.remove(positiveInt(req.params.id));
+  // Accounts limited to it lose it; one left with no site at all is limited to nothing.
+  const users = authGuard.loadUsers();
+  for (const u of users) {
+    if (Array.isArray(u.sites) && u.sites.includes(site.id)) u.sites = u.sites.filter((s) => s !== site.id);
+  }
+  store.write("users", users);
+  // API clients limited to it lose it too.
+  for (const c of apiClients.list()) {
+    if (c.sites && c.sites.includes(site.id)) apiClients.update(c.id, { sites: c.sites.length > 1 ? c.sites.filter((x) => x !== site.id) : null });
+  }
+  auditFrom(req, "site.remove", site.name);
+  res.json({ ok: true });
+});
+
+app.put("/api/sites/:id/logo", admin, (req, res) => {
+  const site = sites.setLogo(positiveInt(req.params.id), req.body?.dataUrl);
+  auditFrom(req, "site.logo", site.name, "logo changed");
+  res.json({ ok: true, site });
+});
+
+app.delete("/api/sites/:id/logo", admin, (req, res) => {
+  const site = sites.clearLogo(positiveInt(req.params.id));
+  auditFrom(req, "site.logo", site.name, "logo removed");
+  res.json({ ok: true, site });
+});
+
+// --- companies ---------------------------------------------------------------------------
+
+app.get("/api/companies", readDir, (req, res) => {
+  const { records, total } = directory.listCompanies({
+    q: str(req.query.q),
+    search: access.searchable(req.ctx, "company"),
+    sites: req.ctx.sites,
+    siteId: siteFilter(req),
+    includeInactive: str(req.query.all) === "1",
+    limit: Math.min(positiveInt(req.query.limit, 500), 2000),
+    offset: Math.max(0, Number(str(req.query.offset)) || 0)
+  });
+  res.json({ companies: companiesOut(req.ctx, records), total });
+});
+
+app.get("/api/companies/:id", readDir, (req, res) => {
+  const record = directory.getCompany(positiveInt(req.params.id), { sites: req.ctx.sites });
+  if (!record) throw fail(404, "No such company.");
+  const list = access.fieldsFor(req.ctx, "company", { recordId: record.id });
+  const people = directory.listPeople({ companyId: record.id, sites: req.ctx.sites, includeInactive: true, limit: 5000 });
+  res.json({
+    company: { ...access.project(req.ctx, "company", record, list), peopleCount: record.people },
+    fields: publicFields(list),
+    people: peopleOut(req.ctx, people.records)
+  });
+});
+
+/** The pieces a write needs: which custom values it sets, and which fields the caller edits. */
+function writePlan(ctx, entity, body, recordId = null) {
+  const list = access.fieldsFor(ctx, entity, { recordId });
+  const custom = access.checkWrite(ctx, entity, body || {}, list);
+  return { custom, editable: list.filter((f) => f.access === "edit"), callerSites: ctx.sites };
+}
+
+app.post("/api/companies", editDir, (req, res) => {
+  const body = { ...(req.body || {}) };
+  // With a single site there is nothing to choose: the company is there.
+  if (body.sites === undefined && sites.count() === 1) body.sites = [{ siteId: sites.list()[0].id }];
+  const record = directory.createCompany(body, writePlan(req.ctx, "company", body));
+  auditFrom(req, "company.add", record.name, record.sites.map((s) => s.siteName).join(", ") || "no site");
+  res.json({ ok: true, company: recordOut(req.ctx, "company", record) });
+});
+
+app.put("/api/companies/:id", editDir, (req, res) => {
+  const id = positiveInt(req.params.id);
+  if (!directory.getCompany(id, { sites: req.ctx.sites })) throw fail(404, "No such company.");
+  const record = directory.updateCompany(id, req.body || {}, writePlan(req.ctx, "company", req.body, id));
+  auditFrom(req, "company.update", record.name, changedKeys(req.body));
+  res.json({ ok: true, company: recordOut(req.ctx, "company", record) });
+});
+
+/** Refuses to delete someone who still holds a badge: it has to come back (or be marked lost) first. */
+function noBadgesOut(kind, ids, who) {
+  const out = ids.flatMap((id) => badges.openForHolder(kind, id));
+  if (out.length) throw fail(409, `${who} still ${out.length === 1 ? "holds badge" : "hold badges"} ${out.join(", ")}. Take ${out.length === 1 ? "it" : "them"} back first.`);
+}
+
+app.delete("/api/companies/:id", admin, (req, res) => {
+  const target = directory.getCompany(positiveInt(req.params.id));
+  if (target) noBadgesOut("person", directory.listPeople({ companyId: target.id, includeInactive: true, limit: 100000 }).records.map((p) => p.id), `People at ${target.name}`);
+  const record = directory.deleteCompany(positiveInt(req.params.id));
+  clearance.sweepDigits();
+  auditFrom(req, "company.remove", record.name, `${record.peopleRemoved} people removed with it`);
+  res.json({ ok: true });
+});
+
+/** Which fields a change named, for the audit log (never their values). */
+function changedKeys(body) {
+  const keys = Object.keys(body || {}).filter((k) => k !== "custom");
+  const custom = Object.keys(body?.custom || {}).map((k) => `custom.${k}`);
+  return [...keys, ...custom].join(", ") || null;
+}
+
+// --- people --------------------------------------------------------------------------------
+
+app.get("/api/people", readDir, (req, res) => {
+  const { records, total } = directory.listPeople({
+    q: str(req.query.q),
+    search: access.searchable(req.ctx, "person"),
+    sites: req.ctx.sites,
+    siteId: siteFilter(req),
+    companyId: positiveInt(req.query.companyId),
+    includeInactive: str(req.query.all) === "1",
+    limit: Math.min(positiveInt(req.query.limit, 500), 5000),
+    offset: Math.max(0, Number(str(req.query.offset)) || 0)
+  });
+  res.json({ people: peopleOut(req.ctx, records), total });
+});
+
+app.get("/api/people/:id", readDir, (req, res) => {
+  const record = directory.getPerson(positiveInt(req.params.id), { sites: req.ctx.sites });
+  if (!record) throw fail(404, "No such person.");
+  const list = access.fieldsFor(req.ctx, "person", { recordId: record.id });
+  res.json({ person: access.project(req.ctx, "person", record, list), fields: publicFields(list) });
+});
+
+app.post("/api/people", editDir, (req, res) => {
+  const record = directory.createPerson(req.body || {}, writePlan(req.ctx, "person", req.body));
+  auditFrom(req, "person.add", `${record.firstName} ${record.lastName}`, record.companyName);
+  res.json({ ok: true, person: recordOut(req.ctx, "person", record) });
+});
+
+app.put("/api/people/:id", editDir, (req, res) => {
+  const id = positiveInt(req.params.id);
+  if (!directory.getPerson(id, { sites: req.ctx.sites })) throw fail(404, "No such person.");
+  const record = directory.updatePerson(id, req.body || {}, writePlan(req.ctx, "person", req.body, id));
+  auditFrom(req, "person.update", `${record.firstName} ${record.lastName}`, changedKeys(req.body));
+  res.json({ ok: true, person: recordOut(req.ctx, "person", record) });
+});
+
+app.delete("/api/people/:id", admin, (req, res) => {
+  const target = directory.getPerson(positiveInt(req.params.id));
+  if (target) noBadgesOut("person", [target.id], `${target.firstName} ${target.lastName}`);
+  const record = directory.deletePerson(positiveInt(req.params.id));
+  clearance.sweepDigits();
+  auditFrom(req, "person.remove", `${record.firstName} ${record.lastName}`, record.companyName);
+  res.json({ ok: true });
+});
+
+// --- CSV export and import ------------------------------------------------------------------
+
+const yesNo = (v) => (v === true ? "yes" : v === false ? "no" : "");
+const sitesCell = (list) => (list || []).map((s) => (s.suite ? `${s.siteName}: ${s.suite}` : s.siteName)).join("; ");
+
+function customColumns(entity) {
+  return fields.list(entity).filter((d) => d.recordId === null);
+}
+
+function sendCsv(res, name, csv) {
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${name}-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(csv);
+}
+
+// Exports are plain text by nature, so they are for administrators and always audited.
+app.get("/api/companies.csv", admin, (req, res) => {
+  const { records } = directory.listCompanies({ includeInactive: true, limit: 100000, siteId: siteFilter(req) });
+  const extra = customColumns("company");
+  const rows = companiesOut(req.ctx, records).map((c) => [c.id, c.name, sitesCell(c.sites), c.phone, c.email, c.website, c.address, c.notes, yesNo(c.active), ...extra.map((d) => (typeof c.custom[d.key] === "boolean" ? yesNo(c.custom[d.key]) : c.custom[d.key]))]);
+  auditFrom(req, "export.companies", `${rows.length} companies`);
+  sendCsv(res, "companies", toCsv(["id", "name", "sites", "phone", "email", "website", "address", "notes", "active", ...extra.map((d) => d.key)], rows));
+});
+
+app.get("/api/people.csv", admin, (req, res) => {
+  const { records } = directory.listPeople({ includeInactive: true, limit: 1000000, siteId: siteFilter(req), companyId: positiveInt(req.query.companyId) });
+  const extra = customColumns("person");
+  const rows = peopleOut(req.ctx, records).map((p) => [p.id, p.firstName, p.lastName, p.preferredName, p.companyName, p.jobTitle, p.email, p.workPhone, p.mobile, p.siteName, yesNo(p.canHost), p.notes, yesNo(p.active), ...extra.map((d) => (typeof p.custom[d.key] === "boolean" ? yesNo(p.custom[d.key]) : p.custom[d.key]))]);
+  auditFrom(req, "export.people", `${rows.length} people`);
+  sendCsv(res, "people", toCsv(["id", "first_name", "last_name", "preferred_name", "company", "job_title", "email", "work_phone", "mobile", "site", "can_host", "notes", "active", ...extra.map((d) => d.key)], rows));
+});
+
+const COMPANY_COLUMNS = { name: "name", phone: "phone", email: "email", website: "website", address: "address", notes: "notes", active: "active" };
+const PERSON_COLUMNS = { first_name: "firstName", last_name: "lastName", preferred_name: "preferredName", job_title: "jobTitle", email: "email", work_phone: "workPhone", mobile: "mobile", can_host: "canHost", notes: "notes", active: "active" };
+const BOOLEAN_KEYS = new Set(["active", "canHost"]);
+
+function parseYesNo(value, label) {
+  const s = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y"].includes(s)) return true;
+  if (["0", "false", "no", "n"].includes(s)) return false;
+  throw fail(400, `${label} must be yes or no.`);
+}
+
+/** A site by name among those the caller may use. */
+function siteByName(ctx, name) {
+  const site = sites.list().find((s) => s.name.toLowerCase() === String(name).trim().toLowerCase());
+  if (!site) throw fail(400, `There is no site called "${name}".`);
+  if (!access.siteVisible(ctx, site.id)) throw fail(403, `This account can't use the site "${name}".`);
+  return site;
+}
+
+/** "Site A: Suite 100; Site B" -> [{ siteId, suite }]. */
+function parseSitesCell(ctx, cell) {
+  return String(cell).split(";").map((part) => part.trim()).filter(Boolean).map((part) => {
+    const idx = part.indexOf(":");
+    const name = idx >= 0 ? part.slice(0, idx) : part;
+    return { siteId: siteByName(ctx, name).id, suite: idx >= 0 ? part.slice(idx + 1).trim() : null };
+  });
+}
+
+/**
+ * What an import may write for this caller: the built-in keys and custom field keys
+ * they can edit. Columns for anything else are skipped and reported, never written.
+ */
+function writableColumns(ctx, entity) {
+  const list = access.fieldsFor(ctx, entity).filter((f) => f.access === "edit");
+  return { builtIn: new Set(list.filter((f) => f.builtIn).map((f) => f.key)), custom: new Set(list.filter((f) => !f.builtIn && f.recordId === null).map((f) => f.apiKey)) };
+}
+
+/** Builds a patch from a CSV row: built-in columns, then custom columns by field key. */
+function rowPatch(row, columns, writable) {
+  const patch = {};
+  const custom = {};
+  for (const [col, value] of Object.entries(row)) {
+    if (value === "") continue;
+    if (columns[col] && writable.builtIn.has(columns[col])) {
+      patch[columns[col]] = BOOLEAN_KEYS.has(columns[col]) ? parseYesNo(value, col) : value;
+    } else if (writable.custom.has(col)) {
+      custom[col] = value;
+    }
+  }
+  if (Object.keys(custom).length) patch.custom = custom;
+  return patch;
+}
+
+/** Runs `fn(row, line)` for every row in one transaction; any failure undoes the lot. */
+function importRows(rows, fn) {
+  const errors = [];
+  const counts = { added: 0, updated: 0 };
+  try {
+    db.transaction(() => {
+      rows.forEach((row, i) => {
+        try {
+          counts[fn(row)] += 1;
+        } catch (error) {
+          errors.push(`Line ${i + 2}: ${error.message}`);
+        }
+      });
+      if (errors.length) throw fail(400, "rollback");
+    });
+  } catch (error) {
+    if (!errors.length) throw error;
+    const shown = errors.slice(0, 10).join("\n");
+    throw fail(400, `Nothing was imported. ${errors.length} line${errors.length === 1 ? " has" : "s have"} a problem:\n${shown}${errors.length > 10 ? `\n...and ${errors.length - 10} more.` : ""}`);
+  }
+  return counts;
+}
+
+function checkImport(rows, required) {
+  if (!rows.length) throw fail(400, "The file has no rows under its header.");
+  if (rows.length > 20000) throw fail(400, "Import at most 20,000 rows at a time.");
+  const missing = required.filter((c) => !Object.prototype.hasOwnProperty.call(rows[0], c));
+  if (missing.length) throw fail(400, `The first row must be a header with the column${missing.length === 1 ? "" : "s"} ${missing.join(", ")}.`);
+}
+
+function ignoredColumns(rows, columns, writable) {
+  return Object.keys(rows[0]).filter((c) => !["id", "sites", "site", "company"].includes(c) && !(columns[c] && writable.builtIn.has(columns[c])) && !writable.custom.has(c));
+}
+
+/** The sites a new company gets when the file does not say: the only site, or the caller's only one. */
+function defaultSitesFor(ctx) {
+  const usable = visibleSites(ctx, { includeInactive: false });
+  if (usable.length === 1) return [{ siteId: usable[0].id }];
+  throw fail(400, "Add a \"sites\" column: there is more than one site to choose from.");
+}
+
+app.post("/api/companies/import", editDir, (req, res) => {
+  const rows = parseCsvObjects(req.body?.csv);
+  checkImport(rows, ["name"]);
+  const writable = writableColumns(req.ctx, "company");
+  const counts = importRows(rows, (row) => {
+    const patch = rowPatch(row, COMPANY_COLUMNS, writable);
+    if (row.sites) patch.sites = parseSitesCell(req.ctx, row.sites);
+    const existing = directory.findCompanyByName(row.name);
+    if (existing && directory.getCompany(existing.id, { sites: req.ctx.sites })) {
+      delete patch.name;
+      directory.updateCompany(existing.id, patch, writePlan(req.ctx, "company", patch, existing.id));
+      return "updated";
+    }
+    if (existing) throw fail(403, `${row.name} exists at a site this account can't see.`);
+    if (!patch.sites) patch.sites = defaultSitesFor(req.ctx);
+    directory.createCompany(patch, writePlan(req.ctx, "company", patch));
+    return "added";
+  });
+  const ignored = ignoredColumns(rows, COMPANY_COLUMNS, writable);
+  auditFrom(req, "import.companies", `${counts.added} added, ${counts.updated} updated`);
+  res.json({ ok: true, ...counts, ignored });
+});
+
+app.post("/api/people/import", editDir, (req, res) => {
+  const rows = parseCsvObjects(req.body?.csv);
+  checkImport(rows, ["first_name", "last_name", "company"]);
+  const createCompanies = Boolean(req.body?.createCompanies);
+  const writable = writableColumns(req.ctx, "person");
+  const counts = importRows(rows, (row) => {
+    const patch = rowPatch(row, PERSON_COLUMNS, writable);
+    let company = row.company ? directory.findCompanyByName(row.company) : null;
+    if (!row.company) throw fail(400, "Company is empty.");
+    if (company && !directory.getCompany(company.id, { sites: req.ctx.sites })) throw fail(403, `${row.company} is at a site this account can't see.`);
+    if (!company) {
+      if (!createCompanies) throw fail(400, `There is no company called "${row.company}". Add it first, or tick "Add companies that don't exist yet".`);
+      const cpatch = { name: row.company, sites: row.site ? [{ siteId: siteByName(req.ctx, row.site).id }] : defaultSitesFor(req.ctx) };
+      company = directory.createCompany(cpatch, writePlan(req.ctx, "company", cpatch));
+    }
+    patch.companyId = company.id;
+    if (row.site) patch.siteId = siteByName(req.ctx, row.site).id;
+    const existingId = directory.findPersonMatch(company.id, { email: row.email, firstName: row.first_name, lastName: row.last_name });
+    if (existingId) {
+      directory.updatePerson(existingId, patch, writePlan(req.ctx, "person", patch, existingId));
+      return "updated";
+    }
+    directory.createPerson(patch, writePlan(req.ctx, "person", patch));
+    return "added";
+  });
+  const ignored = ignoredColumns(rows, PERSON_COLUMNS, writable);
+  auditFrom(req, "import.people", `${counts.added} added, ${counts.updated} updated`);
+  res.json({ ok: true, ...counts, ignored });
+});
+
+// --- custom fields (administrators) ------------------------------------------------------------
+
+function fieldOut(d) {
+  let recordName = null;
+  if (d.recordId !== null) {
+    const rec = d.entity === "company" ? directory.getCompany(d.recordId) : d.entity === "visitor" ? visitors.get(d.recordId) : directory.getPerson(d.recordId);
+    recordName = rec ? (d.entity === "company" ? rec.name : `${rec.firstName} ${rec.lastName}`) : "(removed)";
+  }
+  return { ...d, recordName };
+}
+
+app.get("/api/fields", admin, (req, res) => {
+  res.json({
+    fields: Object.fromEntries(ENTITIES.map((e) => [e, fields.list(e, { allRecords: true }).map(fieldOut)])),
+    types: FIELD_TYPES.map((t) => ({ value: t, label: FIELD_TYPE_LABELS[t] })),
+    visibility: NEW_FIELD_VISIBILITY
+  });
+});
+
+app.post("/api/fields", admin, (req, res) => {
+  const body = req.body || {};
+  let def;
+  db.transaction(() => {
+    def = fields.create({ entity: body.entity, label: body.label, type: body.type, choices: body.choices, required: body.required, recordId: body.recordId ? positiveInt(body.recordId) : null });
+    access.initCustomField(def, body.visibility || "all");
+  });
+  auditFrom(req, "field.add", `${def.entity}.${def.key}`, `${def.type}${def.recordId ? ` on record ${def.recordId} only` : ""}; visible to ${body.visibility || "all"}`);
+  res.json({ ok: true, field: fieldOut(def) });
+});
+
+app.put("/api/fields/:id", admin, (req, res) => {
+  const before = fields.get(positiveInt(req.params.id));
+  const def = fields.update(positiveInt(req.params.id), req.body || {});
+  auditFrom(req, "field.update", `${def.entity}.${def.key}`, before && before.recordId !== null && def.recordId === null ? "made database-wide" : changedKeys(req.body));
+  res.json({ ok: true, field: fieldOut(def) });
+});
+
+app.delete("/api/fields/:id", admin, (req, res) => {
+  let def;
+  db.transaction(() => {
+    def = fields.remove(positiveInt(req.params.id));
+    access.forgetCustomField(def);
+  });
+  auditFrom(req, "field.remove", `${def.entity}.${def.key}`, "and every value in it");
+  res.json({ ok: true });
+});
+
+// --- roles and the field access grid (administrators) -------------------------------------------
+
+function rolesOut() {
+  const users = authGuard.loadUsers();
+  return access.listRoles().map((r) => ({ ...r, accounts: users.filter((u) => u.role === r.id).length }));
+}
+
+app.get("/api/roles", admin, (req, res) => {
+  res.json({ roles: rolesOut(), levels: AREA_LEVELS });
+});
+
+app.post("/api/roles", admin, (req, res) => {
+  const role = access.createRole(req.body || {});
+  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}; fields copied from ${req.body?.copyFrom || "viewer"}`);
+  res.json({ ok: true, role });
+});
+
+app.put("/api/roles/:id", admin, (req, res) => {
+  const role = access.updateRole(String(req.params.id), req.body || {});
+  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}`);
+  res.json({ ok: true, role });
+});
+
+app.delete("/api/roles/:id", admin, (req, res) => {
+  const id = String(req.params.id);
+  const role = access.deleteRole(id, authGuard.loadUsers().filter((u) => u.role === id).length);
+  auditFrom(req, "role.remove", role.name);
+  res.json({ ok: true });
+});
+
+// --- API clients (administrators) ----------------------------------------------------------------
+
+/** A client with the fields it receives: { company: [keys], person: [keys] }. */
+function apiClientOut(client) {
+  const ctx = access.contextFor({ role: client.roleId });
+  const keys = (entity) => access.fieldsFor(ctx, entity).filter((f) => f.recordId === null).map((f) => (f.builtIn ? f.key : f.apiKey));
+  return { ...client, fields: { company: keys("company"), person: keys("person") } };
+}
+
+/** Every field a client could be given, database-wide ones only. */
+function apiFieldChoices() {
+  const choices = (entity) => access.allFields(entity).map((f) => ({ key: f.builtIn ? f.key : f.apiKey, label: f.label, locked: f.locked, builtIn: f.builtIn }));
+  return { company: choices("company"), person: choices("person") };
+}
+
+app.get("/api/api-clients", admin, (req, res) => {
+  res.json({ clients: apiClients.list().map(apiClientOut), fields: apiFieldChoices() });
+});
+
+app.post("/api/api-clients", admin, (req, res) => {
+  const body = req.body || {};
+  let result;
+  db.transaction(() => {
+    result = apiClients.create({ name: body.name, sites: body.sites ?? null, canWrite: body.canWrite });
+    if (body.fields) access.setApiFields(result.client.roleId, body.fields);
+  });
+  const out = apiClientOut(result.client);
+  auditFrom(req, "api_client.add", out.name, `${out.canWrite ? "may add people" : "read only"}; sites ${out.sites ? out.sites.join(", ") : "all"}; fields ${[...out.fields.company.map((k) => `company.${k}`), ...out.fields.person.map((k) => `person.${k}`)].join(", ")}`);
+  res.json({ ok: true, client: out, key: result.key });
+});
+
+app.put("/api/api-clients/:id", admin, (req, res) => {
+  const id = positiveInt(req.params.id);
+  const body = req.body || {};
+  let client;
+  db.transaction(() => {
+    client = apiClients.update(id, { name: body.name, sites: body.sites, canWrite: body.canWrite });
+    if (body.fields) access.setApiFields(client.roleId, body.fields);
+  });
+  const out = apiClientOut(client);
+  auditFrom(req, "api_client.update", out.name, `${out.canWrite ? "may add people" : "read only"}; sites ${out.sites ? out.sites.join(", ") : "all"}; fields ${[...out.fields.company.map((k) => `company.${k}`), ...out.fields.person.map((k) => `person.${k}`)].join(", ")}`);
+  res.json({ ok: true, client: out });
+});
+
+app.post("/api/api-clients/:id/key", admin, (req, res) => {
+  const { client, key } = apiClients.newKey(positiveInt(req.params.id));
+  auditFrom(req, "api_client.key", client.name, "new key; the old one stopped working");
+  res.json({ ok: true, client: apiClientOut(client), key });
+});
+
+app.delete("/api/api-clients/:id", admin, (req, res) => {
+  const client = apiClients.remove(positiveInt(req.params.id));
+  auditFrom(req, "api_client.remove", client.name);
+  res.json({ ok: true });
+});
+
+app.get("/api/field-access", admin, (req, res) => {
+  res.json(access.grid());
+});
+
+app.put("/api/field-access", admin, (req, res) => {
+  const changes = req.body?.changes;
+  const count = access.setPolicies(changes);
+  auditFrom(req, "field_access.update", `${count} cell${count === 1 ? "" : "s"}`, changes.slice(0, 20).map((c) => `${c.roleId} ${c.entity}.${c.field}=${c.access}`).join("; "));
+  res.json({ ok: true, ...access.grid() });
+});
+
+// --- backup (administrators) ---------------------------------------------------------------------
+
+/**
+ * A copy of the database, still encrypted with the same key: useless without it, and
+ * the key is not in it. Restore by stopping the app and putting the file in place.
+ */
+app.get("/api/backup", admin, (req, res) => {
+  const tmp = path.join(os.tmpdir(), `ivm-backup-${process.pid}-${Date.now()}.db`);
+  db.backupTo(tmp);
+  auditFrom(req, "backup.download", path.basename(db.file), `${fs.statSync(tmp).size} bytes`);
+  res.setHeader("Content-Type", "application/octet-stream");
+  res.setHeader("Content-Disposition", `attachment; filename="identity-${new Date().toISOString().slice(0, 10)}.db"`);
+  res.sendFile(tmp, (error) => {
+    fs.rm(tmp, { force: true }, () => {});
+    if (error && !res.headersSent) res.status(500).json({ error: "The backup could not be sent." });
+  });
+});
+
+// --- Microsoft Entra ID and the audit log (administrators) -------------------------------------------
+
+app.get("/api/entra", admin, (req, res) => {
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http").split(",")[0].trim();
+  const base = APP_URL || `${proto}://${req.headers["x-forwarded-host"] || req.headers.host}`;
+  res.json({ entra: entra.publicConfig(), redirectUri: `${base}/api/auth/entra/callback`, appUrlSet: Boolean(APP_URL), roles: access.listRoles({ kind: "user" }) });
+});
+
+app.put("/api/entra", admin, (req, res) => {
+  const saved = entra.save(req.body || {});
+  auditFrom(req, "entra.update", saved.tenantId || "(none)", `${saved.enabled ? "on" : "off"}; default role ${saved.defaultRole}${req.body?.clientSecret ? "; secret changed" : ""}`);
+  res.json({ ok: true, entra: saved });
+});
+
+app.get("/api/audit", admin, (req, res) => {
+  res.json(db.auditLog({ limit: Math.min(positiveInt(req.query.limit, 100), 500), before: positiveInt(req.query.before), action: str(req.query.action), username: str(req.query.username) }));
+});
+
+/** Where an iPad opens the kiosk, for Settings > Kiosks. */
+function kioskAddress(req) {
+  if (KIOSK_URL) return `${KIOSK_URL}/kiosk/`;
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http").split(",")[0].trim();
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "localhost");
+  if (!KIOSK_PORT) return `${APP_URL || `${proto}://${host}`}/kiosk/`;
+  // Its own port on this host; through a proxy, set KIOSK_URL to the kiosk's hostname.
+  const hostname = host.replace(/:\d+$/, "");
+  return `${proto}://${hostname}:${KIOSK_PORT}/kiosk/`;
+}
+
+app.use(createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom, publicFields, kioskAddress, kioskPort: KIOSK_PORT, badges, events, clearance }));
+app.use(createBadgeRoutes({ access, badges, clearance, events, visitors, directory, admin, auditFrom }));
+app.use(clearanceRoutes.router);
+
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: "Not found." });
+});
+
+// Anything thrown in a route (Express 5 passes rejected promises here too) answers as
+// JSON with its status instead of an HTML page.
+function jsonErrors(error, req, res, next) { // eslint-disable-line no-unused-vars
+  const status = Number(error.status) || (error.type === "entity.too.large" ? 413 : 500);
+  if (status >= 500 && !error.status) console.error(`request failed: ${error.stack || error.message}`);
+  if (res.headersSent) return;
+  res.status(status).json({ error: status >= 500 && !error.status ? "Internal error." : error.message });
+}
+app.use(jsonErrors);
+kioskApp.use(jsonErrors);
+
+// --- boot ------------------------------------------------------------------
+
+// Only boot when run directly, so tests (and the image build's smoke check) can
+// require this file without starting a listener.
+if (require.main === module) {
+  let tlsOptions = null;
+  try {
+    tlsOptions = resolveTlsOptions({ dataDir: DATA_DIR });
+  } catch (error) {
+    // Failing loudly beats silently falling back to plain HTTP when TLS was asked for.
+    console.error(`\n  !! TLS could not be configured: ${error.message}\n`);
+    process.exit(1);
+  }
+
+  const scheme = tlsOptions ? "https" : "http";
+  const listen = (handler) => (tlsOptions
+    ? require("https").createServer({ key: tlsOptions.key, cert: tlsOptions.cert }, handler)
+    : require("http").createServer(handler));
+  const server = listen(app);
+  // The kiosk port uses the same certificate as the main one.
+  const kioskServer = KIOSK_PORT ? listen(kioskApp) : null;
+  if (kioskServer) {
+    kioskServer.on("error", (error) => {
+      console.error(`\n  !! The kiosk port ${KIOSK_PORT} could not be opened: ${error.message}\n`);
+      process.exit(1);
+    });
+    kioskServer.listen(KIOSK_PORT, () => console.log(`Kiosk: its own port, ${scheme}://localhost:${KIOSK_PORT}/kiosk/ (the main port has no /kiosk)`));
+  }
+
+  server.listen(PORT, () => {
+    console.log(`Identity and Visitor Manager ${pkg.version} running at ${scheme}://localhost:${PORT}`);
+    console.log(`Database: ${db.file} (encrypted; key from ${keyInfo.source})`);
+    if (tlsOptions) {
+      console.log(`TLS: on (${tlsOptions.mode}) - ${tlsOptions.detail}`);
+      if (tlsOptions.mode === "self-signed") {
+        console.log("     Self-signed: fine for a reverse proxy upstream, but browsers connecting directly will warn.");
+      }
+    } else {
+      console.log("TLS: off (plain HTTP)");
+    }
+    console.log(`Sites: ${sites.list().map((s) => s.name).join(", ")}`);
+    console.log(authGuard.hasUsers() ? `Accounts: ${authGuard.loadUsers().length} user(s) configured.` : "Accounts: none yet - open the app to create the first administrator.");
+    console.log(`Kiosks: ${kiosks.list().length} (${KIOSK_PORT ? `on port ${KIOSK_PORT}` : "pages at /kiosk/ on this port"})`);
+    console.log(`API clients: ${apiClients.list().length} (API at /api/v1)`);
+    clock.start();
+    console.log(`Entra ID sign-in: ${entra.isReady() ? `on (tenant ${entra.config().tenantId}${entra.config().source === "env" ? ", from environment" : ""})` : "off"}`);
+    if (authGuard.cookieSecure) {
+      console.log("Session cookie: Secure (requires HTTPS end to end - sign-in fails over plain HTTP)");
+    } else {
+      console.log("Session cookie: not Secure (fine on loopback; set COOKIE_SECURE=true behind HTTPS)");
+    }
+  });
+
+  const shutdown = () => {
+    clock.stop();
+    clearance.stop();
+    if (kioskServer) kioskServer.close();
+    server.close(() => {
+      db.close();
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 3000).unref();
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}
+
+module.exports = { app, kioskApp };

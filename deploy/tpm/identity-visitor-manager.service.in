@@ -1,0 +1,42 @@
+# Identity and Visitor Manager, with its database key sealed to this machine's TPM.
+# Installed by `sudo bash deploy/tpm/setup.sh install`, which fills in @APPDIR@ (the folder
+# holding docker-compose.yml) and @DOCKER@ (the docker command). See README, "Database key
+# sealed to the TPM".
+
+[Unit]
+Description=Identity and Visitor Manager (database key sealed to the TPM)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+# Don't retry forever when the key won't unseal (after a firmware or Secure Boot change).
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=@APPDIR@
+
+# The TPM decrypts the sealed key as the service starts. systemd keeps the plain key in a
+# memory-only folder for this service ($CREDENTIALS_DIRECTORY), readable only by it, and
+# removes it when the service stops.
+LoadCredentialEncrypted=db_key:/etc/identity-visitor-manager/db_key.cred
+
+# The container runs as uid 1000 and can't read systemd's root-owned copy, so it gets a copy
+# of its own in /run (memory), owned by 1000 and readable by nobody else. systemd removes
+# the folder, and the copy with it, when the service stops.
+RuntimeDirectory=identity-visitor-manager
+RuntimeDirectoryMode=0700
+# ($$ is a literal $ to systemd, so the shell expands it, from the service's own environment.)
+ExecStartPre=/bin/sh -c 'install -m 0400 -o 1000 -g 1000 "$$CREDENTIALS_DIRECTORY/db_key" /run/identity-visitor-manager/db_key'
+
+ExecStart=@DOCKER@ compose -f docker-compose.yml -f deploy/tpm/docker-compose.tpm.yml up --no-build --no-color --abort-on-container-exit
+ExecStop=@DOCKER@ compose -f docker-compose.yml -f deploy/tpm/docker-compose.tpm.yml down
+TimeoutStopSec=60
+
+# Docker's own restart policy is off for this container (docker-compose.tpm.yml), so
+# systemd brings it back, after a crash or a Docker restart alike.
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

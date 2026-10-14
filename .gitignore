@@ -1,0 +1,12 @@
+node_modules/
+data/
+.env
+# A key for local runs only. Never commit a database key.
+.db-key
+*.key
+test-results/
+playwright-report/
+# The Docker secret holding the database key (docker-compose.yml reads secrets/db_key).
+secrets/
+# Local Claude Code settings.
+.claude/

@@ -1,0 +1,21 @@
+# Used with docker-compose.yml when the database key is sealed to the TPM (README,
+# "Database key sealed to the TPM"). The systemd service identity-visitor-manager.service
+# runs:
+#
+#   docker compose -f docker-compose.yml -f deploy/tpm/docker-compose.tpm.yml up
+#
+# Nothing here is meant to be run by hand: the key file below exists only while the
+# service runs.
+
+services:
+  identity:
+    # systemd starts and restarts the container: Docker must not bring it up on its own at
+    # boot, before the TPM has unsealed the key.
+    restart: "no"
+
+secrets:
+  db_key:
+    # The service unseals the key into memory (/run is not on disk) and hands it over here,
+    # owned by the container's user (uid 1000) and readable by nobody else. It is removed
+    # when the service stops.
+    file: /run/identity-visitor-manager/db_key

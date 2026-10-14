@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#2563eb" />
+  <title>Identity and Visitor Manager</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="11" r="2.5" /><path d="M5.5 17c.6-1.8 2-2.8 3.5-2.8s2.9 1 3.5 2.8" /><path d="M15 10h3M15 13.5h3" />
+        </svg>
+      </span>
+      <div class="brand-text">
+        <h1>Identity and Visitor Manager</h1>
+        <p class="brand-sub" id="brand-sub">Tenant directory</p>
+      </div>
+    </div>
+    <nav id="nav" class="nav" aria-label="Pages" hidden>
+      <a href="#companies" data-view="companies">Companies</a>
+      <a href="#people" data-view="people">People</a>
+      <a href="#here" data-view="here" data-visitors>In the building <span id="nav-here" class="pill" hidden></span></a>
+      <a href="#visitors" data-view="visitors" data-visitors>Visitors <span id="nav-review" class="pill" hidden title="Registered at a kiosk, not yet checked"></span></a>
+      <a href="#expected" data-view="expected" data-visitors>Expected <span id="nav-expected" class="pill" hidden title="Expected today, not yet arrived"></span></a>
+      <a href="#visits" data-view="visits" data-visitors>Visit log</a>
+      <a href="#badges" data-view="badges" data-badges>Badges <span id="nav-badges" class="pill" hidden title="Badges out past their time: visitor badges with visitors who have left, and temporary badges not back by the end of their day"></span></a>
+      <a href="#clearance" data-view="clearance" data-security hidden>Clearances <span id="nav-clearance" class="pill" hidden title="Clearances waiting to be validated"></span></a>
+      <a href="#settings" data-view="settings" data-admin>Settings</a>
+    </nav>
+    <div class="header-actions" id="header-actions" hidden>
+      <label class="site-picker" id="site-picker" hidden>
+        <span class="visually-hidden">Site</span>
+        <select id="site-select" aria-label="Site"></select>
+      </label>
+      <a href="#account" id="current-user" class="user-chip" title="Your account"></a>
+      <button id="logout-btn" type="button" class="secondary small">Sign out</button>
+    </div>
+  </header>
+
+  <main id="main" hidden>
+    <!-- Companies and their people -->
+    <section id="view-companies" class="view" data-title="Companies">
+      <div class="split">
+        <div class="split-list panel">
+          <div class="toolbar tight">
+            <input id="companies-search" type="search" placeholder="Search companies" />
+            <button type="button" id="companies-add" class="primary" data-editor>Add</button>
+          </div>
+          <label class="check-row"><input type="checkbox" id="companies-inactive" /> Show inactive</label>
+          <ul id="companies-list" class="nav-list"></ul>
+          <p id="companies-count" class="muted small-text list-foot"></p>
+        </div>
+        <div class="split-detail" id="company-detail">
+          <div class="placeholder">Choose a company to see its details and people.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Everyone, across companies -->
+    <section id="view-people" class="view" data-title="People" hidden>
+      <div class="toolbar">
+        <input id="people-search" type="search" placeholder="Search name, company, title, email or phone" />
+        <label class="check-row inline-check"><input type="checkbox" id="people-inactive" /> Show inactive</label>
+        <span class="spacer"></span>
+        <button type="button" id="people-import" class="secondary" data-editor>Import CSV</button>
+        <button type="button" id="people-export" class="secondary" data-admin>Export CSV</button>
+        <button type="button" id="people-add" class="primary" data-editor>Add person</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="people-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <button type="button" id="people-prev" class="secondary small">Previous</button>
+        <span id="people-page" class="muted"></span>
+        <button type="button" id="people-next" class="secondary small">Next</button>
+      </div>
+    </section>
+
+    <!-- Who is in the building now -->
+    <section id="view-here" class="view" data-title="In the building" hidden>
+      <div class="toolbar no-print">
+        <h2 id="here-title" class="toolbar-title">In the building</h2>
+        <span class="spacer"></span>
+        <button type="button" id="here-print" class="secondary">Print list</button>
+        <button type="button" id="here-checkin" class="primary" data-visitor-editor>Check someone in</button>
+      </div>
+      <div class="print-only print-head">
+        <h2 id="here-print-title"></h2>
+        <p id="here-print-time"></p>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="here-table"><thead></thead><tbody></tbody></table>
+      </div>
+      <p id="here-note" class="muted small-text no-print"></p>
+    </section>
+
+    <!-- Visitors -->
+    <section id="view-visitors" class="view" data-title="Visitors" hidden>
+      <div class="toolbar">
+        <input id="visitors-search" type="search" placeholder="Search name, organisation, company, email or phone" />
+        <select id="visitors-filter" aria-label="Show">
+          <option value="">Everyone</option>
+          <option value="review">To check</option>
+          <option value="blocked">Blocked</option>
+        </select>
+        <span class="spacer"></span>
+        <button type="button" id="visitors-add" class="primary" data-visitor-editor>Add visitor</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="visitors-table"><thead></thead><tbody></tbody></table>
+      </div>
+      <div class="pager">
+        <button type="button" id="visitors-prev" class="secondary small">Previous</button>
+        <span id="visitors-page" class="muted"></span>
+        <button type="button" id="visitors-next" class="secondary small">Next</button>
+      </div>
+    </section>
+
+    <!-- The visit log -->
+    <section id="view-visits" class="view" data-title="Visit log" hidden>
+      <div class="toolbar">
+        <select id="visits-status" aria-label="Status">
+          <option value="all">All visits</option>
+          <option value="open">Still in the building</option>
+          <option value="closed">Left</option>
+        </select>
+        <label class="inline">From <input id="visits-from" type="date" /></label>
+        <label class="inline">To <input id="visits-to" type="date" /></label>
+        <input id="visits-search" type="search" placeholder="Search visitor, company or host" />
+        <span class="spacer"></span>
+        <button type="button" id="visits-export" class="secondary" data-admin>Export CSV</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="visits-table"><thead></thead><tbody></tbody></table>
+      </div>
+      <div class="pager">
+        <button type="button" id="visits-prev" class="secondary small">Previous</button>
+        <span id="visits-page" class="muted"></span>
+        <button type="button" id="visits-next" class="secondary small">Next</button>
+      </div>
+    </section>
+
+    <!-- Expected visitors: the day's events and their guests -->
+    <section id="view-expected" class="view" data-title="Expected" hidden>
+      <div class="toolbar">
+        <button type="button" id="expected-prev" class="secondary small" aria-label="Previous day">‹</button>
+        <input id="expected-date" type="date" aria-label="Day" />
+        <button type="button" id="expected-next" class="secondary small" aria-label="Next day">›</button>
+        <button type="button" id="expected-today" class="secondary small">Today</button>
+        <span class="spacer"></span>
+        <button type="button" id="expected-add" class="primary" data-visitor-editor>New event</button>
+      </div>
+      <div id="expected-list"></div>
+    </section>
+
+    <!-- Badges -->
+    <section id="view-badges" class="view" data-title="Badges" hidden>
+      <div class="toolbar">
+        <input id="badges-search" type="search" placeholder="Search number, holder or company" />
+        <select id="badges-type" aria-label="Type">
+          <option value="">All types</option>
+          <option value="personnel">Personnel</option>
+          <option value="tenant">Tenant</option>
+          <option value="visitor">Visitor</option>
+        </select>
+        <select id="badges-state" aria-label="Show">
+          <option value="">All badges</option>
+          <option value="available">Available</option>
+          <option value="assigned">Assigned</option>
+          <option value="left">Out with visitors who have left</option>
+          <option value="temporary">Temporary badges out</option>
+          <option value="overdue">Temporary badges overdue</option>
+          <option value="lost">Lost</option>
+          <option value="retired">Retired</option>
+        </select>
+        <span class="spacer"></span>
+        <button type="button" id="badges-range" class="secondary" data-badge-editor>Add a range</button>
+        <button type="button" id="badges-add" class="primary" data-badge-editor>Add badge</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="badges-table"><thead></thead><tbody></tbody></table>
+      </div>
+      <div class="pager">
+        <button type="button" id="badges-prev" class="secondary small">Previous</button>
+        <span id="badges-page" class="muted"></span>
+        <button type="button" id="badges-next" class="secondary small">Next</button>
+      </div>
+    </section>
+
+    <!-- The Security role's clearance validation queue -->
+    <section id="view-clearance" class="view" data-title="Clearance queue" hidden>
+      <div class="toolbar">
+        <p id="clearance-hint" class="muted small-text"></p>
+        <span class="spacer"></span>
+        <button type="button" id="clearance-refresh" class="secondary small">Refresh</button>
+      </div>
+      <div id="clearance-list"></div>
+    </section>
+
+    <!-- Settings (administrators) -->
+    <section id="view-settings" class="view" data-title="Settings" hidden>
+      <div class="tabs" id="settings-tabs" role="tablist">
+        <button type="button" data-tab="sites" class="is-active">Sites</button>
+        <button type="button" data-tab="fields">Fields</button>
+        <button type="button" data-tab="access">Field access</button>
+        <button type="button" data-tab="visits">Visits</button>
+        <button type="button" data-tab="kiosks">Kiosks</button>
+        <button type="button" data-tab="badges">Badges and clearances</button>
+        <button type="button" data-tab="api">API clients</button>
+        <button type="button" data-tab="roles">Roles</button>
+        <button type="button" data-tab="users">Users</button>
+        <button type="button" data-tab="entra">Microsoft Entra ID</button>
+        <button type="button" data-tab="data">Import, export and backup</button>
+        <button type="button" data-tab="audit">Audit log</button>
+      </div>
+      <div id="settings-body" class="settings-body"></div>
+    </section>
+
+    <!-- Account -->
+    <section id="view-account" class="view" data-title="Account" hidden>
+      <div id="account-body" class="settings-body"></div>
+    </section>
+  </main>
+
+  <footer class="app-footer" id="footer" hidden><span id="version"></span></footer>
+
+  <!-- Sign-in: covers the app until someone is signed in. -->
+  <div id="auth" class="auth-overlay" hidden>
+    <div class="auth-card">
+      <div class="auth-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="11" r="2.5" /><path d="M5.5 17c.6-1.8 2-2.8 3.5-2.8s2.9 1 3.5 2.8" /><path d="M15 10h3M15 13.5h3" />
+          </svg>
+        </span>
+        <div>
+          <h2 id="auth-title">Sign in</h2>
+          <p id="auth-sub" class="muted">Identity and Visitor Manager</p>
+        </div>
+      </div>
+      <p id="auth-message" class="message error" hidden></p>
+
+      <form id="setup-form" class="stack" hidden>
+        <p class="muted">No accounts exist yet. Create the first administrator. You can add more sites, Microsoft Entra ID sign-in and other users afterwards under Settings.</p>
+        <label>Building or site name <input name="siteName" autocomplete="off" maxlength="80" placeholder="Harbour Point" /></label>
+        <label>Username <input name="username" autocomplete="username" required minlength="3" maxlength="32" /></label>
+        <label>Password <input name="password" type="password" autocomplete="new-password" required minlength="12" /></label>
+        <label>Confirm password <input name="confirm" type="password" autocomplete="new-password" required minlength="12" /></label>
+        <button type="submit" class="primary big">Create administrator</button>
+      </form>
+
+      <div id="login-block" hidden>
+        <a id="entra-btn" class="entra-btn" href="/api/auth/entra/start" hidden>
+          <svg viewBox="0 0 21 21" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#f25022" /><rect x="11" y="1" width="9" height="9" fill="#7fba00" /><rect x="1" y="11" width="9" height="9" fill="#00a4ef" /><rect x="11" y="11" width="9" height="9" fill="#ffb900" /></svg>
+          <span id="entra-label">Sign in with Microsoft</span>
+        </a>
+        <div id="or-divider" class="divider" hidden><span>or with a local account</span></div>
+        <form id="login-form" class="stack">
+          <label>Username <input name="username" autocomplete="username webauthn" required /></label>
+          <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+          <button type="submit" class="primary big">Sign in</button>
+        </form>
+        <button type="button" id="passkey-btn" class="secondary full" hidden>Sign in with a passkey</button>
+      </div>
+
+      <form id="mfa-form" class="stack" hidden>
+        <p class="muted">Enter the 6-digit code from your authenticator app.</p>
+        <label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="\d{6}" maxlength="6" required /></label>
+        <button type="submit" class="primary big">Verify</button>
+        <button type="button" id="use-recovery" class="link-btn">Use a recovery code instead</button>
+      </form>
+
+      <form id="recovery-form" class="stack" hidden>
+        <p class="muted">Enter one of the recovery codes you saved when you set up two-factor sign-in. Each works once.</p>
+        <label>Recovery code <input name="code" autocomplete="off" required /></label>
+        <button type="submit" class="primary big">Sign in</button>
+        <button type="button" id="use-code" class="link-btn">Use an authenticator code instead</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" popover="manual"></div>
+
+  <script src="/js/01-core.js"></script>
+  <script src="/js/02-auth.js"></script>
+  <script src="/js/03-records.js"></script>
+  <script src="/js/04-companies.js"></script>
+  <script src="/js/05-people.js"></script>
+  <script src="/js/06-settings.js"></script>
+  <script src="/js/07-access.js"></script>
+  <script src="/js/08-account.js"></script>
+  <script src="/js/09-visitors.js"></script>
+  <script src="/js/10-here.js"></script>
+  <script src="/js/11-visits.js"></script>
+  <script src="/js/12-visit-settings.js"></script>
+  <script src="/js/14-api-clients.js"></script>
+  <script src="/js/15-badges.js"></script>
+  <script src="/js/16-expected.js"></script>
+  <script src="/js/17-clearance.js"></script>
+  <script src="/js/13-app.js"></script>
+</body>
+</html>
