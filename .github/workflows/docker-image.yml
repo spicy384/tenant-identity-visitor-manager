@@ -5,8 +5,7 @@
 #   ghcr.io/spicy384/tenant-identity-visitor-manager:1.2.3    a tag v1.2.3 (also :1.2)
 #   ghcr.io/spicy384/tenant-identity-visitor-manager:sha-<7>  every build, by commit
 #
-# The package is private until its visibility is changed once on GitHub:
-# the package page -> Package settings -> Danger Zone -> Change visibility.
+# The package takes the repository's visibility (public here), so pulling needs no sign-in.
 name: Publish Docker image
 
 on:
