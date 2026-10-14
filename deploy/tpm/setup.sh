@@ -3,10 +3,11 @@
 # systemd service that unseals it as it starts. See README, "Database key sealed to the TPM".
 #
 #   sudo bash deploy/tpm/setup.sh check                 what this host has, and what's missing
-#   sudo bash deploy/tpm/setup.sh seal [options] [FILE] seal the key (default secrets/db_key)
+#   sudo bash deploy/tpm/setup.sh seal [options] [FILE] seal the key: from FILE, or by default
+#                                                       the one the app made in its keys volume
 #        --pcrs 7|none|LIST   bind to these TPM PCRs (default 7, the Secure Boot state)
 #        --remove             delete FILE once it is sealed and checked
-#        -                    read the key from the keyboard (or a pipe) instead of a file
+#        -                    read the key from the keyboard (or a pipe) instead
 #   sudo bash deploy/tpm/setup.sh install               install and start the systemd service
 #   sudo bash deploy/tpm/setup.sh status                the service, and whether the key unseals
 #   sudo bash deploy/tpm/setup.sh uninstall             stop and remove the service (keeps the sealed key)
@@ -21,6 +22,9 @@ UNIT=/etc/systemd/system/$NAME.service
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 APPDIR=$(cd "$HERE/../.." && pwd)
 SELF="sudo bash $HERE/setup.sh"
+# The volume the app makes its key in (docker-compose.yml), and the image to read it with.
+KEYS_VOLUME=identity-visitor-manager_identity-keys
+IMAGE=ghcr.io/spicy384/tenant-identity-visitor-manager:latest
 
 die() { echo "error: $*" >&2; exit 1; }
 need_root() { [ "$(id -u)" -eq 0 ] || die "run this with sudo"; }
@@ -73,10 +77,16 @@ cmd_seal() {
       *) src=$1; shift ;;
     esac
   done
-  [ -n "$src" ] || src="$APPDIR/secrets/db_key"
   command -v systemd-creds >/dev/null 2>&1 || die "systemd-creds not found; needs systemd 250 or later ($SELF check)"
 
-  if [ "$src" = - ]; then
+  if [ -z "$src" ]; then
+    # The key the app made on its first start, read straight out of its volume: it never
+    # touches the disk outside it.
+    [ "$remove" -eq 0 ] || die "--remove needs a key file; after install, remove the volume instead"
+    docker volume inspect "$KEYS_VOLUME" >/dev/null 2>&1 || die "no $KEYS_VOLUME volume: start the app once (docker compose up -d), or name a key file, or use -"
+    src=volume
+    key=$(docker run --rm --network none -v "$KEYS_VOLUME:/keys:ro" --entrypoint cat "$IMAGE" /keys/db_key | tr -d '[:space:]') || die "couldn't read the key from $KEYS_VOLUME"
+  elif [ "$src" = - ]; then
     [ "$remove" -eq 0 ] || die "--remove needs a key file"
     if [ -t 0 ]; then
       read -rsp "Database key (64 hex characters, not shown): " key
@@ -107,7 +117,10 @@ cmd_seal() {
   key=""
   echo "Sealed to this machine's TPM: $CRED (PCRs: $pcrs)."
 
-  if [ "$src" != - ]; then
+  if [ "$src" = volume ]; then
+    echo "The plain key is still in the $KEYS_VOLUME volume. Once the service runs (install),"
+    echo "remove it: docker volume rm $KEYS_VOLUME"
+  elif [ "$src" != - ]; then
     if [ "$remove" -eq 1 ]; then
       if command -v shred >/dev/null 2>&1; then shred -u "$src"; else rm -f "$src"; fi
       echo "Removed $src. (On an SSD the old blocks may survive deletion; full-disk encryption covers that.)"
@@ -138,7 +151,7 @@ cmd_install() {
     echo "Stopping the containers started without the service..."
     docker compose down
   fi
-  if ! docker image inspect ghcr.io/spicy384/tenant-identity-visitor-manager:latest >/dev/null 2>&1; then
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo "Pulling the image (or building it from this checkout if that fails)..."
     docker compose pull || docker compose build
   fi
@@ -149,6 +162,7 @@ cmd_install() {
   echo "Installed and started $NAME.service."
   echo "  Logs:            journalctl -u $NAME -f"
   echo "  After an update: docker compose pull && sudo systemctl restart $NAME"
+  if docker volume inspect "$KEYS_VOLUME" >/dev/null 2>&1; then echo "  Then remove the plain key: docker volume rm $KEYS_VOLUME"; fi
   if [ -f "$APPDIR/secrets/db_key" ]; then echo "  Then remove the plain key: shred -u $APPDIR/secrets/db_key"; fi
 }
 
@@ -176,8 +190,10 @@ cmd_uninstall() {
   else
     echo "The service isn't installed."
   fi
-  echo "The sealed key stays in $CRED. To go back to a plain key file, put the key in"
-  echo "$APPDIR/secrets/db_key (chown 1000:1000, chmod 400) and run docker compose up -d."
+  echo "The sealed key stays in $CRED. To run without the TPM again, put the key back in the"
+  echo "keys volume and start the app the usual way:"
+  echo "  systemd-creds decrypt --name=db_key $CRED - | docker run --rm -i -v $KEYS_VOLUME:/keys --entrypoint sh $IMAGE -c 'cat > /keys/db_key'"
+  echo "  docker compose up -d"
 }
 
 case "${1:-}" in

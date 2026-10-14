@@ -166,6 +166,11 @@ try {
   throw error;
 }
 const db = openDatabase({ dataDir: DATA_DIR, key: keyInfo.key });
+if (keyInfo.created && require.main === module) {
+  // Never the key itself: logs are kept on disk.
+  console.log(`\n  ** A new database key was made in ${keyInfo.source}. Copy it into your password manager now;`);
+  console.log("     without it the data can't be read. In Docker: docker compose exec identity cat /keys/db_key\n");
+}
 const fields = createFields({ db });
 const access = createAccess({ db, fields });
 const sites = createSites({ db });

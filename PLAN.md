@@ -318,6 +318,11 @@ uninstall), identity-visitor-manager.service.in (LoadCredentialEncrypted from
 owned by uid 1000 since systemd's copy is root's; docker compose up in the foreground with
 Restart=always), docker-compose.tpm.yml (restart "no"; the db_key secret from /run). Default
 PCR 7; `--pcrs none` for the chip alone. The plain-file setup stays the default.
+Same day the user asked for a compose file as simple as the DMARC tool's: a fresh install now
+makes its own key (DB_KEY_CREATE) in an identity-keys volume of its own, separate from
+identity-data, so `docker compose up -d` is all a first start needs; optional settings come
+from an optional .env (env_file). The TPM override replaces /keys with an empty tmpfs, and
+setup.sh seal reads the key straight from the volume.
 
 ## Tests
 

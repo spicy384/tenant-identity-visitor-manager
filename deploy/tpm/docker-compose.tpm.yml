@@ -13,6 +13,19 @@ services:
     # boot, before the TPM has unsealed the key.
     restart: "no"
 
+    # The key comes from the TPM, as the Docker secret db_key; the app never makes one.
+    environment:
+      DB_KEY_FILE: /run/secrets/db_key
+      DB_KEY_CREATE: "false"
+    secrets:
+      - db_key
+
+    # An empty in-memory /keys in place of the identity-keys volume (same mount point, so
+    # it replaces it), so that volume can be removed once the key is sealed.
+    volumes:
+      - type: tmpfs
+        target: /keys
+
 secrets:
   db_key:
     # The service unseals the key into memory (/run is not on disk) and hands it over here,

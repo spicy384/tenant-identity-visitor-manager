@@ -169,9 +169,10 @@ is not in backups. Keep a copy in your password manager from the start.
 npm run new-key
 ```
 
-The app reads the key from `DB_KEY_FILE` (in Docker, the secret `db_key` at
-`/run/secrets/db_key`, used automatically), or from `DB_KEY`. It refuses to start without a
-key, and refuses a key file inside the data directory.
+The app reads the key from `DB_KEY_FILE` or `DB_KEY` (or, with neither, the Docker secret
+`/run/secrets/db_key`). With `DB_KEY_CREATE=true`, as the compose file sets, a fresh install
+makes its own key in `DB_KEY_FILE`; it never makes one for a database that already exists. It
+refuses to start without a key, and refuses a key file inside the data directory.
 
 To change the key, stop the app, make a new key and run:
 
@@ -203,16 +204,24 @@ for amd64 and arm64 (GitHub Actions, `.github/workflows/docker-image.yml`). A se
 only Docker and the compose file:
 
 ```bash
-mkdir -p ~/identity-visitor-manager/secrets && cd ~/identity-visitor-manager
+mkdir -p ~/identity-visitor-manager && cd ~/identity-visitor-manager
 curl -fsSLO https://raw.githubusercontent.com/spicy384/tenant-identity-visitor-manager/main/docker-compose.yml
-docker run --rm ghcr.io/spicy384/tenant-identity-visitor-manager node scripts/new-key.js > secrets/db_key
-sudo chown 1000:1000 secrets/db_key && sudo chmod 400 secrets/db_key
 docker compose up -d
 ```
 
-Copy the key in `secrets/db_key` into your password manager straight away. To seal it to the
-TPM instead (below), clone the repository rather than fetching the compose file alone: the
-service needs `deploy/tpm/`.
+Then open https://<host>:3000 (the certificate is self-signed until a proxy is in front)
+and create the first administrator.
+
+**The database key.** The first start makes one in the `identity-keys` volume, separate from
+the data in `identity-data`. Copy it into your password manager straight away; without it
+the data can't be read, and it isn't in backups:
+
+```bash
+docker compose exec identity cat /keys/db_key
+```
+
+To seal it to the TPM instead (below), clone the repository rather than fetching the compose
+file alone: the service needs `deploy/tpm/`.
 
 **Updating:** `docker compose pull && docker compose up -d`. The data volume carries over.
 **Versions:** a tag such as `v1.2.0` also publishes `:1.2.0` and `:1.2`, and every build
@@ -221,10 +230,33 @@ is reachable as `:sha-<commit>`; change the tag in the compose file to pin one. 
 **From source:** in a clone, `docker compose up -d --build` builds the image locally under the
 same name.
 
-The container runs as uid 1000, so it must be able to read the secret file. Nginx Proxy
-Manager on another host terminates HTTPS and connects to the container over HTTPS with
-the self-signed certificate the app makes (`TLS_ENABLED=true`), as with Equipment Checkout.
-Set `APP_URL` to the public address for Microsoft sign-in.
+Nginx Proxy Manager on another host terminates HTTPS and connects to the container over
+HTTPS with the self-signed certificate the app makes (`TLS_ENABLED=true`), as with Equipment
+Checkout. Set `APP_URL` to the public address for Microsoft sign-in.
+
+### Settings in the environment
+
+The compose file sets what most installs need. Anything else goes in a `.env` file next to
+it (one `NAME=value` per line), which reaches the container as it is; values there also
+override the compose file's defaults.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `APP_URL` | from each request | The public address (https://directory.example.com); needed for Microsoft sign-in |
+| `KIOSK_PORT` | `3001` | The kiosks' own port; empty serves the kiosk at /kiosk/ on port 3000 |
+| `KIOSK_URL` | from the request | The kiosks' public address, shown on Settings > Kiosks |
+| `TLS_ENABLED` | `true` | HTTPS with a self-signed certificate the app makes in /data/tls |
+| `TLS_HOSTS` | | Extra names or IPs for that certificate, comma separated |
+| `TLS_CERT`, `TLS_KEY` | | Your own certificate and key files instead (mount them read-only) |
+| `COOKIE_SECURE` | `true` | Marks the session cookie Secure; false only for plain http:// |
+| `TRUST_PROXY` | private networks | Which proxies may set X-Forwarded-For: `false`, a hop count, or addresses |
+| `TZ` | `UTC` | The server's time zone (each site has its own for visits) |
+| `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | | Microsoft Entra sign-in; or set it up in the app under Settings |
+| `ENTRA_DEFAULT_ROLE` | `none` | The role a new Entra user gets |
+| `CLEARANCE_DIGITS_HOURS` | `36` | Hours SSN digits given for clearance validation stay in memory (at most 168) |
+| `LOGIN_RATE_LIMIT` | `20` | Failed sign-ins allowed before a pause; `0` turns the limit off |
+| `PASSKEY_RP_ID`, `PASSKEY_ORIGIN` | from the request | The passkey domain and origin, if the proxy hides them |
+| `DB_KEY_FILE`, `DB_KEY_CREATE` | `/keys/db_key`, `true` | Where the database key is, and whether a fresh install makes one |
 
 ### Host hardening (Debian or Ubuntu)
 
@@ -260,7 +292,7 @@ written out or read:
 
 ### Database key sealed to the TPM (optional)
 
-Instead of a key file in `secrets/`, the key can be sealed to the host's TPM with
+Instead of a key file in the `identity-keys` volume, the key can be sealed to the host's TPM with
 `systemd-creds`: on disk it is then encrypted by a key that never leaves the TPM chip, so a
 stolen disk, a copied VM image or a backup of the host's files doesn't give it away. A
 systemd service asks the TPM to unseal it as the app starts and hands it to the container
@@ -272,10 +304,10 @@ too old), a TPM 2.0 (on a VM, a virtual TPM: Proxmox, Hyper-V Gen 2 and VMware a
 one), Docker Compose v2 and rootful Docker.
 
 ```bash
-sudo bash deploy/tpm/setup.sh check              # what the host has, and what's missing
-sudo bash deploy/tpm/setup.sh seal               # seals secrets/db_key; checks it unseals
-sudo bash deploy/tpm/setup.sh install            # installs and starts identity-visitor-manager.service
-shred -u secrets/db_key                          # once the app runs, drop the plain copy
+sudo bash deploy/tpm/setup.sh check                  # what the host has, and what's missing
+sudo bash deploy/tpm/setup.sh seal                   # seals the key the app made; checks it unseals
+sudo bash deploy/tpm/setup.sh install                # installs and starts identity-visitor-manager.service
+docker volume rm identity-visitor-manager_identity-keys   # once the app runs, drop the plain copy
 ```
 
 What it does:
@@ -284,15 +316,17 @@ What it does:
   `/etc/identity-visitor-manager/db_key.cred`, and checks it unseals to the same key before
   replacing anything. `--pcrs 7` (the default) also ties it to the Secure Boot state, so
   booting another system or turning Secure Boot off gets nothing; `--pcrs none` ties it to
-  the TPM chip alone. `seal -` reads the key from the keyboard instead of a file, and
-  `--remove` deletes the key file once it is sealed.
+  the TPM chip alone. By default it reads the key the app made, straight out of the
+  `identity-keys` volume; `seal FILE` takes a key file instead (`--remove` deletes it once
+  sealed), and `seal -` reads it from the keyboard.
 - `install` stops containers started the plain way, installs the service from
   `deploy/tpm/identity-visitor-manager.service.in` and starts it. The service unseals the
   key (`LoadCredentialEncrypted`), copies it into `/run/identity-visitor-manager/db_key`
   (memory, owned by the container's uid 1000, mode 0400, removed when the service stops),
   and runs `docker compose` with `deploy/tpm/docker-compose.tpm.yml`, which points the
-  `db_key` secret there and turns Docker's own restart off so systemd starts and restarts
-  the container. Logs: `journalctl -u identity-visitor-manager -f`.
+  `db_key` secret there, stops the app making a key of its own, puts an empty in-memory
+  /keys in place of the `identity-keys` volume (so the volume can go), and turns Docker's
+  own restart off so systemd starts and restarts the container. Logs: `journalctl -u identity-visitor-manager -f`.
 - After updating the app: `docker compose pull && sudo systemctl restart identity-visitor-manager`
   (or `docker compose build` in place of the pull, to build from the clone).
   Use `systemctl`, not `docker compose up`, to start and stop it from now on.

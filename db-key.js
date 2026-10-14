@@ -4,8 +4,13 @@
  * its own. In Docker it arrives as a secret file; for a quick local run it can be an
  * environment variable.
  *
- *   DB_KEY_FILE  a file holding the key (default /run/secrets/db_key when that exists)
- *   DB_KEY       the key itself (DB_KEY_FILE wins when both are set)
+ *   DB_KEY_FILE    a file holding the key (default /run/secrets/db_key when that exists)
+ *   DB_KEY         the key itself (DB_KEY_FILE wins when both are set)
+ *   DB_KEY_CREATE  "true": when DB_KEY_FILE doesn't exist yet and there is no database
+ *                  either (a fresh install), make a key and write it there. The compose
+ *                  file uses this with a volume of its own, so `docker compose up` is all
+ *                  a first start needs. A missing key for an existing database is still
+ *                  an error: a new key could never open it.
  */
 const crypto = require("crypto");
 const fs = require("fs");
@@ -37,7 +42,7 @@ function normaliseKey(value, source) {
  * The key and where it came from, or a thrown error saying how to provide one. A key
  * file inside the data directory is refused: keeping the key beside the data defeats it.
  */
-function loadKey({ env = process.env, dataDir = null } = {}) {
+function loadKey({ env = process.env, dataDir = null, dbFile = "identity.db" } = {}) {
   let file = String(env.DB_KEY_FILE || "").trim();
   if (!file && !env.DB_KEY && fs.existsSync(DOCKER_SECRET)) file = DOCKER_SECRET;
   if (file) {
@@ -47,6 +52,15 @@ function loadKey({ env = process.env, dataDir = null } = {}) {
       if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
         throw fail(`DB_KEY_FILE (${resolved}) is inside the data directory. Keep the key somewhere else, such as a Docker secret, so a copy of the data cannot be opened with it.`);
       }
+    }
+    if (String(env.DB_KEY_CREATE || "").toLowerCase() === "true" && !fs.existsSync(resolved)) {
+      if (dataDir && fs.existsSync(path.join(dataDir, dbFile))) {
+        throw fail(`The database key is missing from ${resolved}, and there is already a database in ${dataDir}. A new key can't open it: put the key it was made with back in ${resolved} (from your password manager).`);
+      }
+      const key = generateKey();
+      fs.mkdirSync(path.dirname(resolved), { recursive: true });
+      fs.writeFileSync(resolved, `${key}\n`, { mode: 0o600, flag: "wx" });
+      return { key, source: resolved, created: true };
     }
     let text;
     try {

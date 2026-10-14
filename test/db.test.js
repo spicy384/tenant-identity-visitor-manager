@@ -87,6 +87,23 @@ let missing = null;
 try { loadKey({ env: {} }); } catch (error) { missing = error; }
 check("no key at all explains how to make one", missing && /new-key/.test(missing.message));
 
+// A fresh install makes its own key (DB_KEY_CREATE, as the compose file sets).
+const freshData = path.join(tmp, "fresh-data");
+const autoFile = path.join(tmp, "keys", "db_key");
+const autoEnv = { DB_KEY_FILE: autoFile, DB_KEY_CREATE: "true" };
+const made = loadKey({ env: autoEnv, dataDir: freshData });
+check("create: a fresh install makes a key in DB_KEY_FILE", made.created === true && fs.readFileSync(autoFile, "utf8").trim() === made.key && /^[0-9a-f]{64}$/.test(made.key));
+check("create: and only readable by its owner", process.platform === "win32" || (fs.statSync(autoFile).mode & 0o077) === 0);
+const again = loadKey({ env: autoEnv, dataDir: freshData });
+check("create: the next start reads the same key, making none", again.key === made.key && !again.created);
+fs.rmSync(autoFile);
+let lostKey = null;
+try { loadKey({ env: autoEnv, dataDir }); } catch (error) { lostKey = error; }
+check("create: never for a database that already exists", lostKey && /already a database/.test(lostKey.message) && !fs.existsSync(autoFile));
+let notAsked = null;
+try { loadKey({ env: { DB_KEY_FILE: autoFile }, dataDir: freshData }); } catch (error) { notAsked = error; }
+check("create: not unless DB_KEY_CREATE is true", notAsked && /Could not read/.test(notAsked.message) && !fs.existsSync(autoFile));
+
 // --- changing the key ----------------------------------------------------------------------
 
 const newKey = generateKey();

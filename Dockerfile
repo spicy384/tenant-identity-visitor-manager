@@ -43,10 +43,11 @@ LABEL org.opencontainers.image.title="Identity and Visitor Manager" \
       org.opencontainers.image.revision="${GIT_SHA}" \
       org.opencontainers.image.created="${BUILD_DATE}"
 
-# The image ships no data and no key; /data is a volume that outlives the container and
-# the key arrives as the Docker secret db_key (/run/secrets/db_key).
+# The image ships no data and no key. /data is a volume that outlives the container; /keys
+# (a volume of its own, so a copy of /data alone can't be opened) holds the database key
+# the app makes on first start, unless one arrives as the Docker secret db_key instead.
 # node:alpine already provides an unprivileged `node` user (uid 1000).
-RUN mkdir -p /data && chown node:node /data
+RUN mkdir -p /data /keys && chown node:node /data /keys
 
 USER node
 # 3000: the staff pages and APIs. 3001: the lobby kiosks, when KIOSK_PORT=3001 (docker-compose sets it).
