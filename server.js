@@ -527,7 +527,8 @@ app.get("/api/people.csv", admin, (req, res) => {
 
 const COMPANY_COLUMNS = { name: "name", phone: "phone", email: "email", website: "website", address: "address", notes: "notes", active: "active" };
 const PERSON_COLUMNS = { first_name: "firstName", last_name: "lastName", preferred_name: "preferredName", job_title: "jobTitle", email: "email", work_phone: "workPhone", mobile: "mobile", can_host: "canHost", notes: "notes", active: "active" };
-const BOOLEAN_KEYS = new Set(["active", "canHost"]);
+const VISITOR_COLUMNS = { first_name: "firstName", last_name: "lastName", organisation: "organisation", email: "email", phone: "phone", notes: "notes", blocked: "blocked" };
+const BOOLEAN_KEYS = new Set(["active", "canHost", "blocked"]);
 
 function parseYesNo(value, label) {
   const s = String(value).trim().toLowerCase();
@@ -693,8 +694,113 @@ app.post("/api/people/import", editDir, (req, res) => {
   res.json({ ok: true, ...importPeople(req, parseCsvObjects(req.body?.csv), { createCompanies: Boolean(req.body?.createCompanies) }) });
 });
 
+/** Someone in a company, by the name they go by ("Bobby Host" or "Robert Host"), or null. */
+function personInCompanyByName(companyId, name) {
+  const n = String(name || "").trim().replace(/\s+/g, " ");
+  if (!n) return null;
+  return db.raw.prepare(`SELECT id FROM people WHERE company_id = ? AND active = 1
+    AND (lower(first_name || ' ' || last_name) = lower(?) OR lower(coalesce(preferred_name, first_name) || ' ' || last_name) = lower(?))`).get(companyId, n, n)?.id ?? null;
+}
+
+/**
+ * Imports visitors from rows keyed by column (first_name, last_name, organisation, email,
+ * phone, notes, blocked, company and host they visit, custom field keys). A visitor with the
+ * same email, else exactly the same name, is updated. Imported visitors count as checked by
+ * staff. Clearances aren't imported: only the Security role sets them, by validating.
+ */
+function importVisitors(req, rows, { where, from = "CSV" } = {}) {
+  checkImport(rows, ["first_name", "last_name"]);
+  const writable = writableColumns(req.ctx, "visitor");
+  const list = access.fieldsFor(req.ctx, "visitor");
+  const linksWritable = list.some((f) => f.key === "companies" && f.access === "edit");
+  const plan = (patch, id = null) => {
+    const fieldList = access.fieldsFor(req.ctx, "visitor", { recordId: id });
+    return { custom: access.checkWrite(req.ctx, "visitor", patch, fieldList), editable: fieldList.filter((f) => f.access === "edit"), sites: req.ctx.sites };
+  };
+  const counts = importRows(rows, (row) => {
+    const patch = rowPatch(row, VISITOR_COLUMNS, writable);
+    let link = null;
+    if (row.company && linksWritable) {
+      const company = directory.findCompanyByName(row.company);
+      if (!company || !directory.getCompany(company.id, { sites: req.ctx.sites })) throw fail(400, `There is no company called "${row.company}" at your sites.`);
+      const hostId = row.host ? personInCompanyByName(company.id, row.host) : null;
+      if (row.host && !hostId) throw fail(400, `Nobody at ${company.name} is called "${row.host}".`);
+      link = { companyId: company.id, hostId };
+    } else if (row.host && linksWritable) {
+      throw fail(400, "A host needs the company they work for.");
+    }
+    const existingId = visitors.findMatch({ email: row.email, firstName: row.first_name, lastName: row.last_name });
+    if (existingId) {
+      if (!visitors.get(existingId, { sites: req.ctx.sites })) throw fail(403, `${row.first_name} ${row.last_name} is on record at a site this account can't see.`);
+      visitors.update(existingId, patch, plan(patch, existingId));
+      if (link) visitors.setLink(existingId, link, { sites: req.ctx.sites });
+      return "updated";
+    }
+    visitors.create({ ...patch, links: link ? [link] : [] }, { ...plan(patch), source: "import" });
+    return "added";
+  }, where);
+  const ignored = ignoredColumns(rows, VISITOR_COLUMNS, writable).filter((c) => linksWritable ? !["host"].includes(c) : true);
+  auditFrom(req, "import.visitors", `${counts.added} added, ${counts.updated} updated`, `from ${from}`);
+  return { ...counts, ignored };
+}
+
+const BADGE_COLUMNS = ["number", "type", "classification", "level", "sites", "temporary", "status", "notes"];
+const BADGE_TYPE_NAMES = { personnel: "personnel", staff: "personnel", building: "personnel", tenant: "tenant", visitor: "visitor", guest: "visitor" };
+
+/**
+ * Imports badges from rows keyed by column (number, type, classification, level, sites,
+ * temporary, status, notes). A badge with the same number is updated (one that is out can't
+ * change its type, classification, level or temporary flag). Level names only for roles that
+ * see clearance levels.
+ */
+function importBadges(req, rows, { where, from = "CSV" } = {}) {
+  checkImport(rows, ["number", "type", "classification"]);
+  const seesLevels = access.canSeeClearances(req.ctx);
+  if (!seesLevels && rows.some((r) => r.level)) throw fail(403, "This account doesn't see clearance levels, so it can't import them; leave the level out, or ask Security.");
+  const classes = clearance.classifications();
+  const levels = clearance.levels();
+  const counts = importRows(rows, (row) => {
+    const input = { number: row.number };
+    const type = BADGE_TYPE_NAMES[String(row.type || "").trim().toLowerCase()];
+    if (!type) throw fail(400, `"${row.type}" isn't a badge type: personnel, tenant or visitor.`);
+    input.type = type;
+    const cls = classes.find((c) => c.name.toLowerCase() === String(row.classification || "").trim().toLowerCase());
+    if (!cls) throw fail(400, `There is no classification called "${row.classification}" (${classes.map((c) => c.name).join(", ")}).`);
+    input.classificationId = cls.id;
+    if (row.level) {
+      const level = levels.find((l) => l.name.toLowerCase() === String(row.level).trim().toLowerCase());
+      if (!level) throw fail(400, `There is no clearance level called "${row.level}".`);
+      input.clearanceLevelId = level.id;
+    } else if (!cls.requiresClearance) {
+      input.clearanceLevelId = null;
+    }
+    if (row.sites) input.siteIds = String(row.sites).split(";").map((s) => s.trim()).filter(Boolean).map((s) => siteByName(req.ctx, s).id);
+    if (row.temporary) input.temporary = parseYesNo(row.temporary, "temporary");
+    if (row.status) {
+      const status = String(row.status).trim().toLowerCase();
+      if (!["active", "lost", "retired"].includes(status)) throw fail(400, `"${row.status}" isn't a badge status: active, lost or retired.`);
+      input.status = status;
+    }
+    if (row.notes) input.notes = row.notes;
+    const existingId = badges.findByNumber(row.number);
+    if (existingId) {
+      if (!badges.get(existingId, { sites: req.ctx.sites })) throw fail(403, `Badge ${row.number} is valid only at sites this account can't see.`);
+      badges.update(existingId, input, { sites: req.ctx.sites });
+      return "updated";
+    }
+    const status = input.status;
+    delete input.status;
+    const made = badges.create(input, { sites: req.ctx.sites });
+    if (status && status !== "active") badges.update(made.id, { status }, { sites: req.ctx.sites });
+    return "added";
+  }, where);
+  const ignored = Object.keys(rows[0]).filter((c) => !BADGE_COLUMNS.includes(c));
+  auditFrom(req, "import.badges", `${counts.added} added, ${counts.updated} updated`, `from ${from}`);
+  return { ...counts, ignored };
+}
+
 // Importing from an Access database or a CSV file, with its columns matched to fields.
-app.use(createImportRoutes({ editDir, importCompanies, importPeople, auditFrom }));
+app.use(createImportRoutes({ access, importCompanies, importPeople, importVisitors, importBadges, auditFrom }));
 
 // --- custom fields (administrators) ------------------------------------------------------------
 

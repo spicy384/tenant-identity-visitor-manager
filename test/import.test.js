@@ -84,22 +84,32 @@ async function main() {
   await admin.post("/api/sites", { name: "Riverside", timeZone: "UTC" });
   const harbour = (await admin.get("/api/config")).data.sites.find((s) => s.name === "Harbour Point");
   await admin.post("/api/companies", { name: "Acme Corp", sites: [{ siteId: harbour.id }] });
-  const pw = { manny: password(), manny2: password(), desk: password() };
+  const pw = { manny: password(), manny2: password(), desk: password(), sec: password(), vic: password(), office: password() };
+  await admin.post("/api/roles", { name: "Badge office", directory: "read", visitors: "read", badges: "manage" });
   await admin.post("/api/users", { username: "manny", password: pw.manny, role: "manager" });
   await admin.post("/api/users", { username: "manny2", password: pw.manny2, role: "manager" });
   await admin.post("/api/users", { username: "desk", password: pw.desk, role: "frontdesk" });
+  await admin.post("/api/users", { username: "sec", password: pw.sec, role: "security" });
+  await admin.post("/api/users", { username: "vic", password: pw.vic, role: "viewer" });
+  await admin.post("/api/users", { username: "office", password: pw.office, role: "badge-office" });
   const as = async (u) => { const c = client(); await c.post("/api/auth/login", { username: u, password: pw[u] }); return c; };
   const manager = await as("manny");
   const otherManager = await as("manny2");
   const desk = await as("desk");
+  const security = await as("sec");
+  const viewer = await as("vic");
+  const office = await as("office");
 
   // --- reading the Access file ----------------------------------------------------------------------
-  check("read: only those who change the directory may import", (await desk.upload("/api/import/read?name=directory.mdb", FIXTURE)).status === 403);
+  check("read: only those who may import something", (await viewer.upload("/api/import/read?name=directory.mdb", FIXTURE)).status === 403);
+  const deskRead = await desk.upload("/api/import/read?name=directory.mdb", FIXTURE);
+  check("read: front desk may (it imports visitors), but not people", deskRead.status === 200
+    && (await desk.post(`/api/import/${deskRead.data.token}/run`, { table: "Tenant Staff", target: "people", mapping: { first_name: { column: "FirstName" }, last_name: { column: "Surname" }, company: { column: "Firm" } } })).status === 403);
   check("read: not without a file", (await manager.upload("/api/import/read?name=empty.mdb", Buffer.alloc(0))).status === 400);
   let r = await manager.upload("/api/import/read?name=broken.mdb", Buffer.from("not an access database ".repeat(400)));
   check("read: a file that isn't an Access database says so", r.status === 400 && /couldn't be read as an Access database/.test(r.data.error));
   r = await manager.upload("/api/import/read?name=directory.mdb", FIXTURE);
-  check("read: the database's tables, with their columns and rows", r.status === 200 && r.data.format === "access" && r.data.tables.map((t) => t.name).join() === "Firms,Tenant Staff"
+  check("read: the database's tables, with their columns and rows", r.status === 200 && r.data.format === "access" && r.data.tables.map((t) => t.name).join() === "Firms,Tenant Staff,Guests,Badge Stock"
     && r.data.tables.find((t) => t.name === "Tenant Staff").rowCount === 4 && r.data.tables.find((t) => t.name === "Tenant Staff").columns.some((c) => c.name === "Surname"));
   let token = r.data.token;
   r = await manager.get(`/api/import/${token}/table?name=${encodeURIComponent("Tenant Staff")}`);
@@ -140,6 +150,45 @@ async function main() {
   token = (await manager.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
   r = await manager.post(`/api/import/${token}/run`, { table: "Tenant Staff", target: "people", mapping: people });
   check("run: importing again updates rather than adding twice", r.data.added === 0 && r.data.updated === 4);
+
+  // --- visitors ---------------------------------------------------------------------------------------------
+  const guests = { first_name: { column: "GivenName" }, last_name: { column: "FamilyName" }, organisation: { column: "Org" }, email: { column: "Email" }, company: { column: "VisitingFirm" }, host: { column: "HostName" }, blocked: { column: "Banned" } };
+  token = (await desk.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
+  r = await desk.post(`/api/import/${token}/run`, { table: "Guests", target: "visitors", mapping: guests });
+  check("visitors: front desk imports them", r.status === 200 && r.data.added === 3 && r.data.updated === 0, JSON.stringify(r.data));
+  const vlist = (await desk.get("/api/visitors?limit=50")).data.visitors;
+  const gh = vlist.find((v) => v.lastName === "Hopper");
+  check("visitors: with the company they visit and its host", gh && gh.organisation === "US Navy" && gh.companies[0]?.companyName === "Acme Corp" && gh.companies[0]?.hostName === "Ada Lovelace");
+  check("visitors: blocked from a yes/no column", vlist.find((v) => v.lastName === "Mischief").blocked === true && vlist.find((v) => v.lastName === "Kiosk").blocked === false);
+  check("visitors: they count as checked by staff", vlist.every((v) => v.verified === true) && vlist.every((v) => v.source === "import"));
+  token = (await desk.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
+  r = await desk.post(`/api/import/${token}/run`, { table: "Guests", target: "visitors", mapping: guests });
+  check("visitors: importing again updates them (by email, else by name)", r.data.added === 0 && r.data.updated === 3 && (await desk.get("/api/visitors?limit=50")).data.total === 3);
+  r = await desk.post(`/api/import/${(await desk.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token}/run`, { table: "Guests", target: "visitors", mapping: { ...guests, host: { value: "Nobody Here" } } });
+  check("visitors: a host who isn't in the company stops the lot", r.status === 400 && /Nobody at Acme Corp is called "Nobody Here"/.test(r.data.error));
+
+  // --- badges -----------------------------------------------------------------------------------------------
+  const stock = { number: { column: "BadgeNo" }, type: { column: "Kind" }, classification: { column: "Class" }, level: { column: "Lvl" }, sites: { column: "ValidAt" }, temporary: { column: "Spare" } };
+  token = (await manager.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
+  check("badges: a manager issues badges but doesn't import them", (await manager.post(`/api/import/${token}/run`, { table: "Badge Stock", target: "badges", mapping: stock })).status === 403);
+  token = (await office.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
+  r = await office.post(`/api/import/${token}/run`, { table: "Badge Stock", target: "badges", mapping: stock });
+  check("badges: a role that doesn't see clearance levels can't import them", r.status === 403 && /doesn't see clearance levels/.test(r.data.error));
+  token = (await security.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
+  r = await security.post(`/api/import/${token}/run`, { table: "Badge Stock", target: "badges", mapping: stock });
+  check("badges: Security imports the stock", r.status === 200 && r.data.added === 4, JSON.stringify(r.data));
+  const blist = (await security.get("/api/badges?limit=50")).data.badges;
+  const by = (n) => blist.find((b) => b.number === n);
+  check("badges: types from their own names (Staff is personnel)", by("P-0001").type === "personnel" && by("V-0002").type === "visitor" && by("T-0100").type === "tenant");
+  check("badges: classification and level by name", by("V-0002").classificationName === "Cleared" && by("V-0002").clearanceLevelName === "Secret" && by("V-0001").clearanceLevelName === null);
+  check("badges: the sites they're valid at, and every site when none", by("T-0100").sites.map((x) => x.name).sort().join() === "Harbour Point,Riverside" && by("P-0001").sites.length === 0);
+  check("badges: temporary from a yes/no column", by("T-0100").temporary === true && by("V-0001").temporary === false);
+  token = (await security.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
+  r = await security.post(`/api/import/${token}/run`, { table: "Badge Stock", target: "badges", mapping: { ...stock, classification: { value: "Unknown" } } });
+  check("badges: an unknown classification stops the lot", r.status === 400 && /no classification called "Unknown"/.test(r.data.error));
+  r = await security.post(`/api/import/${token}/run`, { table: "Badge Stock", target: "badges", mapping: stock });
+  check("badges: importing again updates them by number", r.data.added === 0 && r.data.updated === 4);
+  check("badges: in the audit log", (await admin.get("/api/audit?action=import.badges")).data.entries.length === 2);
 
   // --- CSV through the same steps, with a value for every row -----------------------------------------------
   const csv = Buffer.from("﻿Given Name,Family Name,E-mail\r\nKay,Kiosk,kay@acme.example\r\nLee,Lobby,\r\n", "utf8");

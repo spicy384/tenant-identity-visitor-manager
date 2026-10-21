@@ -440,7 +440,12 @@ function createBadges({ db, clearance, now = Date.now }) {
     return { visitId: v.id, name: `${v.first_name} ${v.last_name}` };
   }
 
-  return { list, get, history, forHolder, openForHolder, create, createRange, update, remove, holder, refusal, availableFor, assign, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge };
+  /** The id of the badge with this number (any case), or null. */
+  function findByNumber(number) {
+    return raw.prepare("SELECT id FROM badges WHERE number = ?").get(String(number ?? "").trim().replace(/\s+/g, " "))?.id ?? null;
+  }
+
+  return { list, get, history, forHolder, openForHolder, create, createRange, update, remove, holder, refusal, availableFor, assign, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber };
 }
 
 module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES };

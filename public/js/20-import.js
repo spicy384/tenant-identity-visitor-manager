@@ -1,10 +1,14 @@
-// 20-import.js: importing people or companies from an Access database (.accdb, .mdb) or a CSV
+// 20-import.js: importing people, companies, visitors or badges from an Access database (.accdb, .mdb) or a CSV
 // file. Choose the file (and, for Access, the table), match its columns to the app's fields
 // (suggested from their names), check a preview, then import. The server reads the file and
 // holds it for a few minutes only; the import itself has the same checks as before, and is
 // all or nothing.
 
 const IMPORT_MAX_BYTES = 100 * 1024 * 1024;
+
+// The Import buttons on the Visitors and Badges pages (People has its own, in 05-people.js).
+$("visitors-import").addEventListener("click", () => importDialog("visitors").then((done) => { if (done) loadVisitors(); }));
+$("badges-import").addEventListener("click", () => importDialog("badges").then((done) => { if (done) loadBadges(); }));
 
 /** The import's column for each built-in field, and the names a source column might go by. */
 const IMPORT_FIELDS = {
@@ -32,14 +36,45 @@ const IMPORT_FIELDS = {
     { key: "address", field: "address", label: "Address", names: ["address", "postaladdress", "street"] },
     { key: "notes", field: "notes", label: "Notes", names: ["notes", "note", "comments", "remarks"] },
     { key: "active", field: "active", label: "Active", hint: "yes or no", names: ["active", "current", "iscurrent", "enabled"] }
+  ],
+  visitors: [
+    { key: "first_name", field: "firstName", label: "First name", required: true, names: ["firstname", "first", "givenname", "forename", "fname"] },
+    { key: "last_name", field: "lastName", label: "Last name", required: true, names: ["lastname", "surname", "familyname", "last", "lname"] },
+    { key: "organisation", field: "organisation", label: "Their organisation", names: ["organisation", "organization", "org", "employer", "theircompany", "from"] },
+    { key: "email", field: "email", label: "Email", names: ["email", "emailaddress", "mail"] },
+    { key: "phone", field: "phone", label: "Phone", names: ["phone", "telephone", "tel", "mobile", "cell"] },
+    { key: "company", field: "companies", label: "Company they visit", hint: "A tenant company's name.", names: ["company", "visiting", "visitingfirm", "visitingcompany", "tenant", "firm"] },
+    { key: "host", field: "companies", label: "Their host", hint: "Someone in that company, by name.", names: ["host", "hostname", "visiting_person", "contact"] },
+    { key: "notes", field: "notes", label: "Notes", names: ["notes", "note", "comments", "remarks"] },
+    { key: "blocked", field: "blocked", label: "Blocked", hint: "yes or no", names: ["blocked", "banned", "barred", "denied"] }
+  ],
+  badges: [
+    { key: "number", label: "Badge number", required: true, names: ["number", "badgenumber", "badgeno", "badge", "no", "cardnumber"] },
+    { key: "type", label: "Type", required: true, hint: "personnel (or staff), tenant or visitor", names: ["type", "kind", "badgetype"] },
+    { key: "classification", label: "Classification", required: true, hint: "A classification's name, such as Cleared or Uncleared.", names: ["classification", "class"] },
+    { key: "level", label: "Clearance level", clearance: true, hint: "A level's name, for cleared badges.", names: ["level", "lvl", "clearance", "clearancelevel"] },
+    { key: "sites", label: "Valid at", hint: "Site names separated by ;. Empty for every site.", names: ["sites", "site", "validat", "building", "location"] },
+    { key: "temporary", label: "Temporary", hint: "yes or no", names: ["temporary", "temp", "spare", "loaner"] },
+    { key: "status", label: "Status", hint: "active, lost or retired", names: ["status", "state"] },
+    { key: "notes", label: "Notes", names: ["notes", "note", "comments", "remarks"] }
   ]
+};
+
+/** What this account may import, and the words for it. */
+const IMPORT_KINDS = {
+  people: { label: "People", one: "person", many: "people", may: () => canEditDirectory(), entity: "person" },
+  companies: { label: "Companies", one: "company", many: "companies", may: () => canEditDirectory(), entity: "company" },
+  visitors: { label: "Visitors", one: "visitor", many: "visitors", may: () => canEditVisitors(), entity: "visitor" },
+  badges: { label: "Badges", one: "badge", many: "badges", may: () => canManageBadges(), entity: null }
 };
 
 const normaliseName = (s) => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** The fields this account may import into: built-in ones it can change, and its custom fields. */
 function importTargets(kind) {
-  const schema = state.schema[kind === "people" ? "person" : "company"] || [];
+  // Badges have no field grid: every column, the level only for those who see clearance levels.
+  if (kind === "badges") return IMPORT_FIELDS.badges.filter((t) => !t.clearance || canSeeClearances());
+  const schema = state.schema[IMPORT_KINDS[kind].entity] || [];
   const editable = new Set(schema.filter((f) => f.access === "edit" && f.builtIn).map((f) => f.key));
   const builtIn = IMPORT_FIELDS[kind].filter((t) => editable.has(t.field) || t.required);
   const custom = schema.filter((f) => !f.builtIn && !f.recordOnly && f.access === "edit")
@@ -99,7 +134,7 @@ async function importDialog(kind) {
       passwordRow.hidden = !(file && /\.(accdb|mdb)$/i.test(file.name));
       clearError();
     });
-    const into = h("select", { "aria-label": "Import into" }, h("option", { value: "people", text: "People" }), h("option", { value: "companies", text: "Companies" }));
+    const into = h("select", { "aria-label": "Import into" }, Object.entries(IMPORT_KINDS).filter(([, k]) => k.may()).map(([value, k]) => h("option", { value, text: k.label })));
     into.value = target;
     const next = h("button", { type: "button", class: "primary", text: "Read the file", onclick: async () => {
       clearError();
@@ -196,7 +231,7 @@ async function importDialog(kind) {
         return s;
       })())
       : null;
-    const label = `Import ${table.rowCount} ${target === "people" ? (table.rowCount === 1 ? "person" : "people") : (table.rowCount === 1 ? "company" : "companies")}`;
+    const label = `Import ${table.rowCount} ${table.rowCount === 1 ? IMPORT_KINDS[target].one : IMPORT_KINDS[target].many}`;
     const importBtn = h("button", { type: "button", class: "primary", text: label, onclick: async () => {
       clearError();
       const missing = fieldsHere.filter((f) => f.required && !(mapping[f.key]?.column || String(mapping[f.key]?.value || "").trim()));
@@ -221,9 +256,12 @@ async function importDialog(kind) {
       h("h4", { text: `Preview: the first ${Math.min(5, table.sample.length)} of ${table.rowCount}` }),
       preview,
       target === "people" ? h("label", { class: "check-row" }, createCompanies, h("span", { text: "Add companies that don't exist yet" })) : null,
-      h("p", { class: "muted small-text", text: target === "people"
-        ? "Someone already in the company with the same email (or, without one, the same name) is updated rather than added twice. If any row has a problem, nothing is imported and the problems are listed."
-        : "A company with the same name is updated. If any row has a problem, nothing is imported and the problems are listed." }),
+      h("p", { class: "muted small-text", text: `${{
+        people: "Someone already in the company with the same email (or, without one, the same name) is updated rather than added twice.",
+        companies: "A company with the same name is updated.",
+        visitors: "A visitor with the same email (or, without one, the same name) is updated rather than added twice. Imported visitors count as checked by staff. Clearances aren't imported: Security validates them.",
+        badges: "A badge with the same number is updated. One that is out can't change its type, classification, level or whether it is temporary."
+      }[target]} If any row has a problem, nothing is imported and the problems are listed.` }),
       message,
       h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary", text: "Back", onclick: () => { clearError(); stepFile(); } }), importBtn));
     renderPreview();
@@ -231,7 +269,7 @@ async function importDialog(kind) {
 
   stepFile();
   const result = await openDialog({
-    title: kind === "people" ? "Import people" : "Import companies",
+    title: `Import ${IMPORT_KINDS[kind].many}`,
     body,
     wide: true,
     actions: [{ label: "Cancel", value: null }],

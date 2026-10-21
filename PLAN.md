@@ -381,7 +381,12 @@ too), test/import.test.js with test/fixtures/directory.mdb. Choices made while b
 file is parsed on the server (no bundler for a browser build) but never written to disk; one
 held file per account and four at once; companies can take a site and a suite as separate
 columns. Only the Jet (.mdb) format is tested here: the development machine has no ACE engine
-to make an .accdb.
+to make an .accdb. Same day the user asked for visitors and badges too: importVisitors
+(visitors.findMatch by email, else exact name; company and host by name; source "import",
+verified) and importBadges (badges.findByNumber; type, classification and level by name;
+level only for roles that see clearance levels) in server.js; each target has its own
+permission in import-routes.js (people/companies directory edit, visitors visitor edit,
+badges manage), and reading a file needs any of them.
 
 ## Tests
 

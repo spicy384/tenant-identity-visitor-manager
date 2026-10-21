@@ -489,9 +489,26 @@ function createVisitors({ db, fields }) {
     return { visits, visitors };
   }
 
+  /**
+   * The visitor an imported row is: the one with this email, else the one with exactly this
+   * name (any case). Null when there is none; an error when the name alone fits several.
+   */
+  function findMatch({ email = null, firstName, lastName }) {
+    const mail = String(email || "").trim().toLowerCase();
+    if (mail) {
+      const byMail = raw.prepare("SELECT id FROM visitors WHERE email = ?").get(mail);
+      if (byMail) return byMail.id;
+    }
+    const byName = raw.prepare("SELECT id, email FROM visitors WHERE lower(first_name) = lower(?) AND lower(last_name) = lower(?)").all(String(firstName || "").trim(), String(lastName || "").trim())
+      .filter((r) => !mail || !r.email);
+    if (byName.length > 1) throw fail(409, `More than one visitor is called ${firstName} ${lastName}; give an email to tell them apart.`);
+    return byName[0]?.id ?? null;
+  }
+
   return {
     list,
     get,
+    findMatch,
     reviewCount,
     create,
     update,

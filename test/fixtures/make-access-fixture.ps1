@@ -32,5 +32,26 @@ $staff = @(
 foreach ($s in $staff) {
   $null = $db.Execute("INSERT INTO [Tenant Staff] (FirstName, Surname, Firm, EMail, DeskPhone, Title, StartDate, IsCurrent, Notes) VALUES ($s)")
 }
+# Visitors and badge stock, also under names of their own.
+$null = $db.Execute("CREATE TABLE Guests (GuestID COUNTER PRIMARY KEY, GivenName TEXT(50), FamilyName TEXT(50), Org TEXT(100), Email TEXT(100), VisitingFirm TEXT(100), HostName TEXT(100), Banned YESNO)")
+$guests = @(
+  "'Grace', 'Hopper', 'US Navy', 'grace@navy.example', 'Acme Corp', 'Ada Lovelace', False",
+  "'Kay', 'Kiosk', NULL, NULL, 'Globex', NULL, False",
+  "'Mallory', 'Mischief', 'Unknown', NULL, NULL, NULL, True"
+)
+foreach ($g in $guests) {
+  $null = $db.Execute("INSERT INTO Guests (GivenName, FamilyName, Org, Email, VisitingFirm, HostName, Banned) VALUES ($g)")
+}
+
+$null = $db.Execute("CREATE TABLE [Badge Stock] (BadgeNo TEXT(20), Kind TEXT(20), Class TEXT(20), Lvl TEXT(30), ValidAt TEXT(100), Spare YESNO)")
+$stock = @(
+  "'V-0001', 'Visitor', 'Uncleared', NULL, 'Harbour Point', False",
+  "'V-0002', 'visitor', 'Cleared', 'Secret', NULL, False",
+  "'T-0100', 'Tenant', 'Uncleared', NULL, 'Harbour Point; Riverside', True",
+  "'P-0001', 'Staff', 'Cleared', 'TS', NULL, False"
+)
+foreach ($b in $stock) {
+  $null = $db.Execute("INSERT INTO [Badge Stock] (BadgeNo, Kind, Class, Lvl, ValidAt, Spare) VALUES ($b)")
+}
 $db.Close()
 "Wrote $path"

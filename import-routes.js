@@ -1,5 +1,5 @@
 /**
- * Importing people or companies from an Access database (.accdb or .mdb) or a CSV file,
+ * Importing people, companies, visitors or badges from an Access database (.accdb or .mdb) or a CSV file,
  * with the file's columns matched to the app's fields. Three steps:
  *
  *   POST /api/import/read            the file itself (raw body): its tables, columns and
@@ -85,7 +85,18 @@ async function accessTables(buffer, password) {
   });
 }
 
-function createImportRoutes({ editDir, importCompanies, importPeople, auditFrom, now = Date.now }) {
+/** What can be imported, and who may import it. */
+const TARGETS = {
+  people: { may: (access, ctx) => access.canEditDirectory(ctx), refusal: "This account can't change the directory." },
+  companies: { may: (access, ctx) => access.canEditDirectory(ctx), refusal: "This account can't change the directory." },
+  visitors: { may: (access, ctx) => access.canEditVisitors(ctx), refusal: "This account can't change visitors." },
+  badges: { may: (access, ctx) => access.canManageBadges(ctx), refusal: "Only Security adds and changes badges." }
+};
+
+function createImportRoutes({ access, importCompanies, importPeople, importVisitors, importBadges, now = Date.now }) {
+  // Reading a file needs the right to import something; running it, the right to import that.
+  const mayImport = (req, res, next) => (Object.values(TARGETS).some((t) => t.may(access, req.ctx)) ? next() : res.status(403).json({ error: "This account can't import anything." }));
+
   const router = express.Router();
   // token -> { owner, at, format, fileName, tables }
   const held = new Map();
@@ -112,7 +123,7 @@ function createImportRoutes({ editDir, importCompanies, importPeople, auditFrom,
     return table;
   }
 
-  router.post("/api/import/read", editDir, express.raw({ type: () => true, limit: MAX_FILE_BYTES }), async (req, res) => {
+  router.post("/api/import/read", mayImport, express.raw({ type: () => true, limit: MAX_FILE_BYTES }), async (req, res) => {
     const buffer = Buffer.isBuffer(req.body) ? req.body : null;
     if (!buffer || !buffer.length) throw fail(400, "Choose a file to import.");
     const fileName = String(req.query.name || "").slice(0, 200);
@@ -129,18 +140,19 @@ function createImportRoutes({ editDir, importCompanies, importPeople, auditFrom,
     res.json({ token, format, fileName, tables: tables.map((t) => ({ name: t.name, columns: t.columns, rowCount: t.rowCount })) });
   });
 
-  router.get("/api/import/:token/table", editDir, (req, res) => {
+  router.get("/api/import/:token/table", mayImport, (req, res) => {
     const table = tableOf(heldFor(req), String(req.query.name || ""));
     const sample = table.rows().slice(0, SAMPLE_ROWS).map((r) => Object.fromEntries(table.columns.map((c) => [c.name, cellText(r[c.name])])));
     res.json({ name: table.name, columns: table.columns, rowCount: table.rowCount, sample });
   });
 
-  router.post("/api/import/:token/run", editDir, (req, res) => {
+  router.post("/api/import/:token/run", mayImport, (req, res) => {
     const h = heldFor(req);
     const body = req.body || {};
     const table = tableOf(h, String(body.table || ""));
-    const target = body.target === "companies" ? "companies" : body.target === "people" ? "people" : null;
-    if (!target) throw fail(400, "Import into people or companies.");
+    const target = Object.prototype.hasOwnProperty.call(TARGETS, body.target) ? body.target : null;
+    if (!target) throw fail(400, "Import into people, companies, visitors or badges.");
+    if (!TARGETS[target].may(access, req.ctx)) throw fail(403, TARGETS[target].refusal);
     const mapping = body.mapping && typeof body.mapping === "object" ? body.mapping : {};
     const known = new Set(table.columns.map((c) => c.name));
     const sources = [];
@@ -159,14 +171,15 @@ function createImportRoutes({ editDir, importCompanies, importPeople, auditFrom,
     const rows = all.map((r) => Object.fromEntries(sources.map(([key, get]) => [key, get(r)])));
     const from = h.format === "access" ? `Access table "${table.name}"${h.fileName ? ` in ${h.fileName}` : ""}` : `CSV${h.fileName ? ` ${h.fileName}` : ""}`;
     const where = h.format === "access" ? (i) => `Row ${i + 1}` : (i) => `Line ${i + 2}`;
-    const result = target === "companies"
-      ? importCompanies(req, rows, { where, from })
-      : importPeople(req, rows, { createCompanies: Boolean(body.createCompanies), where, from });
+    const result = target === "companies" ? importCompanies(req, rows, { where, from })
+      : target === "visitors" ? importVisitors(req, rows, { where, from })
+        : target === "badges" ? importBadges(req, rows, { where, from })
+          : importPeople(req, rows, { createCompanies: Boolean(body.createCompanies), where, from });
     held.delete(req.params.token);
     res.json({ ok: true, ...result });
   });
 
-  router.delete("/api/import/:token", editDir, (req, res) => {
+  router.delete("/api/import/:token", mayImport, (req, res) => {
     if (held.get(req.params.token)?.owner === ownerOf(req)) held.delete(req.params.token);
     res.json({ ok: true });
   });

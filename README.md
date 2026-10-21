@@ -398,10 +398,13 @@ that was in use when the backup was made.
 
 ## Importing (Access or CSV)
 
-**Import** on the People page (and Settings > Import, export and backup) takes an Access
-database (.accdb or .mdb, up to 100 MB) or a CSV file:
+**Import** on the People, Visitors and Badges pages (and Settings > Import, export and backup)
+takes an Access database (.accdb or .mdb, up to 100 MB) or a CSV file, of people, companies,
+visitors or badges. Each account is offered only what it may change: people and companies
+need directory change access, visitors visitor change access, and badges the badge manage
+level (Security).
 
-1. Choose the file, and whether it holds people or companies. A password-protected Access
+1. Choose the file, and what it holds. A password-protected Access
    database needs its password (some newer Access encryption can't be read: export that table
    to CSV from Access instead).
 2. Pick the table (the best fit is chosen for you), then match each field to one of its
@@ -416,7 +419,16 @@ The file is read on the server and held in its memory only, for 15 minutes or un
 import is done or cancelled, by the account that sent it; it is never written to disk. Yes/no
 columns become yes or no, and dates become YYYY-MM-DD. At most 20,000 rows at a time.
 
-A company's site can come from one column (a site's name) and its suite from another. The CSV
+A company's site can come from one column (a site's name) and its suite from another.
+
+- **Visitors**: first and last name (required), their organisation, email, phone, notes,
+  blocked (yes/no), the company they visit and their host there (by name), and custom fields.
+  A visitor with the same email, else exactly the same name, is updated. Imported visitors
+  count as checked by staff. Clearances aren't imported: only Security sets them, by validating.
+- **Badges**: number, type (personnel or staff, tenant, visitor) and classification (by name)
+  required; clearance level (by name, only for roles that see clearance levels), the sites it
+  is valid at (names separated by ;, empty for every site), temporary (yes/no), status
+  (active, lost, retired) and notes. A badge with the same number is updated. The CSV
 column names below are what a CSV file is matched to automatically, and what the CSV import
 API takes.
 
