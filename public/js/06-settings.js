@@ -200,16 +200,16 @@ async function editSite(site, timeZones) {
 
 // --- custom fields --------------------------------------------------------------------------
 
-const ENTITY_TITLES = { company: "Company fields", person: "People fields", visitor: "Visitor fields" };
-const ENTITY_ONE = { company: "company", person: "person", visitor: "visitor" };
-const ENTITY_EVERY = { company: "Every company", person: "Everyone", visitor: "Every visitor" };
+const ENTITY_TITLES = { company: "Company fields", person: "People fields", visitor: "Visitor fields", badge: "Badge fields" };
+const ENTITY_ONE = { company: "company", person: "person", visitor: "visitor", badge: "badge" };
+const ENTITY_EVERY = { company: "Every company", person: "Everyone", visitor: "Every visitor", badge: "Every badge" };
 
 async function settingsFields(body) {
   const { fields, types, visibility } = await api("/api/fields");
   const typeLabel = Object.fromEntries(types.map((t) => [t.value, t.label]));
   body.append(h("div", { class: "panel" },
     h("p", { class: "muted", text: "Custom fields add to the built-in ones. A field for every record can be required and is searched and exported; a field added from a single record shows on that record only, until you make it a field for every record. Set who sees each field under Field access." })));
-  for (const entity of ["company", "person", "visitor"]) {
+  for (const entity of ["company", "person", "visitor", "badge"]) {
     const list = fields[entity];
     body.append(h("div", { class: "panel" },
       h("div", { class: "panel-head" }, h("h3", { text: ENTITY_TITLES[entity] }), h("button", { type: "button", class: "primary small", text: "Add field", onclick: () => editField(entity, null, types, visibility) })),
@@ -284,15 +284,16 @@ async function settingsRoles(body) {
   const staff = roles.filter((r) => r.kind === "user");
   body.append(h("div", { class: "panel" },
     h("div", { class: "panel-head" }, h("h3", { text: "Roles" }), h("button", { type: "button", class: "primary small", text: "Add role", onclick: () => editRole(null, staff) })),
-    h("p", { class: "muted", text: "A role sets how far an account reaches: whether it can see or change the directory (companies and people) and visitors (visitors, visits, checking in and out). Which fields each role sees is set under Field access; clearance details only ever reach roles that see clearance levels, and the rest see badge images instead. Administrators can do everything. The kiosk only ever shows names; Equipment Checkout's fields are set under Field access." }),
+    h("p", { class: "muted", text: "A role sets how far an account reaches: whether it can see or change the directory (companies and people), visitors (visitors, visits, checking in and out), badges, and facilities (floors, offices and rates). Which fields each role sees is set under Field access; clearance details only ever reach roles that see clearance levels, and the rest see badge images instead. Administrators can do everything. The kiosk only ever shows names; Equipment Checkout's fields are set under Field access." }),
     h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-      h("thead", {}, h("tr", {}, ["Role", "For", "Directory", "Visitors", "Badges", "Clearance levels", "Accounts", ""].map((t) => h("th", { text: t })))),
+      h("thead", {}, h("tr", {}, ["Role", "For", "Directory", "Visitors", "Badges", "Facilities", "Clearance levels", "Accounts", ""].map((t) => h("th", { text: t })))),
       h("tbody", {}, roles.map((r) => h("tr", {},
         h("td", {}, h("strong", { text: r.name }), r.builtIn ? h("span", { class: "badge muted", text: "Built in" }) : null),
         h("td", { class: "small-text", text: r.kind === "api" && r.builtIn ? "Template for new API clients" : KIND_LABELS[r.kind] }),
         h("td", { class: "small-text", text: AREA_LABELS[r.directory] }),
         h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.visitors] : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? BADGE_LABELS[r.badges] : "—" }),
+        h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.facilities] : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? (r.clearances ? "Sees them" : "Badge images") : "—" }),
         h("td", { text: r.kind === "user" ? String(r.accounts) : "—" }),
         h("td", {}, r.id === "admin" || r.kind !== "user" ? (r.kind === "api" && !r.builtIn ? h("a", { href: "#settings/api", class: "small-text", text: "Set under API clients" }) : null) : h("div", { class: "btn-row" },
@@ -309,13 +310,14 @@ async function editRole(role, staff) {
       { name: "directory", label: "Companies and people", type: "select", value: role?.directory || "read", options: levels, half: true },
       { name: "visitors", label: "Visitors and visits", type: "select", value: role?.visitors || "none", options: levels, half: true },
       { name: "badges", label: "Badges", type: "select", value: role?.badges || "none", options: Object.entries(BADGE_LABELS).map(([value, label]) => ({ value, label })), half: true, hint: "Read to look; issue and return to give badges out and take them back; manage also adds, changes and removes badges (Security)." },
+      { name: "facilities", label: "Facilities", type: "select", value: role?.facilities || "none", options: levels, half: true, hint: "Floor plans, offices, who has them and what they cost. Read and change also draws offices, assigns them and sets rates." },
       { name: "clearances", label: "Sees clearance levels", type: "checkbox", value: Boolean(role?.clearances), disabled: role?.id === "security",
         hint: role?.id === "security" ? "Security validates clearances, so it always sees them." : "Level names on people, visitors and badges. Without it the role sees each badge's image instead, and clearance details stay hidden whatever the field access grid says." },
       ...(role ? [] : [{ name: "copyFrom", label: "Start its field access from", type: "select", value: "viewer", options: staff.map((r) => ({ value: r.id, label: r.name })), hint: "You can change any cell afterwards under Field access." }])
     ],
     submitLabel: role ? "Save" : "Add role",
     onSubmit: async (v) => (role
-      ? await api(`/api/roles/${role.id}`, { method: "PUT", body: role.builtIn ? { directory: v.directory, visitors: v.visitors, badges: v.badges, ...(role.id === "security" ? {} : { clearances: v.clearances }) } : v })
+      ? await api(`/api/roles/${role.id}`, { method: "PUT", body: role.builtIn ? { directory: v.directory, visitors: v.visitors, badges: v.badges, facilities: v.facilities, ...(role.id === "security" ? {} : { clearances: v.clearances }) } : v })
       : await api("/api/roles", { method: "POST", body: v })).role
   });
   if (saved) {

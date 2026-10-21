@@ -119,7 +119,7 @@ async function showCompanyDetail(id) {
         isAdmin() && people.length ? h("button", { type: "button", class: "secondary small", text: "Export CSV", onclick: () => download(`/api/people.csv?companyId=${company.id}`).catch((e) => toast(e.message, "error")) }) : null,
         canEditDirectory() ? h("button", { type: "button", class: "primary small", text: "Add person", onclick: async () => { if (await newPersonDialog({ companyId: company.id })) showCompanyDetail(id); } }) : null)),
     peopleTable(people, { onOpen: (p) => openPerson(p.id, () => showCompanyDetail(id)) }));
-  pane.append(head, peoplePanel);
+  pane.append(head, peoplePanel, canReadFacilities() ? companyOfficesPanel(company) : null);
   loadCompanies();
 }
 

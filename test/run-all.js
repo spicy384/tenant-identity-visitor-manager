@@ -15,7 +15,8 @@ const SUITES = [
   "clearance.test.js",
   "templates.test.js",
   "import.test.js",
-  "bulk.test.js"
+  "bulk.test.js",
+  "facilities.test.js"
 ];
 
 let failed = 0;

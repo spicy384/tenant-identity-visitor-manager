@@ -17,7 +17,8 @@ const DB_FILE = "identity.db";
 // 1: directory, fields, roles, sites. 2: visitors, their links, visits, kiosk devices.
 // 3: API clients. 4: badges, clearances, building staff, visitor events. 5: clearance validation.
 // 6: badge template images, and which roles see clearance levels. 7: kiosk visits waiting for a badge.
-const SCHEMA_VERSION = 7;
+// 8: facilities (floors, offices, office assignments, rates) and the roles that reach them.
+const SCHEMA_VERSION = 8;
 
 function fail(status, message) {
   const error = new Error(message);
@@ -354,6 +355,75 @@ CREATE TABLE IF NOT EXISTS badge_templates (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (level_key, kind)
 );
+
+-- Facilities (facilities.js): each site's floors with a floor plan image, the offices drawn
+-- on them (points: their outline as [x, y] fractions of the plan; x, y, w, h: the box around it),
+-- the plan's size in pixels and its scale (scale_feet: how many feet its full width spans,
+-- from a line of known length, scale_line), which company has each office and when
+-- (dates are YYYY-MM-DD; end_date is the last day, NULL for no end), and rates per square
+-- foot per month: a site's default, an office's own, and a company's, which wins.
+CREATE TABLE IF NOT EXISTS floors (
+  id INTEGER PRIMARY KEY,
+  site_id INTEGER NOT NULL REFERENCES sites(id),
+  name TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  plan BLOB,
+  plan_type TEXT,
+  plan_ref TEXT UNIQUE,
+  plan_width INTEGER,
+  plan_height INTEGER,
+  scale_feet REAL,
+  scale_line TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS floors_name ON floors(site_id, name COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS offices (
+  id INTEGER PRIMARY KEY,
+  floor_id INTEGER NOT NULL REFERENCES floors(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  sqft REAL,
+  rate REAL,
+  unavailable INTEGER NOT NULL DEFAULT 0,
+  x REAL,
+  y REAL,
+  w REAL,
+  h REAL,
+  points TEXT,
+  notes TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS offices_name ON offices(floor_id, name COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS office_assignments (
+  id INTEGER PRIMARY KEY,
+  office_id INTEGER NOT NULL REFERENCES offices(id) ON DELETE CASCADE,
+  company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+  company_name TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  end_date TEXT,
+  notes TEXT,
+  created_by TEXT,
+  created_at INTEGER NOT NULL,
+  updated_by TEXT,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS office_assignments_office ON office_assignments(office_id, start_date);
+CREATE INDEX IF NOT EXISTS office_assignments_company ON office_assignments(company_id);
+
+CREATE TABLE IF NOT EXISTS site_rates (
+  site_id INTEGER PRIMARY KEY REFERENCES sites(id) ON DELETE CASCADE,
+  rate REAL NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS company_rates (
+  company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+  rate REAL NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
 
 // Columns added after a table first shipped: [table, column, definition]. CREATE TABLE IF NOT
@@ -381,7 +451,15 @@ const ADDED_COLUMNS = [
   ["roles", "clearances", "INTEGER NOT NULL DEFAULT 0"],
   // A kiosk visit staff marked as needing no badge (it then leaves the "needs a badge" banner).
   ["visits", "badge_waived_at", "INTEGER"],
-  ["visits", "badge_waived_by", "TEXT"]
+  ["visits", "badge_waived_by", "TEXT"],
+  // Facilities: none, read or edit.
+  ["roles", "facilities", "TEXT NOT NULL DEFAULT 'none'"],
+  // Offices outlined with any number of points, and a floor's scale.
+  ["offices", "points", "TEXT"],
+  ["floors", "plan_width", "INTEGER"],
+  ["floors", "plan_height", "INTEGER"],
+  ["floors", "scale_feet", "REAL"],
+  ["floors", "scale_line", "TEXT"]
 ];
 
 function addColumns(db) {

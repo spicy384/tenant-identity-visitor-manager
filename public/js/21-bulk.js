@@ -352,7 +352,12 @@ async function bulkEditBadges(list) {
     multiSite() || state.config.access.sitesLimited ? row("siteIds", "Valid at", sites.node, () => sites.value() || []) : null,
     row("temporary", "Temporary", temporary, () => temporary.value === "yes"),
     row("status", "Status", status, () => status.value),
-    row("notes", "Notes", notes, () => notes.value.trim())
+    row("notes", "Notes", notes, () => notes.value.trim()),
+    // Custom badge fields this account can change.
+    ...(state.schema.badge || []).filter((f) => !f.builtIn && !f.recordOnly && f.access === "edit").map((f) => {
+      const control = bulkControl(f, []);
+      return row(`custom:${f.key}`, f.label, control.el, () => control.read(), "(custom)");
+    })
   ];
   const result = await formDialog({
     title: `Change ${list.length} ${list.length === 1 ? "badge" : "badges"}`,
@@ -362,7 +367,15 @@ async function bulkEditBadges(list) {
     submitLabel: "Change",
     onSubmit: async () => {
       const patch = {};
-      for (const r of rows) if (r.change.checked) patch[r.key] = r.read();
+      for (const r of rows) {
+        if (!r.change.checked) continue;
+        if (r.key.startsWith("custom:")) {
+          const value = r.read();
+          (patch.custom ||= {})[r.key.slice(7)] = value === null ? "" : value;
+        } else {
+          patch[r.key] = r.read();
+        }
+      }
       if (!Object.keys(patch).length) throw new Error("Tick at least one thing to change.");
       return api("/api/badges/bulk", { method: "POST", body: { ids: list.map((b) => b.id), patch } });
     }

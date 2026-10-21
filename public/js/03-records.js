@@ -219,6 +219,6 @@ async function addRecordField(entity, recordId, recordName, done) {
 
 const VISIBILITY_OPTIONS = [
   { value: "all", label: "Everyone who can see the record" },
-  { value: "editors", label: "Only those who can change the directory" },
+  { value: "editors", label: "Only those who can change these records" },
   { value: "admins", label: "Only administrators (set the rest under Field access)" }
 ];

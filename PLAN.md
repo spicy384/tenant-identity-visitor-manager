@@ -413,6 +413,49 @@ inline script because of the CSP), the dark palette under :root[data-theme=dark]
 device media query unless data-theme=light, a header button, Account > Appearance, and theme
 in prefs.js. The kiosk keeps its own look.
 
+## Custom badge fields (2026-10-21)
+
+Asked for by the user: custom fields on badges, like those on companies, people and visitors.
+Built: "badge" is a fourth entity in catalog.js (governed by the badges area, with no built-in
+fields); editsArea() makes the manage level, not edit, the one that changes them, so only
+Security and Administrator change badge fields, and the grid refuses "Can change" for roles
+that only issue badges. badge-routes writes custom values on add, range, edit and bulk change
+(patch.custom), checks required ones on add, and forgets them when a badge is deleted; the
+badge import maps custom columns. Front end: Settings > Fields "Badge fields", a Badges table
+in Field access, the badge forms and dialog, Change for several, and the import.
+
+## Facilities (2026-10-21)
+
+Asked for by the user: floor layouts showing which offices are taken or available, assigning
+offices to companies, each office's size in square feet and a cost per square foot managed
+per office and per company, limited to managers or a custom role. Decided with the user: an
+uploaded floor plan image with offices drawn on it as rectangles; the company's rate wins over
+the office's; rates are per month; assignments have start and end dates and keep history.
+
+Built (schema 8): floors (site, name, order, plan image with a random ref), offices (floor,
+name, sq ft, own rate, unavailable, x/y/w/h as fractions of the plan, notes),
+office_assignments (company id and name, start and end date as YYYY-MM-DD at the site, end
+inclusive, notes, who and when), site_rates and company_rates; roles.facilities (none, read,
+edit; Administrator and Manager edit, seeded once). facilities.js: effective rate company >
+office > site, monthly = sq ft × rate, status by today at the site, no overlapping
+assignments, a floor or office that is assigned now or later can't be deleted, nor can a
+company; mergeCompanies moves assignments. facility-routes.js; public/js/22-facilities.js
+(Floor plans with drawing, moving and resizing by pointer events, Offices, Rates, the office
+dialog, the panel on a company's page); an Offices module on Home. Choices made while building
+it: one currency (US dollars); a company rate applies at every site; rates are current, not
+dated (an ended assignment shows no cost); plans up to 2.75 MB, re-encoded in the browser.
+
+Then (same day, asked for by the user): offices of any shape, outlined point by point, with
+points added, moved and removed afterwards; and a scale step that measures each office from its
+outline. The user asked that square feet still be entered by hand: the measurement only
+suggests (pre-fills a new office, shows beside the entered size, fills in missing ones on
+request) and never overwrites. Built: offices.points (JSON [x, y] fractions; x/y/w/h kept as
+the box around it; rectangles drawn before read as their 4 corners), floors.plan_width and
+plan_height (read from the PNG or JPEG header, backfilled), scale_feet (feet across the plan's
+full width) and scale_line, PUT /api/floors/:id/scale, measuredSqft on offices (shoelace area x
+scale_feet^2 x height/width). The plan is drawn as SVG polygons (viewBox 0 0 1 1, stretched,
+non-scaling strokes) with HTML labels at the point inside each outline farthest from its edges.
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

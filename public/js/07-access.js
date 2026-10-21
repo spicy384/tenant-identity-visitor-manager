@@ -18,7 +18,9 @@ async function settingsAccess(body) {
     const levels = [];
     if (!field.locked) levels.push("hidden");
     levels.push("view");
-    if (role.kind === "user" && role[grid.areas[field.entity]] === "edit" && !field.system && !field.security) levels.push("edit");
+    // Badges' fields change only at the badge "manage" level (Security); "edit" there is issuing.
+    const changes = grid.areas[field.entity] === "badges" ? role.badges === "manage" : role[grid.areas[field.entity]] === "edit";
+    if (role.kind === "user" && changes && !field.system && !field.security) levels.push("edit");
     // Clearance details only for roles that see clearance levels (Settings > Roles).
     if (field.sensitive && !role.clearances) return ["hidden"];
     return levels;
@@ -43,14 +45,15 @@ async function settingsAccess(body) {
   const intro = h("div", { class: "panel" },
     h("h3", { text: "Field access" }),
     h("p", { text: "Choose what each role sees of every field. Hidden fields are left out of everything that role gets: pages, searches, exports and (later) Equipment Checkout. A search never matches on a field the searcher can't see. The kiosk isn't here: it only ever shows a visitor their own first name and the names of the company and host they came to see." }),
-    h("p", { class: "muted", text: "Names, a person's company, a company's sites and a visitor's companies and status can't be hidden from anyone who can see the record. Read-only roles can't be given \"Can change\". Companies and people follow a role's directory access; visitors its visitor access. Administrators always see and change everything." }),
+    h("p", { class: "muted", text: "Names, a person's company, a company's sites and a visitor's companies and status can't be hidden from anyone who can see the record. Read-only roles can't be given \"Can change\". Companies and people follow a role's directory access; visitors its visitor access; badges its badge access (only the manage level changes them). Administrators always see and change everything." }),
     h("div", { class: "btn-row" }, save, status));
 
   body.append(intro);
-  for (const entity of ["company", "person", "visitor"]) {
+  for (const entity of ["company", "person", "visitor", "badge"]) {
     const fields = grid.entities[entity];
+    if (!fields?.length) continue; // badges have no fields until a custom one is added
     body.append(h("div", { class: "panel" },
-      h("h3", { text: { company: "Companies", person: "People", visitor: "Visitors" }[entity] }),
+      h("h3", { text: { company: "Companies", person: "People", visitor: "Visitors", badge: "Badges" }[entity] }),
       h("div", { class: "table-wrap" }, h("table", { class: "table compact access-grid" },
         h("thead", {}, h("tr", {}, h("th", { text: "Field" }), grid.roles.map((r) => h("th", {}, r.name, r.kind !== "user" ? h("div", { class: "muted small-text", text: r.builtIn ? "template for new API clients" : "API client" }) : null)))),
         h("tbody", {}, fields.map((f) => h("tr", {},

@@ -169,7 +169,7 @@ function createFields({ db }) {
     if (!ENTITIES.includes(entity)) throw fail(400, `Fields belong to one of: ${ENTITIES.join(", ")}.`);
     const v = validate({ label, type, choices, required });
     if (recordId !== null && recordId !== undefined) {
-      const table = { company: "companies", person: "people", visitor: "visitors" }[entity];
+      const table = { company: "companies", person: "people", visitor: "visitors", badge: "badges" }[entity];
       if (!raw.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).get(recordId)) throw fail(404, "That record does not exist.");
     }
     const now = Date.now();

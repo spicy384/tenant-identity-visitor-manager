@@ -168,6 +168,22 @@ const DASHBOARD_MODULES = {
       })), "Nothing expiring soon.", { more: "#clearances" }) };
     }
   },
+  occupancy: {
+    title: "Offices",
+    description: "Offices available, occupied and upcoming at the chosen site, the space let and the monthly rent.",
+    href: "#floors",
+    async load() {
+      const { summary: s } = await api(`/api/facilities/summary?${siteParams()}`);
+      if (!s.offices) return { count: null, body: h("p", { class: "muted small-text dash-empty", text: "No offices yet." }) };
+      const let_ = s.sqft.total ? Math.round((s.sqft.occupied / s.sqft.total) * 100) : 0;
+      const stat = (status, n) => h("a", { class: "dash-stat", href: `#offices`, onclick: () => { $("offices-status").value = status; } },
+        h("span", { class: `plan-swatch status-${status}`, "aria-hidden": "true" }), h("strong", { text: String(n) }), h("span", { class: "muted small-text", text: OFFICE_STATUS[status].label }));
+      return { count: s.available, body: h("div", { class: "stack" },
+        h("div", { class: "dash-stats" }, Object.keys(OFFICE_STATUS).map((st) => stat(st, s[st]))),
+        h("div", { class: "occupancy-bar", role: "img", "aria-label": `${let_}% of the space let` }, h("span", { style: `width: ${let_}%` })),
+        h("p", { class: "small-text" }, h("strong", { text: `${let_}% let` }), h("span", { class: "muted", text: ` · ${fmtSqft(s.sqft.occupied)} of ${fmtSqft(s.sqft.total)} · ${fmtMoney(s.monthly)} a month` }))) };
+    }
+  },
   validations: {
     title: "Recently validated",
     description: "Clearances validated in the last 30 days, and by whom.",

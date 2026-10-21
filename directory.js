@@ -320,6 +320,8 @@ function createDirectory({ db, fields }) {
       raw.prepare(`DELETE FROM visitor_links WHERE company_id IN (${marks})`).run(...ids);
       raw.prepare(`UPDATE visits SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
       raw.prepare(`UPDATE visitor_events SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
+      // Their offices (and office history) go to the company they're merged into; its own rate stays.
+      raw.prepare(`UPDATE office_assignments SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
       // Fields added to a merged company alone come along, with their values.
       for (const id of ids) {
         const own = raw.prepare("SELECT id FROM field_definitions WHERE entity = 'company' AND record_id = ?").all(id).map((r) => r.id);

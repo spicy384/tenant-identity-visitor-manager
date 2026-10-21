@@ -27,13 +27,14 @@ function createPrefs({ db, access }) {
     clearanceQueue: (ctx) => access.isSecurity(ctx),
     rechecks: securityOrAdmin,
     expiring: securityOrAdmin,
-    validations: securityOrAdmin
+    validations: securityOrAdmin,
+    occupancy: (ctx) => access.canReadFacilities(ctx)
   };
   // What each role starts with, in order (only the modules it may see are kept).
   const DEFAULTS = {
     security: ["clearanceQueue", "rechecks", "expiring", "badgesOut", "here"],
-    admin: ["here", "expected", "badgeNeeded", "rechecks", "badgesOut", "tenants"],
-    other: ["badgeNeeded", "expected", "here", "review", "badgesOut", "tenants"]
+    admin: ["here", "expected", "badgeNeeded", "rechecks", "badgesOut", "tenants", "occupancy"],
+    other: ["badgeNeeded", "expected", "here", "review", "badgesOut", "tenants", "occupancy"]
   };
 
   const available = (ctx) => Object.keys(MODULES).filter((id) => MODULES[id](ctx));

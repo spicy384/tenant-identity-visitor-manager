@@ -73,7 +73,11 @@ const normaliseName = (s) => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/
 /** The fields this account may import into: built-in ones it can change, and its custom fields. */
 function importTargets(kind) {
   // Badges have no field grid: every column, the level only for those who see clearance levels.
-  if (kind === "badges") return IMPORT_FIELDS.badges.filter((t) => !t.clearance || canSeeClearances());
+  if (kind === "badges") {
+    const custom = (state.schema.badge || []).filter((f) => !f.builtIn && !f.recordOnly && f.access === "edit")
+      .map((f) => ({ key: f.key, label: f.label, custom: true, names: [normaliseName(f.key), normaliseName(f.label)] }));
+    return [...IMPORT_FIELDS.badges.filter((t) => !t.clearance || canSeeClearances()), ...custom];
+  }
   const schema = state.schema[IMPORT_KINDS[kind].entity] || [];
   const editable = new Set(schema.filter((f) => f.access === "edit" && f.builtIn).map((f) => f.key));
   const builtIn = IMPORT_FIELDS[kind].filter((t) => editable.has(t.field) || t.required);

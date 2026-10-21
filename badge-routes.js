@@ -14,6 +14,7 @@
 const express = require("express");
 const { TYPES, TYPE_LABELS, STATUSES } = require("./badges");
 const { kindFor, KINDS, KIND_LABELS } = require("./badge-templates");
+const { normaliseValue } = require("./fields");
 
 function fail(status, message) {
   const error = new Error(message);
@@ -31,7 +32,7 @@ function positiveInt(value, fallback = null) {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-function createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, admin, auditFrom, transaction = (fn) => fn() }) {
+function createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, fields, admin, auditFrom, transaction = (fn) => fn() }) {
   const router = express.Router();
   const staffName = (req) => req.user?.displayName || req.user?.username || null;
 
@@ -59,14 +60,43 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
 
   const seesLevels = (req) => access.canSeeClearances(req.ctx);
 
-  /** A badge as the caller may see it: with its template image, and its level only for those who see levels. */
-  function badgeOut(req, b) {
+  /**
+   * A badge as the caller may see it: with its template image, its level only for those who
+   * see levels, and the custom fields its role sees. `values` (Map id -> Map) when the caller
+   * already read them for a list.
+   */
+  function badgeOut(req, b, values = null) {
     if (!b) return b;
     // cleared says only what the classification already does: whether it carries a level.
     const out = { ...b, cleared: Boolean(b.clearanceLevelId), template: templates.refFor(b.type, b.clearanceLevelId) };
     if (!seesLevels(req)) {
       delete out.clearanceLevelId;
       delete out.clearanceLevelName;
+    }
+    const own = (values || fields.valuesFor("badge", [b.id])).get(b.id) || new Map();
+    out.custom = access.project(req.ctx, "badge", { id: b.id, values: own }, access.fieldsFor(req.ctx, "badge", { recordId: b.id })).custom;
+    return out;
+  }
+
+  /** A list of badges as the caller may see them, their custom values read at once. */
+  const badgesOut = (req, list) => {
+    const values = fields.valuesFor("badge", list.map((b) => b.id));
+    return list.map((b) => badgeOut(req, b, values));
+  };
+
+  /**
+   * The custom field values in a request body (`custom: { key: value }`), checked against what
+   * the caller may change and normalised: Map(fieldId -> text or null). With `creating`,
+   * required fields must be given. Throws before anything is saved.
+   */
+  function customValues(req, body, { recordId = null, creating = false } = {}) {
+    const list = access.fieldsFor(req.ctx, "badge", { recordId });
+    const out = new Map();
+    for (const [def, value] of access.checkWrite(req.ctx, "badge", { custom: body.custom || {} }, list)) out.set(def.id, normaliseValue(def, value));
+    if (creating) {
+      for (const def of list.filter((f) => !f.builtIn && f.required && f.recordId === null)) {
+        if (out.get(def.id) === undefined || out.get(def.id) === null) throw fail(400, `${def.label} is required.`);
+      }
     }
     return out;
   }
@@ -145,7 +175,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
       limit: Math.min(positiveInt(req.query.limit, 200), 5000),
       offset: Math.max(0, Number(str(req.query.offset)) || 0)
     });
-    res.json({ ...found, badges: found.badges.map((b) => badgeOut(req, b)) });
+    res.json({ ...found, badges: badgesOut(req, found.badges) });
   });
 
   router.get("/api/badges/:id", readBadges, (req, res) => {
@@ -156,14 +186,18 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
 
   router.post("/api/badges", manageBadges, (req, res) => {
     const body = req.body || {};
+    const values = customValues(req, body, { creating: true });
     const badge = badges.create(levelInput(req, body, body.type), { sites: req.ctx.sites });
+    fields.writeValues(badge.id, values);
     auditFrom(req, "badge.add", badge.number, `${badge.type}; ${badge.classificationName}${badge.clearanceLevelName ? ` ${badge.clearanceLevelName}` : ""}`);
     res.json({ ok: true, badge: badgeOut(req, badge) });
   });
 
   router.post("/api/badges/range", manageBadges, (req, res) => {
     const body = req.body || {};
+    const values = customValues(req, body, { creating: true });
     const made = badges.createRange(levelInput(req, body, body.type), { sites: req.ctx.sites });
+    transaction(() => { for (const b of made) fields.writeValues(b.id, values); });
     auditFrom(req, "badge.add", `${made.length} badges`, `${made[0]?.number} to ${made[made.length - 1]?.number}`);
     res.json({ ok: true, count: made.length, first: badgeOut(req, made[0]), last: badgeOut(req, made[made.length - 1]) });
   });
@@ -173,13 +207,16 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const existing = badges.get(id, { sites: req.ctx.sites });
     if (!existing) throw fail(404, "No such badge.");
     const body = req.body || {};
+    const values = customValues(req, body, { recordId: id });
     const badge = badges.update(id, levelInput(req, body, body.type || existing.type), { sites: req.ctx.sites });
-    auditFrom(req, "badge.update", badge.number, Object.keys(body).join(", "));
+    fields.writeValues(id, values);
+    auditFrom(req, "badge.update", badge.number, [...Object.keys(body).filter((k) => k !== "custom"), ...Object.keys(body.custom || {}).map((k) => `custom.${k}`)].join(", "));
     res.json({ ok: true, badge: badgeOut(req, badge) });
   });
 
   router.delete("/api/badges/:id", manageBadges, (req, res) => {
     const badge = badges.remove(positiveInt(req.params.id));
+    fields.forgetRecord("badge", badge.id);
     auditFrom(req, "badge.remove", badge.number);
     res.json({ ok: true });
   });
@@ -228,20 +265,23 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const ids = badgeIds(req.body);
     const patch = req.body?.patch && typeof req.body.patch === "object" ? req.body.patch : {};
     const input = Object.fromEntries(BULK_KEYS.filter((k) => patch[k] !== undefined).map((k) => [k, patch[k]]));
-    if (!Object.keys(input).length) throw fail(400, "Choose what to change.");
+    const hasCustom = patch.custom && typeof patch.custom === "object" && Object.keys(patch.custom).length > 0;
+    if (!Object.keys(input).length && !hasCustom) throw fail(400, "Choose what to change.");
+    const values = hasCustom ? customValues(req, { custom: patch.custom }) : new Map();
     const done = allOrNothing(ids, (id) => {
       const badge = badges.get(id, { sites: req.ctx.sites });
       if (!badge) throw fail(404, "no such badge, or not at your sites.");
-      badges.update(id, levelInput(req, input, input.type || badge.type), { sites: req.ctx.sites });
+      if (Object.keys(input).length) badges.update(id, levelInput(req, input, input.type || badge.type), { sites: req.ctx.sites });
+      if (values.size) fields.writeValues(id, values);
     });
-    auditFrom(req, "badge.bulk_update", `${done} badges`, Object.keys(input).join(", "));
+    auditFrom(req, "badge.bulk_update", `${done} badges`, [...Object.keys(input), ...Object.keys(hasCustom ? patch.custom : {}).map((k) => `custom.${k}`)].join(", "));
     res.json({ ok: true, updated: done });
   });
 
   router.post("/api/badges/bulk-delete", manageBadges, (req, res) => {
     const ids = badgeIds(req.body);
     const numbers = [];
-    const done = allOrNothing(ids, (id) => { numbers.push(badges.remove(id, { sites: req.ctx.sites }).number); });
+    const done = allOrNothing(ids, (id) => { numbers.push(badges.remove(id, { sites: req.ctx.sites }).number); fields.forgetRecord("badge", id); });
     auditFrom(req, "badge.remove", `${done} badges`, numbers.slice(0, 50).join(", "));
     res.json({ ok: true, deleted: done });
   });

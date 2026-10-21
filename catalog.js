@@ -12,13 +12,21 @@
  * `security` fields (the clearance itself) are set only by the Security role, by validating
  * a clearance (clearance.js): nobody edits them in a record's form, administrators included.
  */
-const ENTITIES = ["company", "person", "visitor"];
+const ENTITIES = ["company", "person", "visitor", "badge"];
 
-const ENTITY_LABELS = { company: "Companies", person: "People", visitor: "Visitors" };
+const ENTITY_LABELS = { company: "Companies", person: "People", visitor: "Visitors", badge: "Badges" };
 
 // Which of a role's areas governs each record type.
-const AREAS = { company: "directory", person: "directory", visitor: "visitors" };
+const AREAS = { company: "directory", person: "directory", visitor: "visitors", badge: "badges" };
 const areaOf = (entity) => AREAS[entity] || "directory";
+
+/**
+ * Whether a role's level in an area lets it change that area's records. Badges are changed
+ * (their fields included) only at the "manage" level: "edit" there means issuing and taking
+ * badges back.
+ */
+const editsArea = (level, entity) => (areaOf(entity) === "badges" ? level === "manage" : level === "edit");
+const readsArea = (level) => ["read", "edit", "manage"].includes(level);
 
 const BUILT_IN = {
   company: [
@@ -70,7 +78,9 @@ const BUILT_IN = {
     { key: "verified", label: "Checked by staff", type: "boolean", locked: true },
     { key: "blocked", label: "Blocked", type: "boolean", locked: true },
     { key: "lastVisitAt", label: "Last visit", type: "datetime", locked: true, system: true }
-  ]
+  ],
+  // Badges' own details (number, type, ...) aren't fields: only custom fields are.
+  badge: []
 };
 
 // Columns a search may look in, per built-in field. Fields not listed are never searched.
@@ -108,4 +118,4 @@ function builtInField(entity, key) {
   return builtIn(entity).find((f) => f.key === key) || null;
 }
 
-module.exports = { ENTITIES, ENTITY_LABELS, AREAS, areaOf, BUILT_IN, SEARCH_COLUMNS, ACCESS_LEVELS, builtIn, builtInField };
+module.exports = { ENTITIES, ENTITY_LABELS, AREAS, areaOf, editsArea, readsArea, BUILT_IN, SEARCH_COLUMNS, ACCESS_LEVELS, builtIn, builtInField };

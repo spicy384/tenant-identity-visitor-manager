@@ -2,7 +2,7 @@
 // the site switcher and start-up.
 //
 //   #home  #companies  #company/3  #people  #person/7  #here  #visitors  #visitor/5  #visits
-//   #expected  #badges(/tenants|/visitors)  #badge/4  #clearance  #clearances
+//   #expected  #badges(/tenants|/visitors)  #badge/4  #clearance  #clearances  #floors(/3)  #offices  #rates
 //   #settings  #settings/fields  #account
 
 const VIEWS = {
@@ -16,6 +16,9 @@ const VIEWS = {
   badges: showBadges,
   clearance: showClearance,
   clearances: showClearances,
+  floors: showFloors,
+  offices: showOffices,
+  rates: showRates,
   settings: showSettings,
   account: showAccount
 };
@@ -41,6 +44,11 @@ const SECTIONS = [
     { view: "visitors", href: "#visitors", label: "Visitors", pill: "nav-review", title: "Registered at a kiosk, not yet checked", show: canReadVisitors },
     { view: "visits", href: "#visits", label: "Visit log", show: canReadVisitors },
     { view: "badges", sub: "visitors", href: "#badges/visitors", label: "Badges", pill: "nav-badges", title: "Badges out past their time: visitor badges with visitors who have left, and temporary badges not back by the end of their day", show: canReadBadges }
+  ] },
+  { id: "facilities", label: "Facilities", show: canReadFacilities, pages: [
+    { view: "floors", href: "#floors", label: "Floor plans", show: canReadFacilities },
+    { view: "offices", href: "#offices", label: "Offices", show: canReadFacilities },
+    { view: "rates", href: "#rates", label: "Rates", show: canReadFacilities }
   ] },
   { id: "security", label: "Security", pill: "nav-security", show: seesSecurity, pages: [
     { view: "clearance", href: "#clearance", label: "Clearance queue", pill: "nav-clearance", title: "Clearances waiting to be validated", show: isSecurity },
@@ -198,6 +206,7 @@ function route() {
   if (view === "badges" && !canReadBadges()) view = "home";
   if (view === "clearance" && !isSecurity()) view = "home";
   if (view === "clearances" && !seesSecurity()) view = "home";
+  if (["floors", "offices", "rates"].includes(view) && !canReadFacilities()) view = "home";
   showView(view, sub);
   VIEWS[view](sub);
 }

@@ -188,6 +188,33 @@ async function main() {
   r = await security.post("/api/badges/bulk-delete", { ids: [b3.id, b1.id] });
   check("badges: deleted together", r.status === 200 && r.data.deleted === 2 && (await security.get(`/api/badges/${b1.id}`)).status === 404);
 
+  // --- custom badge fields --------------------------------------------------------------------------
+  const lanyard = (await admin.post("/api/fields", { entity: "badge", label: "Lanyard colour", type: "text", visibility: "all" })).data.field;
+  check("badge fields: an administrator adds one", lanyard && lanyard.entity === "badge" && lanyard.key === "lanyard_colour");
+  const grid = (await admin.get("/api/field-access")).data;
+  const gridField = grid.entities.badge.find((f) => f.apiKey === lanyard.key);
+  const cell = (role) => gridField.access[role];
+  check("badge fields: Security (manage) can change them, others who see badges only read them", cell("security") === "edit" && cell("frontdesk") === "view" && cell("manager") === "view" && cell("viewer") === "view");
+  check("badge fields: the grid can't let a role that only issues badges change them", (await admin.put("/api/field-access", { changes: [{ roleId: "frontdesk", entity: "badge", field: gridField.key, access: "edit" }] })).status === 400);
+  r = await security.post("/api/badges", { number: "L-1", type: "visitor", classificationId: uncleared.id, custom: { [lanyard.key]: "Red" } });
+  check("badge fields: set when a badge is added", r.status === 200 && r.data.badge.custom[lanyard.key] === "Red");
+  check("badge fields: front desk sees them", (await desk.get(`/api/badges/${r.data.badge.id}`)).data.badge.custom[lanyard.key] === "Red"
+    && (await desk.get("/api/badges?q=L-1")).data.badges[0].custom[lanyard.key] === "Red");
+  const l1 = r.data.badge;
+  check("badge fields: but can't change them", (await desk.put(`/api/badges/${l1.id}`, { custom: { [lanyard.key]: "Blue" } })).status === 403);
+  check("badge fields: Security changes them", (await security.put(`/api/badges/${l1.id}`, { custom: { [lanyard.key]: "Blue" } })).data.badge.custom[lanyard.key] === "Blue");
+  check("badge fields: an unknown one is refused", (await security.put(`/api/badges/${l1.id}`, { custom: { nope: "x" } })).status === 400);
+  const range = (await security.post("/api/badges/range", { prefix: "R-", from: 1, to: 3, type: "visitor", classificationId: uncleared.id, custom: { [lanyard.key]: "Green" } })).data;
+  check("badge fields: a range gets them all", range.count === 3 && range.last.custom[lanyard.key] === "Green");
+  const rangeIds = (await security.get("/api/badges?q=R-")).data.badges.map((b) => b.id);
+  r = await security.post("/api/badges/bulk", { ids: [l1.id, ...rangeIds], patch: { custom: { [lanyard.key]: "Black" } } });
+  check("badge fields: changed on several at once", r.status === 200 && r.data.updated === 4 && (await security.get(`/api/badges/${rangeIds[0]}`)).data.badge.custom[lanyard.key] === "Black");
+  const req2 = (await admin.post("/api/fields", { entity: "badge", label: "Box", type: "text", required: true, visibility: "all" })).data.field;
+  check("badge fields: a required one must be given for a new badge", (await security.post("/api/badges", { number: "L-2", type: "visitor", classificationId: uncleared.id })).status === 400
+    && (await security.post("/api/badges", { number: "L-2", type: "visitor", classificationId: uncleared.id, custom: { [req2.key]: "4" } })).status === 200);
+  await security.post("/api/badges/bulk-delete", { ids: rangeIds });
+  check("badge fields: deleted with their badge", (await security.get(`/api/badges/${rangeIds[0]}`)).status === 404);
+
   // --- light or dark, kept with the account ----------------------------------------------------------
   check("theme: follows the device to start with", (await manager.get("/api/me/prefs")).data.theme === "auto");
   check("theme: kept when chosen", (await manager.put("/api/me/prefs", { theme: "light" })).data.theme === "light" && (await manager.get("/api/me/prefs")).data.theme === "light");

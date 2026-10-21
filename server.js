@@ -5,7 +5,7 @@ const express = require("express");
 
 const { loadKey } = require("./db-key");
 const { openDatabase } = require("./db");
-const { createFields, TYPES: FIELD_TYPES, TYPE_LABELS: FIELD_TYPE_LABELS } = require("./fields");
+const { createFields, normaliseValue: normaliseFieldValue, TYPES: FIELD_TYPES, TYPE_LABELS: FIELD_TYPE_LABELS } = require("./fields");
 const { createAccess, AREA_LEVELS, BADGE_LEVELS, NEW_FIELD_VISIBILITY } = require("./access");
 const { createSites } = require("./sites");
 const { createDirectory } = require("./directory");
@@ -20,6 +20,8 @@ const { createClearance, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS } = require("./c
 const { createBadges } = require("./badges");
 const { createEvents } = require("./events");
 const { createBadgeRoutes } = require("./badge-routes");
+const { createFacilities } = require("./facilities");
+const { createFacilityRoutes } = require("./facility-routes");
 const { createClearanceRoutes } = require("./clearance-routes");
 const { createBadgeTemplates } = require("./badge-templates");
 const { createPrefs } = require("./prefs");
@@ -179,6 +181,7 @@ const access = createAccess({ db, fields });
 const sites = createSites({ db });
 sites.ensureDefault();
 const directory = createDirectory({ db, fields });
+const facilities = createFacilities({ db, sites, directory });
 const visitors = createVisitors({ db, fields });
 const kiosks = createKiosks({ db });
 const clock = createVisitClock({ db, visitors, log: (message) => console.error(message) });
@@ -293,7 +296,7 @@ app.get("/api/config", (req, res) => {
   const ctx = req.ctx;
   res.json({
     version: pkg.version,
-    access: { role: ctx.role?.id || null, roleName: ctx.role?.name || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), sitesLimited: Boolean(ctx.sites) },
+    access: { role: ctx.role?.id || null, roleName: ctx.role?.name || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), facilities: ctx.facilities, sitesLimited: Boolean(ctx.sites) },
     visits: access.canReadVisitors(ctx) ? { here: visitors.hereNow(ctx.sites), review: visitors.reviewCount(ctx.sites), expected: events.expectedCount(ctx.sites), badgesLeft: access.canReadBadges(ctx) ? badges.leftCount(ctx.sites) : 0, tempOverdue: access.canReadBadges(ctx) ? badges.overdueCount(ctx.sites) : 0 } : null,
     // Level names only for roles that see them; the rest see badge template images.
     clearanceLevels: access.canSeeClearances(ctx) ? clearance.levels().map((l) => ({ id: l.id, name: l.name, rank: l.rank })) : [],
@@ -431,9 +434,16 @@ function noBadgesOut(kind, ids, who) {
   if (out.length) throw fail(409, `${who} still ${out.length === 1 ? "holds badge" : "hold badges"} ${out.join(", ")}. Take ${out.length === 1 ? "it" : "them"} back first.`);
 }
 
+/** Refuses to delete a company that has an office now or later: end those assignments first. */
+function noOfficesHeld(company) {
+  const held = facilities.heldBy(company.id);
+  if (held.length) throw fail(409, `${company.name} ${held.length === 1 ? "has office" : "has offices"} ${held.join(", ")} now or later. End ${held.length === 1 ? "that assignment" : "those assignments"} under Facilities first.`);
+}
+
 app.delete("/api/companies/:id", admin, (req, res) => {
   const target = directory.getCompany(positiveInt(req.params.id));
   if (target) noBadgesOut("person", directory.listPeople({ companyId: target.id, includeInactive: true, limit: 100000 }).records.map((p) => p.id), `People at ${target.name}`);
+  if (target) noOfficesHeld(target);
   const record = directory.deleteCompany(positiveInt(req.params.id));
   clearance.sweepDigits();
   auditFrom(req, "company.remove", record.name, `${record.peopleRemoved} people removed with it`);
@@ -542,6 +552,7 @@ app.post("/api/companies/bulk-delete", admin, (req, res) => {
   const found = ids.map((id) => directory.getCompany(id));
   if (found.some((c) => !c)) throw fail(404, "One of those companies doesn't exist.");
   for (const c of found) noBadgesOut("person", directory.listPeople({ companyId: c.id, includeInactive: true, limit: 100000 }).records.map((p) => p.id), `People at ${c.name}`);
+  for (const c of found) noOfficesHeld(c);
   let peopleRemoved = 0;
   db.transaction(() => { for (const c of found) peopleRemoved += directory.deleteCompany(c.id).peopleRemoved; });
   clearance.sweepDigits();
@@ -839,8 +850,12 @@ function importBadges(req, rows, { where, from = "CSV" } = {}) {
   if (!seesLevels && rows.some((r) => r.level)) throw fail(403, "This account doesn't see clearance levels, so it can't import them; leave the level out, or ask Security.");
   const classes = clearance.classifications();
   const levels = clearance.levels();
+  // Custom badge fields the caller may change, by their key.
+  const customDefs = new Map(access.fieldsFor(req.ctx, "badge").filter((f) => !f.builtIn && f.access === "edit" && f.recordId === null).map((f) => [f.apiKey, f]));
   const counts = importRows(rows, (row) => {
     const input = { number: row.number };
+    const values = new Map();
+    for (const [key, def] of customDefs) if (row[key] !== undefined && row[key] !== "") values.set(def.id, normaliseFieldValue(def, row[key]));
     const type = BADGE_TYPE_NAMES[String(row.type || "").trim().toLowerCase()];
     if (!type) throw fail(400, `"${row.type}" isn't a badge type: personnel, tenant or visitor.`);
     input.type = type;
@@ -866,15 +881,17 @@ function importBadges(req, rows, { where, from = "CSV" } = {}) {
     if (existingId) {
       if (!badges.get(existingId, { sites: req.ctx.sites })) throw fail(403, `Badge ${row.number} is valid only at sites this account can't see.`);
       badges.update(existingId, input, { sites: req.ctx.sites });
+      fields.writeValues(existingId, values);
       return "updated";
     }
     const status = input.status;
     delete input.status;
     const made = badges.create(input, { sites: req.ctx.sites });
+    fields.writeValues(made.id, values);
     if (status && status !== "active") badges.update(made.id, { status }, { sites: req.ctx.sites });
     return "added";
   }, where);
-  const ignored = Object.keys(rows[0]).filter((c) => !BADGE_COLUMNS.includes(c));
+  const ignored = Object.keys(rows[0]).filter((c) => !BADGE_COLUMNS.includes(c) && !customDefs.has(c));
   auditFrom(req, "import.badges", `${counts.added} added, ${counts.updated} updated`, `from ${from}`);
   return { ...counts, ignored };
 }
@@ -887,8 +904,8 @@ app.use(createImportRoutes({ access, importCompanies, importPeople, importVisito
 function fieldOut(d) {
   let recordName = null;
   if (d.recordId !== null) {
-    const rec = d.entity === "company" ? directory.getCompany(d.recordId) : d.entity === "visitor" ? visitors.get(d.recordId) : directory.getPerson(d.recordId);
-    recordName = rec ? (d.entity === "company" ? rec.name : `${rec.firstName} ${rec.lastName}`) : "(removed)";
+    const rec = d.entity === "company" ? directory.getCompany(d.recordId) : d.entity === "visitor" ? visitors.get(d.recordId) : d.entity === "badge" ? badges.get(d.recordId) : directory.getPerson(d.recordId);
+    recordName = rec ? (d.entity === "company" ? rec.name : d.entity === "badge" ? `Badge ${rec.number}` : `${rec.firstName} ${rec.lastName}`) : "(removed)";
   }
   return { ...d, recordName };
 }
@@ -942,13 +959,13 @@ app.get("/api/roles", admin, (req, res) => {
 
 app.post("/api/roles", admin, (req, res) => {
   const role = access.createRole(req.body || {});
-  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}${role.clearances ? ", sees clearance levels" : ""}; fields copied from ${req.body?.copyFrom || "viewer"}`);
+  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}${role.clearances ? ", sees clearance levels" : ""}; fields copied from ${req.body?.copyFrom || "viewer"}`);
   res.json({ ok: true, role });
 });
 
 app.put("/api/roles/:id", admin, (req, res) => {
   const role = access.updateRole(String(req.params.id), req.body || {});
-  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}${role.clearances ? ", sees clearance levels" : ""}`);
+  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}${role.clearances ? ", sees clearance levels" : ""}`);
   res.json({ ok: true, role });
 });
 
@@ -1078,7 +1095,8 @@ app.use(createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom,
 // The clearance routes first: they mark everything under /api/clearance no-store, the
 // level list the badge routes answer included.
 app.use(clearanceRoutes.router);
-app.use(createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, admin, auditFrom, transaction: (fn) => db.transaction(fn) }));
+app.use(createFacilityRoutes({ access, facilities, directory, sites, auditFrom }));
+app.use(createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, fields, admin, auditFrom, transaction: (fn) => db.transaction(fn) }));
 
 app.use("/api", (req, res) => {
   res.status(404).json({ error: "Not found." });

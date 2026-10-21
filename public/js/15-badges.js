@@ -189,13 +189,16 @@ async function badgeKindFields(badge = null) {
     ...(sitesPicker ? [{ node: sitesPicker.node }] : []),
     { name: "temporary", label: "Temporary badge: lent for the day to someone who forgot theirs", type: "checkbox", value: Boolean(badge?.temporary), hint: "Goes only to a person who holds a badge of their own, and is due back by midnight." }
   ];
+  // Custom badge fields (Settings > Fields), as the role sees them.
+  const custom = recordForm((state.schema.badge || []).filter((f) => !f.builtIn), badge);
+  if (custom.fields.length) fields.push({ type: "heading", label: "More about the badge" }, ...custom.fields);
   // A level picked by image goes as its template ref, and only when it is new or changed.
   const level = (v) => {
     if (!byImage) return { clearanceLevelId: v.clearanceLevelId ? Number(v.clearanceLevelId) : null };
     if (!needs(v.classificationId)) return {};
     return !badge || byImage.changed() || v.type !== badge.type ? { templateRef: byImage.value() || "" } : {};
   };
-  const body = (v) => ({ type: v.type, classificationId: Number(v.classificationId), ...level(v), temporary: Boolean(v.temporary), ...(sitesPicker ? { siteIds: sitesPicker.value() || [] } : {}) });
+  const body = (v) => ({ type: v.type, classificationId: Number(v.classificationId), ...level(v), temporary: Boolean(v.temporary), ...(sitesPicker ? { siteIds: sitesPicker.value() || [] } : {}), ...custom.collect(v) });
   return { fields, body };
 }
 
@@ -335,7 +338,12 @@ async function openBadge(id, onChange = () => {}) {
       multiSite() ? [h("dt", { text: "Valid at" }), h("dd", { text: badgeSitesText(badge) })] : null,
       badge.holder ? [h("dt", { text: "Held by" }), h("dd", {}, h("a", { href: badge.holder.kind === "visitor" ? `#visitor/${badge.holder.id}` : `#person/${badge.holder.id}`, text: badge.holder.name }), badge.holder.company ? ` (${badge.holder.company})` : "", h("span", { class: "muted", text: ` since ${fmtDateTime(badge.holder.assignedAt)}${badge.holder.assignedBy ? `, given by ${badge.holder.assignedBy}` : ""}` }),
         badge.holder.temporary ? h("div", { class: badge.holder.overdue ? "bad-text" : "muted", text: `${temporaryText(badge.holder)}${badge.holder.overdue ? " (overdue)" : ""}` }) : null)] : null,
-      badge.notes ? [h("dt", { text: "Notes" }), h("dd", { class: "pre", text: badge.notes })] : null),
+      badge.notes ? [h("dt", { text: "Notes" }), h("dd", { class: "pre", text: badge.notes })] : null,
+      // Custom badge fields with a value.
+      (state.schema.badge || []).filter((f) => !f.builtIn).map((f) => {
+        const shown = displayValue(f, badge.custom?.[f.key] ?? null, badge);
+        return shown === null ? null : [h("dt", { text: f.label }), h("dd", { class: f.type === "longtext" ? "pre" : null }, shown)];
+      })),
     h("h4", { text: "Who has held it" }),
     held.length
       ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },

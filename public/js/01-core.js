@@ -60,6 +60,10 @@ const canEditBadges = () => ["edit", "manage"].includes(state.config?.access?.ba
 const canManageBadges = () => state.config?.access?.badges === "manage";
 /** Sees clearance level names (Settings > Roles); everyone else sees badge template images instead. */
 const canSeeClearances = () => Boolean(state.config?.access?.clearances);
+/** Sees floors, offices, who has them and what they cost (Settings > Roles). */
+const canReadFacilities = () => ["read", "edit"].includes(state.config?.access?.facilities);
+/** Draws floors and offices, assigns them and sets rates. */
+const canEditFacilities = () => state.config?.access?.facilities === "edit";
 const multiSite = () => (state.config?.sites || []).length > 1;
 
 // --- API -----------------------------------------------------------------------

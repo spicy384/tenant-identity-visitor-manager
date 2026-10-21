@@ -143,8 +143,8 @@ function createSites({ db }) {
     const existing = get(id);
     if (!existing) throw fail(404, "No such site.");
     if (count() <= 1) throw fail(400, "The last site can't be removed.");
-    const used = raw.prepare("SELECT (SELECT count(*) FROM company_sites WHERE site_id = ?) + (SELECT count(*) FROM people WHERE site_id = ?) + (SELECT count(*) FROM kiosks WHERE site_id = ?) + (SELECT count(*) FROM badge_sites WHERE site_id = ?) AS n").get(id, id, id, id).n;
-    if (used) throw fail(409, `${existing.name} still has companies, people, kiosks or badges valid there; move them or make the site inactive instead.`);
+    const used = raw.prepare("SELECT (SELECT count(*) FROM company_sites WHERE site_id = ?) + (SELECT count(*) FROM people WHERE site_id = ?) + (SELECT count(*) FROM kiosks WHERE site_id = ?) + (SELECT count(*) FROM badge_sites WHERE site_id = ?) + (SELECT count(*) FROM floors WHERE site_id = ?) AS n").get(id, id, id, id, id).n;
+    if (used) throw fail(409, `${existing.name} still has companies, people, kiosks, floors or badges valid there; move them or make the site inactive instead.`);
     if (raw.prepare("SELECT 1 FROM visits WHERE site_id = ? LIMIT 1").get(id)) {
       throw fail(409, `${existing.name} has visits on record; make the site inactive instead, so the visit log keeps it.`);
     }

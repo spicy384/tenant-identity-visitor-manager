@@ -5,19 +5,22 @@
 A directory of the companies in one or more buildings and the people who work for them,
 and of their visitors, kept in an encrypted database, with control over which fields each
 role can see. Visitors check themselves in and out on an iPad kiosk in each lobby, badges and
-clearances are tracked and validated, and Equipment Checkout takes its people from here.
+clearances are tracked and validated, offices are drawn on floor plans and assigned to
+companies, and Equipment Checkout takes its people from here.
 The design and decisions are in [PLAN.md](PLAN.md).
 
 ## Finding your way
 
 - **Sections.** The header has Home, Tenants (companies, people, their badges), Visitors (in
-  the building, expected, visitors, the visit log, visitor badges), Security (the clearance
-  queue, re-checks and expiry, all badges: for Security and administrators) and Settings
+  the building, expected, visitors, the visit log, visitor badges), Facilities (floor plans,
+  offices and rates: for roles given facilities access), Security (the clearance queue,
+  re-checks and expiry, all badges: for Security and administrators) and Settings
   (administrators). The pages of the chosen section are in the bar under the header; a
   section or page the account can't open isn't shown.
 - **Home** is each person's dashboard. **Customize** adds, removes and reorders modules: who
   is in the building, who is expected today, kiosk visitors waiting for a badge, visitors to
-  check, badges out past their time, a quick list of tenants, and for Security the clearance
+  check, badges out past their time, a quick list of tenants, offices by status with the space
+  let and the monthly rent (for those who see facilities), and for Security the clearance
   queue, visitor re-checks, clearances expiring and recent validations (administrators get
   all but the queue). Only modules the role can see are offered, every role starts with a
   layout that suits it, and the choice is kept with the account, on any device.
@@ -155,6 +158,53 @@ The design and decisions are in [PLAN.md](PLAN.md).
   add a cleared badge by picking its image rather than a level name. Images are PNG or JPEG up
   to 1 MB (other formats are converted in the browser), served under a random address that
   changes with each upload and says nothing about the level.
+- **Custom badge fields.** Settings > Fields has Badge fields alongside the others (a lanyard
+  colour, a locker number, a cost centre). They show on the badge's dialog, in the add, range
+  and edit forms, in Change for several badges and in the badge import. Like the badges
+  themselves, only roles that manage badges (Security and Administrator to start with) change
+  them; roles that issue or read badges can be given read-only or hidden under Field access.
+
+## Facilities
+
+For roles given **facilities** access under Settings > Roles: Administrator and Manager to
+start with (read and change), and any custom role, with read only or read and change. Nobody
+else sees the Facilities section, the offices on a company's page, or the Offices module on
+Home.
+
+- **Floor plans.** Each site has floors; each floor has a plan, a PNG or JPEG (other image
+  formats are converted in the browser; export a PDF plan as an image first). **Draw offices**
+  turns on drawing, with three tools. **Rectangle**: drag on the plan. **Outline**, for offices of
+  any shape: click each corner in turn, then click the first point (or double-click, or press
+  Enter) to finish; Backspace takes back a point, Escape starts again. With either tool, click an
+  office to reshape it: drag it to move it, drag a point to move that point, drag a + halfway
+  along a side to add a point, right-click a point (or click it and press Delete) to remove it;
+  double-click an office to open it. An office's outline is kept as shares of the plan, so it
+  stays put at any size and when the plan is replaced. Offices can also be added without
+  drawing and placed later.
+- **Scale (optional).** **Set scale**: click the two ends of something whose real length you
+  know (a wall, a dimension line) and give its length in feet. Each office's area is then
+  measured from its outline and offered as a suggestion: it fills in the size of a new office
+  (change it if you know the real size), shows beside the size you entered, and **Fill in
+  missing sizes** uses it for offices that have none. The size you enter is always the one used
+  for costs; a measurement never overwrites it. Replacing the plan keeps the scale when the new
+  plan has the same shape, and clears it otherwise.
+- **Status.** Each office is coloured by its status today: **available**, **occupied**,
+  **upcoming** (free now, assigned to a company from a later date) or **unavailable** (marked
+  so, e.g. under renovation, and can't be assigned). The key beside the plan counts them, with
+  the floor's space, the space let and free, and the rent.
+- **Assigning.** Click an office to see it and **Assign to a company** from a date, to an end
+  date (its last day) or with no end. An office has one company at a time, so dates can't
+  overlap. **End** sets the last day, and ended assignments stay as the office's history.
+  **Remove** is for one made by mistake. Dates are days at the site.
+- **Size and cost.** Each office has its size in square feet. Rates are dollars per square
+  foot a month: a **company's** own rate wins, else the **office's**, else the **site's**
+  default (Facilities > Rates, and Change rate on a company's page). An office's monthly cost
+  is its size times that rate; a free office shows what it would cost.
+- **Offices** lists every office at the chosen site with its floor, size, status, company,
+  rate and monthly cost, totals underneath; filter by status or search.
+- **On a company's page:** its offices now, upcoming and before, the rate it pays, and its
+  space and rent now. A company that has an office now or later can't be deleted until those
+  assignments end; merging companies moves their offices and history to the one kept.
 
 ## Expected visitors
 
@@ -445,7 +495,7 @@ A company's site can come from one column (a site's name) and its suite from ano
 - **Badges**: number, type (personnel or staff, tenant, visitor) and classification (by name)
   required; clearance level (by name, only for roles that see clearance levels), the sites it
   is valid at (names separated by ;, empty for every site), temporary (yes/no), status
-  (active, lost, retired) and notes. A badge with the same number is updated. The CSV
+  (active, lost, retired), notes and custom badge fields. A badge with the same number is updated. The CSV
 column names below are what a CSV file is matched to automatically, and what the CSV import
 API takes.
 
@@ -469,15 +519,16 @@ is imported. Columns for fields the importer can't change are skipped and listed
 npm test
 ```
 
-Twelve suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
+Fourteen suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
 field access and site limits (the most important), visitors (name matching, end of day across
 time zones and daylight-saving changes, retention, merging), Entra sign-in against a fake
 Microsoft, the HTTP API end to end, the kiosk and visitor routes end to end, the API for other
 systems, badges, clearances and visitor events (rules and routes), and clearance validation (who
 sees the queue, and that the SSN digits never reach the database, the audit trail or the
 log, and are wiped on time), and badge images (that roles without clearance levels never
-receive a level name, pick levels by image, and are shown the right badge), and importing from Access and CSV (against a small Access
-database in test/fixtures, made by make-access-fixture.ps1). Equipment Checkout's own tests run its directory mode against this app.
+receive a level name, pick levels by image, and are shown the right badge), importing from Access and CSV (against a small Access
+database in test/fixtures, made by make-access-fixture.ps1), merging and bulk changes (custom badge fields too), and facilities
+(floors and plans, offices, overlapping dates refused, which rate wins, who may see and change them). Equipment Checkout's own tests run its directory mode against this app.
 
 ## Not yet tried
 
@@ -489,4 +540,7 @@ database in test/fixtures, made by make-access-fixture.ps1). Equipment Checkout'
 - Passkeys on a real device
 - The kiosk on a real iPad (only a desktop browser at iPad sizes): the on-screen keyboard,
   Home Screen mode, Guided Access
+- Drawing offices on a touch screen (an iPad): drawing uses pointer events, tried only with a
+  mouse (touch has larger points to grab, but right-click to remove a point needs the Delete key
+  or a mouse there)
 - A large directory: lists are paged, but nothing has been measured beyond a few hundred people
