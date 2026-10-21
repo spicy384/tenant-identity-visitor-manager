@@ -524,3 +524,10 @@ a.dash-row:hover, .dash-add-row:hover { background: var(--surface-3); text-decor
 @media (max-width: 1180px) { .brand-text { display: none; } }
 @media (max-width: 600px) { .site-button { max-width: 150px; } .user-chip { display: none; } }
 .link-btn:disabled { opacity: 0.35; cursor: default; text-decoration: none; }
+
+/* Importing: matching a file's columns to fields */
+.import-match { display: flex; flex-direction: column; gap: 6px; }
+.import-match-row { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); gap: 12px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.import-match-source { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.message.pre { white-space: pre-wrap; }
+@media (max-width: 600px) { .import-match-row { grid-template-columns: 1fr; gap: 4px; } }

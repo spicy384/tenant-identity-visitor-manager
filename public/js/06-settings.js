@@ -474,7 +474,7 @@ async function settingsData(body) {
   body.append(
     h("div", { class: "panel" },
       h("h3", { text: "Import" }),
-      h("p", { class: "muted", text: "Add or update companies and people from a CSV file. Import companies first if the people file names companies that don't exist yet, or let the people import add them." }),
+      h("p", { class: "muted", text: "Add or update companies and people from an Access database (.accdb or .mdb) or a CSV file, matching its columns to the fields. Import companies first if the people you import name companies that don't exist yet, or let the people import add them." }),
       h("div", { class: "btn-row" },
         h("button", { type: "button", class: "secondary", text: "Import companies", onclick: run(async () => { if (await importDialog("companies")) loadCompanies(); }) }),
         h("button", { type: "button", class: "secondary", text: "Import people", onclick: run(() => importDialog("people")) }))),

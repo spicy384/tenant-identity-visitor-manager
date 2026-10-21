@@ -369,6 +369,20 @@ modules, Customize with up/down/remove/add), Security > Re-checks and expiry
 while building it: administrators keep full badge access as everywhere else; the app's name
 hides below 1180 px so the sections fit an iPad in landscape.
 
+## Importing from Access, with column matching (2026-10-21)
+
+Asked for by the user: import an Access database directly, with a step that matches its
+columns to the app's fields. Built: mdb-reader 3.2.0 (MIT, pure JavaScript, reads .accdb and
+.mdb, no Access or ODBC needed; ES module loaded with import()), import-routes.js (read a file
+into memory per account for 15 minutes, a table's sample, run with a mapping of field ->
+column or fixed value), importPeople and importCompanies factored out of the CSV routes in
+server.js so both paths share the same checks, public/js/20-import.js (the wizard, used for CSV
+too), test/import.test.js with test/fixtures/directory.mdb. Choices made while building it: the
+file is parsed on the server (no bundler for a browser build) but never written to disk; one
+held file per account and four at once; companies can take a site and a suite as separate
+columns. Only the Jet (.mdb) format is tested here: the development machine has no ACE engine
+to make an .accdb.
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

@@ -1,0 +1,177 @@
+/**
+ * Importing people or companies from an Access database (.accdb or .mdb) or a CSV file,
+ * with the file's columns matched to the app's fields. Three steps:
+ *
+ *   POST /api/import/read            the file itself (raw body): its tables, columns and
+ *                                    row counts, and a token for the next steps
+ *   GET  /api/import/:token/table    one table's columns and its first rows, to match and preview
+ *   POST /api/import/:token/run      { table, target, mapping, createCompanies }: imports it
+ *
+ * The file is read on the server and held in memory only, for IMPORT_TTL_MS, by the account
+ * that sent it; it is never written to disk. Running the import goes through the same
+ * checks as a CSV import (server.js importPeople and importCompanies): field access, sites,
+ * matching existing records, and all or nothing.
+ *
+ * A mapping says, for each of the app's columns (first_name, company, a custom field's
+ * key, ...), where its value comes from: { column: "Surname" } or { value: "Acme Corp" }
+ * (the same for every row). Columns that aren't mapped aren't imported.
+ */
+const crypto = require("crypto");
+const express = require("express");
+const { parseCsv } = require("./csv");
+
+const IMPORT_TTL_MS = 15 * 60 * 1000;
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
+const MAX_HELD = 4;
+const MAX_ROWS = 20000;
+const SAMPLE_ROWS = 10;
+
+function fail(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+/** A cell from Access or CSV as the import's text: dates as YYYY-MM-DD, yes/no as yes or no. */
+function cellText(value) {
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return "";
+    const iso = value.toISOString();
+    return iso.endsWith("T00:00:00.000Z") ? iso.slice(0, 10) : iso.slice(0, 16).replace("T", " ");
+  }
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) return "";
+  return String(value).trim();
+}
+
+/** A CSV file as one table, keeping its header's own names. */
+function csvTable(buffer) {
+  let text = buffer.toString("utf8");
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const [header, ...rows] = parseCsv(text);
+  if (!header || !header.length) throw fail(400, "The CSV file is empty.");
+  const names = header.map((h, i) => String(h).trim() || `Column ${i + 1}`);
+  const columns = names.map((name) => ({ name, type: "text" }));
+  const data = rows.filter((r) => r.some((c) => String(c).trim() !== "")).map((r) => Object.fromEntries(names.map((n, i) => [n, r[i] ?? ""])));
+  return { name: "CSV", columns, rowCount: data.length, rows: () => data };
+}
+
+/** An Access database's tables (system tables left out), each read only when asked for. */
+async function accessTables(buffer, password) {
+  const { default: MDBReader } = await import("mdb-reader");
+  let reader;
+  try {
+    reader = new MDBReader(buffer, password ? { password } : undefined);
+  } catch (error) {
+    throw fail(400, /password|encrypt/i.test(error.message)
+      ? "This Access database is password-protected: give its password, or export the table to CSV from Access."
+      : "That file couldn't be read as an Access database (.accdb or .mdb).");
+  }
+  let names;
+  try {
+    names = reader.getTableNames({ normalTables: true, systemTables: false, linkedTables: false });
+  } catch {
+    throw fail(400, "That file couldn't be read as an Access database (.accdb or .mdb). If it has a password, give it.");
+  }
+  return names.map((name) => {
+    const table = reader.getTable(name);
+    return {
+      name,
+      columns: table.getColumns().map((c) => ({ name: c.name, type: c.type })),
+      rowCount: table.rowCount,
+      rows: () => table.getData()
+    };
+  });
+}
+
+function createImportRoutes({ editDir, importCompanies, importPeople, auditFrom, now = Date.now }) {
+  const router = express.Router();
+  // token -> { owner, at, format, fileName, tables }
+  const held = new Map();
+
+  function sweep() {
+    for (const [token, h] of held) if (h.at + IMPORT_TTL_MS < now()) held.delete(token);
+  }
+  const timer = setInterval(sweep, 60 * 1000);
+  timer.unref();
+
+  const ownerOf = (req) => req.user?.id || req.user?.username;
+
+  function heldFor(req) {
+    sweep();
+    const h = held.get(String(req.params.token || ""));
+    if (!h || h.owner !== ownerOf(req)) throw fail(404, "That file is no longer held: choose it again.");
+    h.at = now();
+    return h;
+  }
+
+  function tableOf(h, name) {
+    const table = h.tables.find((t) => t.name === name) || (h.tables.length === 1 && !name ? h.tables[0] : null);
+    if (!table) throw fail(404, "There is no table with that name in the file.");
+    return table;
+  }
+
+  router.post("/api/import/read", editDir, express.raw({ type: () => true, limit: MAX_FILE_BYTES }), async (req, res) => {
+    const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!buffer || !buffer.length) throw fail(400, "Choose a file to import.");
+    const fileName = String(req.query.name || "").slice(0, 200);
+    const format = req.query.format === "access" || /\.(accdb|mdb)$/i.test(fileName) ? "access" : "csv";
+    const password = String(req.get("x-import-password") || "");
+    const tables = format === "access" ? await accessTables(buffer, password) : [csvTable(buffer)];
+    if (!tables.length) throw fail(400, "That database has no tables.");
+    // One file held per person, and only a few at once: each may be large.
+    for (const [token, h] of held) if (h.owner === ownerOf(req)) held.delete(token);
+    sweep();
+    if (held.size >= MAX_HELD) throw fail(503, "Other imports are being prepared; try again in a few minutes.");
+    const token = crypto.randomBytes(18).toString("base64url");
+    held.set(token, { owner: ownerOf(req), at: now(), format, fileName, tables });
+    res.json({ token, format, fileName, tables: tables.map((t) => ({ name: t.name, columns: t.columns, rowCount: t.rowCount })) });
+  });
+
+  router.get("/api/import/:token/table", editDir, (req, res) => {
+    const table = tableOf(heldFor(req), String(req.query.name || ""));
+    const sample = table.rows().slice(0, SAMPLE_ROWS).map((r) => Object.fromEntries(table.columns.map((c) => [c.name, cellText(r[c.name])])));
+    res.json({ name: table.name, columns: table.columns, rowCount: table.rowCount, sample });
+  });
+
+  router.post("/api/import/:token/run", editDir, (req, res) => {
+    const h = heldFor(req);
+    const body = req.body || {};
+    const table = tableOf(h, String(body.table || ""));
+    const target = body.target === "companies" ? "companies" : body.target === "people" ? "people" : null;
+    if (!target) throw fail(400, "Import into people or companies.");
+    const mapping = body.mapping && typeof body.mapping === "object" ? body.mapping : {};
+    const known = new Set(table.columns.map((c) => c.name));
+    const sources = [];
+    for (const [key, from] of Object.entries(mapping)) {
+      if (!/^[a-z][a-z0-9_]{0,63}$/.test(key)) throw fail(400, `"${key}" isn't one of the app's columns.`);
+      if (from && typeof from.column === "string") {
+        if (!known.has(from.column)) throw fail(400, `The table has no column "${from.column}".`);
+        sources.push([key, (r) => cellText(r[from.column])]);
+      } else if (from && from.value !== undefined && from.value !== null && String(from.value).trim() !== "") {
+        const fixed = String(from.value).trim().slice(0, 500);
+        sources.push([key, () => fixed]);
+      }
+    }
+    const all = table.rows();
+    if (all.length > MAX_ROWS) throw fail(400, `The table has ${all.length.toLocaleString("en-US")} rows; import at most ${MAX_ROWS.toLocaleString("en-US")} at a time (split it with a query in Access).`);
+    const rows = all.map((r) => Object.fromEntries(sources.map(([key, get]) => [key, get(r)])));
+    const from = h.format === "access" ? `Access table "${table.name}"${h.fileName ? ` in ${h.fileName}` : ""}` : `CSV${h.fileName ? ` ${h.fileName}` : ""}`;
+    const where = h.format === "access" ? (i) => `Row ${i + 1}` : (i) => `Line ${i + 2}`;
+    const result = target === "companies"
+      ? importCompanies(req, rows, { where, from })
+      : importPeople(req, rows, { createCompanies: Boolean(body.createCompanies), where, from });
+    held.delete(req.params.token);
+    res.json({ ok: true, ...result });
+  });
+
+  router.delete("/api/import/:token", editDir, (req, res) => {
+    if (held.get(req.params.token)?.owner === ownerOf(req)) held.delete(req.params.token);
+    res.json({ ok: true });
+  });
+
+  return router;
+}
+
+module.exports = { createImportRoutes, cellText, csvTable };

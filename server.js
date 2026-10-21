@@ -23,6 +23,7 @@ const { createBadgeRoutes } = require("./badge-routes");
 const { createClearanceRoutes } = require("./clearance-routes");
 const { createBadgeTemplates } = require("./badge-templates");
 const { createPrefs } = require("./prefs");
+const { createImportRoutes } = require("./import-routes");
 const { createAuth } = require("./auth-routes");
 const { createEntra } = require("./entra");
 const { resolveTlsOptions } = require("./tls-setup");
@@ -577,8 +578,11 @@ function rowPatch(row, columns, writable) {
   return patch;
 }
 
-/** Runs `fn(row, line)` for every row in one transaction; any failure undoes the lot. */
-function importRows(rows, fn) {
+/**
+ * Runs `fn(row)` for every row in one transaction; any failure undoes the lot. `where(i)`
+ * names a row in the problems listed: a CSV line by default (the header is line 1).
+ */
+function importRows(rows, fn, where = (i) => `Line ${i + 2}`) {
   const errors = [];
   const counts = { added: 0, updated: 0 };
   try {
@@ -587,7 +591,7 @@ function importRows(rows, fn) {
         try {
           counts[fn(row)] += 1;
         } catch (error) {
-          errors.push(`Line ${i + 2}: ${error.message}`);
+          errors.push(`${where(i)}: ${error.message}`);
         }
       });
       if (errors.length) throw fail(400, "rollback");
@@ -595,7 +599,7 @@ function importRows(rows, fn) {
   } catch (error) {
     if (!errors.length) throw error;
     const shown = errors.slice(0, 10).join("\n");
-    throw fail(400, `Nothing was imported. ${errors.length} line${errors.length === 1 ? " has" : "s have"} a problem:\n${shown}${errors.length > 10 ? `\n...and ${errors.length - 10} more.` : ""}`);
+    throw fail(400, `Nothing was imported. ${errors.length} row${errors.length === 1 ? " has" : "s have"} a problem:\n${shown}${errors.length > 10 ? `\n...and ${errors.length - 10} more.` : ""}`);
   }
   return counts;
 }
@@ -605,6 +609,13 @@ function checkImport(rows, required) {
   if (rows.length > 20000) throw fail(400, "Import at most 20,000 rows at a time.");
   const missing = required.filter((c) => !Object.prototype.hasOwnProperty.call(rows[0], c));
   if (missing.length) throw fail(400, `The first row must be a header with the column${missing.length === 1 ? "" : "s"} ${missing.join(", ")}.`);
+}
+
+/** A company's sites from its row: a "sites" cell, or a site (and suite) of its own. */
+function companySitesOf(ctx, row) {
+  if (row.sites) return parseSitesCell(ctx, row.sites);
+  if (row.site) return [{ siteId: siteByName(ctx, row.site).id, suite: row.suite || null }];
+  return null;
 }
 
 function ignoredColumns(rows, columns, writable) {
@@ -618,13 +629,17 @@ function defaultSitesFor(ctx) {
   throw fail(400, "Add a \"sites\" column: there is more than one site to choose from.");
 }
 
-app.post("/api/companies/import", editDir, (req, res) => {
-  const rows = parseCsvObjects(req.body?.csv);
+/**
+ * Imports companies from rows keyed by column (name, sites or site and suite, phone, ...,
+ * custom field keys), from a CSV file or a matched table. `from` goes in the audit log.
+ */
+function importCompanies(req, rows, { where, from = "CSV" } = {}) {
   checkImport(rows, ["name"]);
   const writable = writableColumns(req.ctx, "company");
   const counts = importRows(rows, (row) => {
     const patch = rowPatch(row, COMPANY_COLUMNS, writable);
-    if (row.sites) patch.sites = parseSitesCell(req.ctx, row.sites);
+    const sitesOfRow = companySitesOf(req.ctx, row);
+    if (sitesOfRow) patch.sites = sitesOfRow;
     const existing = directory.findCompanyByName(row.name);
     if (existing && directory.getCompany(existing.id, { sites: req.ctx.sites })) {
       delete patch.name;
@@ -635,16 +650,19 @@ app.post("/api/companies/import", editDir, (req, res) => {
     if (!patch.sites) patch.sites = defaultSitesFor(req.ctx);
     directory.createCompany(patch, writePlan(req.ctx, "company", patch));
     return "added";
-  });
-  const ignored = ignoredColumns(rows, COMPANY_COLUMNS, writable);
-  auditFrom(req, "import.companies", `${counts.added} added, ${counts.updated} updated`);
-  res.json({ ok: true, ...counts, ignored });
+  }, where);
+  const ignored = ignoredColumns(rows, COMPANY_COLUMNS, writable).filter((c) => c !== "suite");
+  auditFrom(req, "import.companies", `${counts.added} added, ${counts.updated} updated`, `from ${from}`);
+  return { ...counts, ignored };
+}
+
+app.post("/api/companies/import", editDir, (req, res) => {
+  res.json({ ok: true, ...importCompanies(req, parseCsvObjects(req.body?.csv)) });
 });
 
-app.post("/api/people/import", editDir, (req, res) => {
-  const rows = parseCsvObjects(req.body?.csv);
+/** Imports people from rows keyed by column (first_name, last_name, company, ..., custom field keys). */
+function importPeople(req, rows, { createCompanies = false, where, from = "CSV" } = {}) {
   checkImport(rows, ["first_name", "last_name", "company"]);
-  const createCompanies = Boolean(req.body?.createCompanies);
   const writable = writableColumns(req.ctx, "person");
   const counts = importRows(rows, (row) => {
     const patch = rowPatch(row, PERSON_COLUMNS, writable);
@@ -665,11 +683,18 @@ app.post("/api/people/import", editDir, (req, res) => {
     }
     directory.createPerson(patch, writePlan(req.ctx, "person", patch));
     return "added";
-  });
+  }, where);
   const ignored = ignoredColumns(rows, PERSON_COLUMNS, writable);
-  auditFrom(req, "import.people", `${counts.added} added, ${counts.updated} updated`);
-  res.json({ ok: true, ...counts, ignored });
+  auditFrom(req, "import.people", `${counts.added} added, ${counts.updated} updated`, `from ${from}`);
+  return { ...counts, ignored };
+}
+
+app.post("/api/people/import", editDir, (req, res) => {
+  res.json({ ok: true, ...importPeople(req, parseCsvObjects(req.body?.csv), { createCompanies: Boolean(req.body?.createCompanies) }) });
 });
+
+// Importing from an Access database or a CSV file, with its columns matched to fields.
+app.use(createImportRoutes({ editDir, importCompanies, importPeople, auditFrom }));
 
 // --- custom fields (administrators) ------------------------------------------------------------
 

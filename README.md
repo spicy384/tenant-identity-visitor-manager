@@ -396,7 +396,31 @@ the database, still encrypted. To restore, stop the container, put the file in t
 `identity.db` (removing any `identity.db-wal` and `identity.db-shm`), and start it with the key
 that was in use when the backup was made.
 
-## CSV columns
+## Importing (Access or CSV)
+
+**Import** on the People page (and Settings > Import, export and backup) takes an Access
+database (.accdb or .mdb, up to 100 MB) or a CSV file:
+
+1. Choose the file, and whether it holds people or companies. A password-protected Access
+   database needs its password (some newer Access encryption can't be read: export that table
+   to CSV from Access instead).
+2. Pick the table (the best fit is chosen for you), then match each field to one of its
+   columns, or give one value for every row (handy for the company or site). Matches are
+   suggested from the column names: `Surname` for Last name, `Firm` for Company, and so on.
+   A preview shows the first rows as they'll be imported, and which columns are left out.
+3. Import. The same rules as before apply: only fields the account can change, someone already
+   on record is updated rather than added twice, and if any row has a problem nothing is
+   imported and the problems are listed by row.
+
+The file is read on the server and held in its memory only, for 15 minutes or until the
+import is done or cancelled, by the account that sent it; it is never written to disk. Yes/no
+columns become yes or no, and dates become YYYY-MM-DD. At most 20,000 rows at a time.
+
+A company's site can come from one column (a site's name) and its suite from another. The CSV
+column names below are what a CSV file is matched to automatically, and what the CSV import
+API takes.
+
+### CSV columns
 
 People: `first_name`, `last_name`, `company` (required); `preferred_name`, `job_title`,
 `email`, `work_phone`, `mobile`, `site`, `can_host`, `notes`, `active`, and custom field keys
@@ -407,8 +431,8 @@ Companies: `name` (required); `sites` (`Harbour Point: Suite 100; Riverside`), `
 `email`, `website`, `address`, `notes`, `active`, and custom field keys. A company with the same
 name is updated.
 
-If any line has a problem, nothing is imported. Columns for fields the importer can't change
-are skipped and listed.
+Companies may also give `site` and `suite` instead of `sites`. If any line has a problem, nothing
+is imported. Columns for fields the importer can't change are skipped and listed.
 
 ## Tests
 
@@ -416,14 +440,15 @@ are skipped and listed.
 npm test
 ```
 
-Eleven suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
+Twelve suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
 field access and site limits (the most important), visitors (name matching, end of day across
 time zones and daylight-saving changes, retention, merging), Entra sign-in against a fake
 Microsoft, the HTTP API end to end, the kiosk and visitor routes end to end, the API for other
 systems, badges, clearances and visitor events (rules and routes), and clearance validation (who
 sees the queue, and that the SSN digits never reach the database, the audit trail or the
 log, and are wiped on time), and badge images (that roles without clearance levels never
-receive a level name, pick levels by image, and are shown the right badge). Equipment Checkout's own tests run its directory mode against this app.
+receive a level name, pick levels by image, and are shown the right badge), and importing from Access and CSV (against a small Access
+database in test/fixtures, made by make-access-fixture.ps1). Equipment Checkout's own tests run its directory mode against this app.
 
 ## Not yet tried
 
