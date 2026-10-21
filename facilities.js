@@ -418,6 +418,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     const status = r.unavailable ? "unavailable" : current ? "occupied" : next ? "upcoming" : "available";
     // Occupied: what its company pays. Otherwise what it would cost (the office's or site's rate).
     const { rate, source } = effectiveRate(r, r.site_id, current?.companyId ?? null);
+    // What it costs a company without a rate of its own: the office's rate, else the site's.
+    const askingRate = effectiveRate(r, r.site_id, null).rate;
     // Drawn before outlines: its rectangle's corners.
     const points = r.points ? JSON.parse(r.points) : r.x !== null && r.x !== undefined ? rectPoints(r.x, r.y, r.w, r.h) : null;
     // Its area from the plan, when the floor has a scale: the plan is scale_feet wide and as tall as its shape says.
@@ -446,6 +448,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       next,
       effectiveRate: rate,
       rateSource: source,
+      askingRate,
       monthly: rate !== null && r.sqft !== null && r.sqft !== undefined ? money(r.sqft * rate) : null,
       ...(history ? { assignments: list } : {}),
       createdAt: r.created_at,
@@ -453,9 +456,20 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     };
   }
 
-  /** Offices at the caller's sites: on one floor, at one site, or held (now or later) by one company. */
-  function listOffices({ scope = null, siteId = null, floorId = null, companyId = null, status = null } = {}) {
+  /**
+   * Offices at the caller's sites: on one floor, at one site, or held (now or later) by one
+   * company; with freeFrom (and freeTo, else no end), only those that can be assigned for those
+   * dates: not unavailable, and no assignment overlapping them.
+   */
+  function listOffices({ scope = null, siteId = null, floorId = null, companyId = null, status = null, freeFrom = null, freeTo = null } = {}) {
     const { where, params } = siteScope(scope, siteId);
+    if (freeFrom) {
+      const from = dateInput(freeFrom, "start date");
+      const to = dateInput(freeTo, "end date", { optional: true });
+      if (to && to < from) throw fail(400, "The end date is before the start date.");
+      where.push("o.unavailable = 0 AND NOT EXISTS (SELECT 1 FROM office_assignments a WHERE a.office_id = o.id AND a.start_date <= ? AND (a.end_date IS NULL OR a.end_date >= ?))");
+      params.push(to || "9999-12-31", from);
+    }
     if (floorId) { where.push("o.floor_id = ?"); params.push(Number(floorId)); }
     if (companyId) { where.push("o.id IN (SELECT office_id FROM office_assignments WHERE company_id = ?)"); params.push(Number(companyId)); }
     const rows = raw.prepare(`${OFFICE_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY s.name, f.position, f.name, o.name`).all(...params);
@@ -555,6 +569,29 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return { office: getOffice(officeId), assignment: getAssignment(Number(id)) };
   }
 
+  /**
+   * Gives several offices to one company for the same dates, all or none: if any can't be
+   * assigned, none is, and the error names that office.
+   */
+  function assignMany(companyId, officeIds, input = {}, { scope = null, by = null } = {}) {
+    const ids = [...new Set((Array.isArray(officeIds) ? officeIds : []).map(Number))];
+    if (!ids.length || ids.some((id) => !Number.isInteger(id) || id <= 0)) throw fail(400, "Choose at least one office.");
+    if (ids.length > 200) throw fail(400, "At most 200 offices at a time.");
+    const done = [];
+    db.transaction(() => {
+      for (const id of ids) {
+        try {
+          done.push(assign(id, { ...input, companyId }, { scope, by }));
+        } catch (error) {
+          const office = getOffice(id, { scope });
+          if (office) error.message = `Office ${office.name} (${office.floorName}): ${error.message}`;
+          throw error;
+        }
+      }
+    });
+    return done;
+  }
+
   /** Changes an assignment's dates or notes (setting its end date ends it). */
   function updateAssignment(id, input = {}, { scope = null, by = null } = {}) {
     const existing = getAssignment(id, { scope });
@@ -638,7 +675,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     todayAt, rates, siteRate, companyRate, setSiteRate, setCompanyRate,
     listFloors, getFloor, createFloor, updateFloor, removeFloor, setPlan, clearPlan, setScale, planImage,
     listOffices, getOffice, createOffice, updateOffice, removeOffice,
-    getAssignment, assign, updateAssignment, removeAssignment,
+    getAssignment, assign, assignMany, updateAssignment, removeAssignment,
     forCompany, summary, heldBy
   };
 }

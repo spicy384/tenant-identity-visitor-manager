@@ -620,7 +620,16 @@ tr.is-picked td { background: var(--primary-soft); }
 .inline-label select { width: auto; min-width: 180px; }
 .floor-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
 @media (max-width: 960px) { .floor-layout { grid-template-columns: 1fr; } }
-.plan-pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px; box-shadow: var(--shadow-sm); overflow: auto; }
+.plan-viewer { position: relative; min-width: 0; }
+.plan-pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px; box-shadow: var(--shadow-sm); overflow: auto; max-height: calc(100vh - 210px); overscroll-behavior: contain; }
+.plan-pane.can-pan { cursor: grab; }
+.plan-pane.is-panning, .space-pan .plan-pane, .space-pan .plan-layer.is-drawing { cursor: grabbing; }
+.plan-pane.is-panning .plan-shape { cursor: grabbing; }
+.plan-zoom { position: absolute; top: 18px; right: 18px; display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-md); z-index: 2; }
+.plan-zoom button { border: 0; border-radius: 0; background: var(--surface); color: var(--text); min-width: 34px; min-height: 32px; padding: 2px 8px; font-weight: 700; }
+.plan-zoom button:hover { background: var(--surface-3); }
+.plan-zoom button + button { border-left: 1px solid var(--border-strong); }
+.plan-zoom-level { font-size: 0.78rem; min-width: 52px !important; font-variant-numeric: tabular-nums; }
 .plan-missing { min-height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
 /* The plan is always shown on white, as drawn, in light or dark. */
 .plan-wrap { position: relative; display: block; width: 100%; background: #fff; border-radius: var(--radius-sm); user-select: none; -webkit-user-select: none; }
@@ -629,7 +638,23 @@ tr.is-picked td { background: var(--primary-soft); }
 .plan-layer.is-drawing { cursor: crosshair; touch-action: none; }
 .plan-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .plan-shape { pointer-events: visiblePainted; fill: color-mix(in srgb, var(--office) 22%, transparent); stroke: var(--office); stroke-width: 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; cursor: pointer; }
-.plan-shape:hover, .plan-shape:focus-visible { fill: color-mix(in srgb, var(--office) 40%, transparent); outline: none; }
+.plan-shape:hover, .plan-shape:focus-visible { fill: color-mix(in srgb, var(--office) 40%, transparent); }
+/* No browser focus ring: on a shape in the stretched 1x1 drawing it becomes a huge oval (and
+   focus comes back to the shape when its dialog closes). Keyboard focus thickens the outline. */
+.plan-shape:focus { outline: none; }
+.plan-shape:focus-visible { stroke-width: 4; }
+.plan-shape.is-picked { --office: var(--primary); fill: color-mix(in srgb, var(--primary) 45%, transparent); stroke-width: 3; }
+.plan-shape.is-taken { --office: var(--office-unavailable); fill: color-mix(in srgb, var(--office) 14%, transparent); cursor: not-allowed; }
+.assign-offices .pick-toolbar { margin: 0; }
+.assign-offices .pick-toolbar select { width: auto; min-width: 200px; }
+.assign-offices .pick-toolbar input { flex: 1; min-width: 160px; }
+.pick-plan .plan-pane { max-height: 52vh; padding: 0; border-radius: var(--radius-sm); box-shadow: none; }
+.pick-plan .plan-zoom { top: 8px; right: 8px; }
+.pick-offices { max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px; }
+.pick-floor { font-size: 0.78rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; padding: 8px 6px 2px; }
+.pick-office { margin: 0; padding: 5px 6px; border-radius: 4px; font-weight: 400; }
+.pick-office.is-picked { background: var(--primary-soft); }
+.pick-summary { margin: 0; }
 .plan-shape.is-selected { stroke-width: 3; stroke-dasharray: 6 3; }
 .is-drawing .plan-shape { cursor: move; }
 .plan-draft { fill: color-mix(in srgb, var(--primary) 14%, transparent); stroke: var(--primary); stroke-width: 2; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; pointer-events: none; }

@@ -181,6 +181,11 @@ Home.
   double-click an office to open it. An office's outline is kept as shares of the plan, so it
   stays put at any size and when the plan is replaced. Offices can also be added without
   drawing and placed later.
+- **Zoom and pan.** The − and + buttons on the plan zoom in and out (up to 800%), and the
+  percentage between them fits the whole plan again; Ctrl or Cmd with the mouse wheel, or a
+  trackpad pinch, zooms where the pointer is. Drag the plan to move around it; while drawing,
+  hold Space and drag, or drag with the middle mouse button. Each floor keeps its zoom while you
+  work on it.
 - **Scale (optional).** **Set scale**: click the two ends of something whose real length you
   know (a wall, a dimension line) and give its length in feet. Each office's area is then
   measured from its outline and offered as a suggestion: it fills in the size of a new office
@@ -203,7 +208,10 @@ Home.
 - **Offices** lists every office at the chosen site with its floor, size, status, company,
   rate and monthly cost, totals underneath; filter by status or search.
 - **On a company's page:** its offices now, upcoming and before, the rate it pays, and its
-  space and rent now. A company that has an office now or later can't be deleted until those
+  space and rent now. **Assign offices** gives it offices from there: choose the dates, then
+  click free offices on a floor's plan (taken ones are greyed out) or tick them in the list,
+  across any floors, with their total size and monthly cost shown as you go; all of them are
+  assigned, or none if one can't be. A company that has an office now or later can't be deleted until those
   assignments end; merging companies moves their offices and history to the one kept.
 
 ## Expected visitors

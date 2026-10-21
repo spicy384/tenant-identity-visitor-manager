@@ -214,6 +214,26 @@ async function main() {
   check("unavailable: marked", r.status === 200 && r.data.office.status === "unavailable");
   check("unavailable: can't be assigned", (await manager.post(`/api/offices/${o105.id}/assignments`, { companyId: acme.id, startDate: "2020-01-01" })).status === 409);
 
+  // --- several at once, from the company --------------------------------------------------------------
+  const extra = [];
+  for (const name of ["106", "107"]) extra.push((await manager.post("/api/offices", { floorId: level1.id, name, sqft: 300 })).data.office);
+  r = (await manager.get(`/api/offices?site=${harbour.id}&freeFrom=2099-06-01`)).data.offices.map((o) => o.name).sort();
+  check("free: only offices that can be assigned for the dates", r.join() === "106,107", r.join());
+  r = (await manager.get(`/api/offices?site=${harbour.id}&freeFrom=2097-01-01&freeTo=2097-12-31`)).data.offices.map((o) => o.name).sort();
+  check("free: an office assigned only later is free before then", r.join() === "102,106,107", r.join());
+  check("free: dates are checked", (await manager.get("/api/offices?freeFrom=2099-13-01")).status === 400);
+  check("several: front desk can't", (await desk.post(`/api/companies/${globex.id}/offices`, { officeIds: extra.map((o) => o.id), startDate: "2030-01-01" })).status === 403);
+  r = await manager.post(`/api/companies/${globex.id}/offices`, { officeIds: [...extra.map((o) => o.id), o101.id], startDate: "2030-01-01" });
+  check("several: all or none, naming the office that can't", r.status === 409 && /^Office 101/.test(r.data.error)
+    && (await manager.get(`/api/offices/${extra[0].id}`)).data.office.assignments.length === 0, JSON.stringify(r.data));
+  r = await manager.post(`/api/companies/${globex.id}/offices`, { officeIds: extra.map((o) => o.id), startDate: "2030-01-01", endDate: "2030-12-31", notes: "Swing space" });
+  check("several: assigned to the company together", r.status === 200 && r.data.assigned === 2
+    && (await manager.get(`/api/offices/${extra[1].id}`)).data.office.assignments[0].companyName === "Globex");
+  for (const o of extra) {
+    for (const a of (await manager.get(`/api/offices/${o.id}`)).data.office.assignments) await manager.del(`/api/office-assignments/${a.id}`);
+    await manager.del(`/api/offices/${o.id}`);
+  }
+
   // --- what a company has ----------------------------------------------------------------------------
   r = (await lee.get(`/api/companies/${acme.id}/facilities`)).data;
   check("company: its offices now and later", r.offices.length === 2 && r.offices[0].when === "current" && r.offices[0].officeName === "101" && r.offices[1].when === "upcoming");

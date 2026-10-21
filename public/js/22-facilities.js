@@ -8,7 +8,8 @@
 
 // tool: rect, outline or scale; selected: the office being reshaped, vertex: its chosen point;
 // placing: an office not yet on the plan, being drawn; keys: the drawing tools' key handler.
-const facilitiesView = { floorId: null, drawing: false, tool: "rect", placing: null, selected: null, vertex: null, keys: null, floor: null, offices: [] };
+// zooms: each floor's zoom and position (planViewer); spaceDown: Space held, to pan while drawing.
+const facilitiesView = { floorId: null, drawing: false, tool: "rect", placing: null, selected: null, vertex: null, keys: null, floor: null, offices: [], zooms: new Map(), spaceDown: false };
 
 const OFFICE_STATUS = {
   available: { label: "Available", badge: "ok" },
@@ -220,8 +221,115 @@ function planPane(floor, offices) {
     renderHandles(plan);
     enableDrawing(plan);
   }
-  return h("div", { class: "plan-pane" }, h("div", { class: "plan-wrap" }, h("img", { src: `/api/floor-plans/${floor.planRef}`, alt: `Plan of ${floor.name}`, draggable: false }), layer));
+  if (!facilitiesView.zooms.has(floor.id)) facilitiesView.zooms.set(floor.id, { zoom: 1, left: 0, top: 0 });
+  return planViewer(h("div", { class: "plan-wrap" }, h("img", { src: `/api/floor-plans/${floor.planRef}`, alt: `Plan of ${floor.name}`, draggable: false }), layer),
+    facilitiesView.zooms.get(floor.id), { drawing: view.drawing });
 }
+
+const ZOOM_MAX = 8;
+
+/**
+ * A plan in a box that zooms (the buttons; Ctrl or Cmd with the mouse wheel; a trackpad pinch)
+ * and pans (drag the plan; while drawing, drag with the middle button or hold Space and drag).
+ * `view` ({ zoom, left, top }) keeps the zoom and position, so they survive the plan being
+ * redrawn after each change. Everything on the plan is placed in shares of it, so it scales too.
+ */
+function planViewer(wrap, view, { drawing = false } = {}) {
+  const pane = h("div", { class: `plan-pane${drawing ? "" : " can-pan"}` }, wrap);
+  const level = h("button", { type: "button", class: "plan-zoom-level", title: "Fit the whole plan", onclick: () => zoomTo(1) });
+  const controls = h("div", { class: "plan-zoom", role: "group", "aria-label": "Zoom" },
+    h("button", { type: "button", text: "−", title: "Zoom out", "aria-label": "Zoom out", onclick: () => zoomTo(view.zoom / 1.5) }),
+    level,
+    h("button", { type: "button", text: "+", title: "Zoom in", "aria-label": "Zoom in", onclick: () => zoomTo(view.zoom * 1.5) }));
+  const show = () => {
+    wrap.style.width = `${view.zoom * 100}%`;
+    level.textContent = `${Math.round(view.zoom * 100)}%`;
+    level.setAttribute("aria-label", `${Math.round(view.zoom * 100)}%: fit the whole plan`);
+  };
+  /** Zooms keeping the point (cx, cy) of the box where it is: the middle, or the mouse. */
+  function zoomTo(z, cx = pane.clientWidth / 2, cy = pane.clientHeight / 2) {
+    const next = Math.min(ZOOM_MAX, Math.max(1, z));
+    const ratio = next / view.zoom;
+    const left = (pane.scrollLeft + cx) * ratio - cx;
+    const top = (pane.scrollTop + cy) * ratio - cy;
+    view.zoom = next;
+    show();
+    pane.scrollLeft = left;
+    pane.scrollTop = top;
+  }
+  show();
+  pane.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const r = pane.getBoundingClientRect();
+    zoomTo(view.zoom * Math.exp(-e.deltaY * 0.002), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  pane.addEventListener("scroll", () => { view.left = pane.scrollLeft; view.top = pane.scrollTop; });
+  const restore = () => { pane.scrollLeft = view.left || 0; pane.scrollTop = view.top || 0; };
+  requestAnimationFrame(restore);
+  wrap.querySelector("img")?.addEventListener("load", restore);
+
+  // Panning. Capture starts only once the pointer moves, so a plain click still reaches an office.
+  let pan = null;
+  let swallowClick = false;
+  pane.addEventListener("pointerdown", (e) => {
+    const wanted = e.button === 1 || (e.button === 0 && (!drawing || facilitiesView.spaceDown));
+    if (!wanted) return;
+    if (e.button === 1 || drawing) e.preventDefault();
+    pan = { x: e.clientX, y: e.clientY, left: pane.scrollLeft, top: pane.scrollTop, moved: false, id: e.pointerId };
+  });
+  pane.addEventListener("pointermove", (e) => {
+    if (!pan) return;
+    const dx = e.clientX - pan.x;
+    const dy = e.clientY - pan.y;
+    if (!pan.moved && Math.hypot(dx, dy) > 4) {
+      pan.moved = true;
+      pane.setPointerCapture(pan.id);
+      pane.classList.add("is-panning");
+    }
+    if (pan.moved) {
+      pane.scrollLeft = pan.left - dx;
+      pane.scrollTop = pan.top - dy;
+    }
+  });
+  const stop = () => {
+    if (pan?.moved) {
+      pane.classList.remove("is-panning");
+      if (pane.hasPointerCapture(pan.id)) pane.releasePointerCapture(pan.id);
+      swallowClick = true;
+      setTimeout(() => { swallowClick = false; }, 0);
+    }
+    pan = null;
+  };
+  pane.addEventListener("pointerup", stop);
+  pane.addEventListener("pointercancel", stop);
+  pane.addEventListener("click", (e) => { if (swallowClick) { e.stopPropagation(); e.preventDefault(); } }, true);
+  // A click mustn't focus the box: focusing a scrollable box scrolls it into view, which moves
+  // the office out from under the pointer mid-click. (And the middle button would otherwise
+  // start the browser's own scrolling.)
+  pane.addEventListener("mousedown", (e) => e.preventDefault());
+  return h("div", { class: "plan-viewer" }, pane, controls);
+}
+
+// Space held down pans while drawing (as in drawing programs).
+document.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" || state.view !== "floors" || !facilitiesView.drawing) return;
+  if (document.querySelector("dialog[open]") || e.target.closest?.("input, textarea, select, button")) return;
+  e.preventDefault();
+  if (!facilitiesView.spaceDown) {
+    facilitiesView.spaceDown = true;
+    document.body.classList.add("space-pan");
+  }
+});
+document.addEventListener("keyup", (e) => {
+  if (e.code !== "Space") return;
+  facilitiesView.spaceDown = false;
+  document.body.classList.remove("space-pan");
+});
+window.addEventListener("blur", () => {
+  facilitiesView.spaceDown = false;
+  document.body.classList.remove("space-pan");
+});
 
 function drawOffice(plan, o) {
   const who = o.current?.companyName || o.next?.companyName || null;
@@ -260,8 +368,8 @@ function reshape(plan, item, points) {
   renderHandles(plan);
 }
 
-function planDot(x, y, attrs) {
-  const el = h("div", attrs);
+function planDot(x, y, attrs, ...children) {
+  const el = h("div", attrs, ...children);
   el.style.left = `${x * 100}%`;
   el.style.top = `${y * 100}%`;
   return el;
@@ -384,7 +492,8 @@ function enableDrawing(plan) {
   };
 
   layer.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return;
+    // The middle button and Space pan the plan instead (planViewer).
+    if (e.button !== 0 || view.spaceDown) return;
     e.preventDefault();
     const p = at(e);
     const item = plan.items.get(view.selected);
@@ -1062,7 +1171,8 @@ function companyOfficesPanel(company) {
         h("h3", { text: "Offices" }),
         h("div", { class: "btn-row" },
           h("span", { class: "small-text muted", text: data.rate === null ? "Pays each office's rate" : `Company rate ${fmtRate(data.rate)} a month` }),
-          editor ? h("button", { type: "button", class: "secondary small", text: data.rate === null ? "Set a rate" : "Change rate", onclick: async () => { if (await setCompanyRate({ companyId: company.id, name: company.name, rate: data.rate })) refresh(); } }) : null)),
+          editor ? h("button", { type: "button", class: "secondary small", text: data.rate === null ? "Set a rate" : "Change rate", onclick: async () => { if (await setCompanyRate({ companyId: company.id, name: company.name, rate: data.rate })) refresh(); } }) : null,
+          editor ? h("button", { type: "button", class: "primary small", text: "Assign offices", onclick: async () => { if (await assignOfficesToCompany(company, data.rate)) refresh(); } }) : null)),
       rows.length ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
         h("thead", {}, h("tr", {}, ["Office", "Floor", "Dates", "Sq ft", "Rate", "Monthly"].map((x) => h("th", { text: x })))),
         h("tbody", {}, rows),
@@ -1071,7 +1181,189 @@ function companyOfficesPanel(company) {
           h("td", { class: "num", text: Number(t.sqft).toLocaleString("en-US") }),
           h("td", {}),
           h("td", { class: "num" }, h("strong", { text: fmtMoney(t.monthly) })))) : null))
-        : h("p", { class: "muted small-text", text: editor ? "No offices. Assign one from Facilities > Floor plans or Offices." : "No offices." }));
+        : h("p", { class: "muted small-text", text: editor ? "No offices yet. Assign offices picks them from the floor plans or a list." : "No offices." }));
   }).catch((error) => panel.replaceChildren(h("h3", { text: "Offices" }), h("p", { class: "message error", text: error.message })));
   return panel;
+}
+
+/**
+ * Assigns offices to a company from its page: the dates first, then the offices free for them,
+ * picked on a floor's plan or from the list (any number, across floors). All or none are
+ * assigned. `companyRate` (or null) works out what they would cost.
+ */
+async function assignOfficesToCompany(company, companyRate) {
+  const picked = new Map();
+  const floorOffices = new Map();
+  let free = [];
+  const { floors } = await api(`/api/floors?${facilitySite()}`);
+  if (!floors.length) {
+    toast("There are no floors yet: add them under Facilities > Floor plans.", "error");
+    return null;
+  }
+  const from = h("input", { type: "date", value: todayISO(), required: true });
+  const to = h("input", { type: "date" });
+  const notes = h("input", { type: "text", placeholder: "Lease reference, terms…" });
+  const floorPick = h("select", { "aria-label": "Floor" });
+  const search = h("input", { type: "search", placeholder: "Find an office", "aria-label": "Find an office" });
+  const planBox = h("div", { class: "pick-plan" });
+  const list = h("div", { class: "pick-offices" });
+  const summary = h("p", { class: "pick-summary small-text" });
+  const rateOf = (o) => companyRate ?? o.askingRate;
+  const monthlyOf = (o) => (rateOf(o) !== null && o.sqft !== null ? o.sqft * rateOf(o) : null);
+  const floorLabel = (f) => (multiSite() && !state.site ? `${f.siteName}: ${f.name}` : f.name);
+
+  // The shapes on the plan shown, by office id, to recolour as offices are chosen; zoom per floor.
+  let shapesById = new Map();
+  const zooms = new Map();
+  const toggle = (o) => {
+    if (picked.has(o.id)) picked.delete(o.id);
+    else picked.set(o.id, o);
+    renderList();
+    paintPlan();
+    renderSummary();
+  };
+
+  function paintPlan() {
+    const freeIds = new Set(free.map((o) => o.id));
+    for (const [id, { shape, title, name }] of shapesById) {
+      const pick = freeIds.has(id);
+      shape.setAttribute("class", `plan-shape ${picked.has(id) ? "is-picked" : pick ? "status-available" : "is-taken"}`);
+      title.textContent = pick ? `${name}: ${picked.has(id) ? "chosen (click to leave out)" : "free (click to choose)"}` : `${name}: not free for those dates`;
+    }
+  }
+
+  function renderSummary() {
+    const chosen = [...picked.values()];
+    if (!chosen.length) {
+      summary.textContent = "No offices chosen yet.";
+      return;
+    }
+    const sqft = chosen.reduce((n, o) => n + (o.sqft || 0), 0);
+    const monthly = chosen.reduce((n, o) => n + (monthlyOf(o) || 0), 0);
+    const unknown = chosen.some((o) => monthlyOf(o) === null);
+    summary.replaceChildren(h("strong", { text: `${chosen.length} ${chosen.length === 1 ? "office" : "offices"}` }),
+      ` (${chosen.map((o) => o.name).join(", ")}): ${fmtSqft(sqft)}, about ${fmtMoney(monthly)} a month${companyRate !== null ? ` at ${company.name}'s rate` : ""}${unknown ? " (some have no size or rate)" : ""}.`);
+  }
+
+  function renderList() {
+    const floorId = Number(floorPick.value) || null;
+    const q = search.value.trim().toLowerCase();
+    const shown = free.filter((o) => (!floorId || o.floorId === floorId) && (!q || `${o.name} ${o.floorName}`.toLowerCase().includes(q)));
+    if (!shown.length) {
+      list.replaceChildren(h("p", { class: "muted small-text", text: free.length ? "No free offices match." : "No offices are free for those dates." }));
+      return;
+    }
+    const rows = [];
+    let lastFloor = null;
+    for (const o of shown) {
+      if (!floorId && o.floorId !== lastFloor) {
+        rows.push(h("div", { class: "pick-floor", text: officeWhere(o) }));
+        lastFloor = o.floorId;
+      }
+      const box = h("input", { type: "checkbox", checked: picked.has(o.id), onchange: () => toggle(o) });
+      const facts = [o.sqft !== null ? fmtSqft(o.sqft) : "no size", rateOf(o) !== null ? `${fmtRate(rateOf(o))}, ${fmtMoney(monthlyOf(o))} a month` : "no rate",
+        o.current ? `${o.current.companyName} until ${fmtDay(o.current.endDate)}` : null].filter(Boolean).join(" · ");
+      rows.push(h("label", { class: `check-row pick-office${picked.has(o.id) ? " is-picked" : ""}` }, box, h("span", {}, h("strong", { text: o.name }), h("span", { class: "muted small-text", text: ` ${facts}` }))));
+    }
+    list.replaceChildren(...rows);
+  }
+
+  async function renderPlan() {
+    const floor = floors.find((f) => f.id === Number(floorPick.value));
+    planBox.hidden = !floor;
+    if (!floor) return;
+    if (!floor.planRef) {
+      planBox.replaceChildren(h("p", { class: "muted small-text", text: "This floor has no plan; choose its offices from the list." }));
+      return;
+    }
+    if (!floorOffices.has(floor.id)) floorOffices.set(floor.id, (await api(`/api/floors/${floor.id}`)).offices);
+    if (Number(floorPick.value) !== floor.id) return; // another floor was chosen meanwhile
+    const shapes = svgEl("svg", { class: "plan-svg", viewBox: "0 0 1 1", preserveAspectRatio: "none" });
+    const labels = h("div", { class: "plan-labels" });
+    shapesById = new Map();
+    for (const o of floorOffices.get(floor.id).filter((x) => x.points)) {
+      const shape = svgEl("polygon", { points: pointsAttr(o.points) });
+      const title = svgEl("title");
+      shape.append(title);
+      // Looked up when clicked, so it follows the dates as they change.
+      shape.addEventListener("click", () => {
+        const pick = free.find((x) => x.id === o.id);
+        if (pick) toggle(pick);
+      });
+      shapes.append(shape);
+      shapesById.set(o.id, { shape, title, name: o.name });
+      const [x, y] = labelPoint(o.points, planAspect(floor));
+      labels.append(planDot(x, y, { class: "plan-label" }, h("span", { class: "plan-label-name", text: o.name })));
+    }
+    paintPlan();
+    if (!zooms.has(floor.id)) zooms.set(floor.id, { zoom: 1, left: 0, top: 0 });
+    planBox.replaceChildren(planViewer(h("div", { class: "plan-wrap" }, h("img", { src: `/api/floor-plans/${floor.planRef}`, alt: `Plan of ${floor.name}`, draggable: false }), h("div", { class: "plan-layer" }, shapes, labels)), zooms.get(floor.id)));
+  }
+
+  /** The list, the plan (rebuilt only when the floor changes) and the summary. */
+  let planFloor = null;
+  function render() {
+    renderList();
+    if (planFloor !== floorPick.value) {
+      planFloor = floorPick.value;
+      renderPlan();
+    } else {
+      paintPlan();
+    }
+    renderSummary();
+  }
+
+  async function loadFree() {
+    if (!from.value) return;
+    try {
+      const params = new URLSearchParams({ ...siteQuery(), freeFrom: from.value });
+      if (to.value) params.set("freeTo", to.value);
+      free = (await api(`/api/offices?${params}`)).offices;
+    } catch (error) {
+      list.replaceChildren(h("p", { class: "message error", text: error.message }));
+      return;
+    }
+    // Offices no longer free for the new dates drop out of the choice.
+    for (const id of [...picked.keys()]) if (!free.some((o) => o.id === id)) picked.delete(id);
+    const count = (f) => free.filter((o) => o.floorId === f.id).length;
+    const before = floorPick.value;
+    floorPick.replaceChildren(h("option", { value: "", text: `Every floor (${free.length} free)` }), ...floors.map((f) => h("option", { value: String(f.id), text: `${floorLabel(f)} (${count(f)} free)` })));
+    floorPick.value = before || String((floors.find((f) => count(f) && f.planRef) || floors.find(count) || floors[0]).id);
+    render();
+  }
+
+  from.addEventListener("change", loadFree);
+  to.addEventListener("change", loadFree);
+  floorPick.addEventListener("change", render);
+  search.addEventListener("input", debounce(renderList, 150));
+
+  const body = h("div", { class: "stack assign-offices" },
+    h("div", { class: "form-grid" },
+      h("label", { class: "half" }, h("span", { text: "From" }), from),
+      h("label", { class: "half" }, h("span", { text: "To (the last day)" }), to, h("span", { class: "hint", text: "Empty for no end date." })),
+      h("label", {}, h("span", { text: "Notes" }), notes)),
+    h("div", { class: "toolbar pick-toolbar" }, floorPick, search),
+    planBox,
+    list,
+    summary);
+  const done = await openDialog({
+    title: `Assign offices to ${company.name}`,
+    body,
+    wide: true,
+    onOpen: () => loadFree(),
+    actions: [
+      { label: "Cancel", value: null },
+      {
+        label: "Assign",
+        kind: "primary",
+        onClick: async () => {
+          if (!from.value) throw new Error("Give the start date.");
+          if (!picked.size) throw new Error("Choose at least one office: click it on the plan or tick it in the list.");
+          return api(`/api/companies/${company.id}/offices`, { method: "POST", body: { officeIds: [...picked.keys()], startDate: from.value, endDate: to.value || null, notes: notes.value } });
+        }
+      }
+    ]
+  });
+  if (done) toast(`${done.assigned} ${done.assigned === 1 ? "office" : "offices"} assigned to ${company.name}.`);
+  return done;
 }

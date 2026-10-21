@@ -122,7 +122,8 @@ function createFacilityRoutes({ access, facilities, directory, sites, auditFrom 
   router.get("/api/offices", readFacilities, (req, res) => {
     const status = str(req.query.status, 20);
     if (status && !STATUSES.includes(status)) throw fail(400, `Status is one of: ${STATUSES.join(", ")}.`);
-    res.json({ offices: facilities.listOffices({ ...scoped(req), siteId: siteParam(req, req.query.site || req.query.siteId), floorId: positiveInt(req.query.floorId), status }) });
+    res.json({ offices: facilities.listOffices({ ...scoped(req), siteId: siteParam(req, req.query.site || req.query.siteId), floorId: positiveInt(req.query.floorId), status,
+      freeFrom: str(req.query.freeFrom, 10) || null, freeTo: str(req.query.freeTo, 10) || null }) });
   });
 
   router.get("/api/offices/:id", readFacilities, (req, res) => {
@@ -191,6 +192,16 @@ function createFacilityRoutes({ access, facilities, directory, sites, auditFrom 
     const rate = facilities.setCompanyRate(company.id, req.body?.rate);
     auditFrom(req, "facilities.company_rate", company.name, money(rate));
     res.json({ ok: true, rate });
+  });
+
+  /** Assigns several offices to a company for the same dates (all or none): { officeIds, startDate, endDate, notes }. */
+  router.post("/api/companies/:id/offices", editFacilities, (req, res) => {
+    const company = directory.getCompany(idOf(req), { sites: req.ctx.sites });
+    if (!company) throw fail(404, "No such company, or not at your sites.");
+    const done = facilities.assignMany(company.id, req.body?.officeIds, req.body || {}, { ...scoped(req), by: staffName(req) });
+    const first = done[0].assignment;
+    auditFrom(req, "office.assign", company.name, `${done.map((d) => `${d.office.floorName}: ${d.office.name}`).join(", ")} from ${first.startDate}${first.endDate ? ` to ${first.endDate}` : ""}`);
+    res.json({ ok: true, assigned: done.length });
   });
 
   /** A company's offices (now, later and before), its own rate, and what it pays a month now. */

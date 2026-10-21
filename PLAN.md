@@ -456,6 +456,14 @@ full width) and scale_line, PUT /api/floors/:id/scale, measuredSqft on offices (
 scale_feet^2 x height/width). The plan is drawn as SVG polygons (viewBox 0 0 1 1, stretched,
 non-scaling strokes) with HTML labels at the point inside each outline farthest from its edges.
 
+Then (same day, asked for by the user): Assign offices on a company's page (GET /api/offices
+with freeFrom/freeTo for offices free for the dates; POST /api/companies/:id/offices assigns
+several, all or none; offices carry askingRate), picked on the plan or from a list; zoom and pan
+on the plans (planViewer: the plan's width is the zoom, inside a scrolling box; drag pans, Space
+or the middle button while drawing). Fixed: closing an office's dialog drew a huge oval (the
+browser's focus ring on the shape, stretched by the 1x1 drawing), and a click on a plan in a
+dialog scrolled it (clicking focused the scrolling box) so the click missed.
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,
