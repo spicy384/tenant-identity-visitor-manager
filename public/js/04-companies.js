@@ -1,7 +1,8 @@
 // 04-companies.js: the companies list, a company's details and people, and the person
 // dialog (also used by the People page).
 
-const companiesView = { selected: null };
+// picking: choosing several (21-bulk.js); picked: id -> the company as listed.
+const companiesView = { selected: null, picking: false, picked: new Map() };
 
 async function loadCompanies() {
   const q = $("companies-search").value.trim();
@@ -17,12 +18,17 @@ async function loadCompanies() {
   for (const c of data.companies) {
     const where = (c.sites || []).filter((s) => !state.site || String(s.siteId) === String(state.site));
     const sub = [multiSite() && !state.site ? where.map((s) => s.siteName).join(", ") : where.map((s) => s.suite).filter(Boolean).join(", "), `${c.peopleCount} ${c.peopleCount === 1 ? "person" : "people"}`].filter(Boolean).join(" · ");
+    if (companiesView.picking) {
+      list.append(h("li", {}, companyPickRow(c, sub)));
+      continue;
+    }
     list.append(h("li", {}, h("a", {
       href: `#company/${c.id}`,
       class: `${String(companiesView.selected) === String(c.id) ? "is-active" : ""}${c.active ? "" : " inactive"}`
     }, h("span", { class: "nav-list-main" }, h("strong", { text: c.name }), h("span", { class: "muted", text: sub })))));
   }
   $("companies-count").textContent = data.total > data.companies.length ? `Showing ${data.companies.length} of ${data.total}. Search to narrow the list.` : "";
+  renderCompanyActions();
 }
 
 $("companies-search").addEventListener("input", debounce(loadCompanies, 250));
@@ -56,15 +62,30 @@ function peopleColumns(withCompany = false) {
   return cols;
 }
 
-function peopleTable(people, { withCompany = false, onOpen } = {}) {
+/**
+ * The people table. With `selection` ({ has(id), set(ids, on) }), each row and the header
+ * get a tick box for choosing several (21-bulk.js).
+ */
+function peopleTable(people, { withCompany = false, onOpen, selection = null } = {}) {
   const cols = peopleColumns(withCompany);
+  const tick = (checked, label, onToggle) => {
+    const box = h("input", { type: "checkbox", "aria-label": label });
+    box.checked = checked;
+    box.addEventListener("click", (e) => e.stopPropagation());
+    box.addEventListener("change", () => onToggle(box.checked));
+    return h("td", { class: "pick-cell", onclick: (e) => e.stopPropagation() }, box);
+  };
+  const all = selection && people.length > 0 && people.every((p) => selection.has(p.id));
+  const headTick = selection ? (() => { const cell = tick(all, "Choose everyone on this page", (on) => selection.set(people.map((p) => p.id), on)); return h("th", { class: "pick-cell" }, cell.firstChild); })() : null;
   return h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-    h("thead", {}, h("tr", {}, cols.map((c) => h("th", { text: c.label })))),
+    h("thead", {}, h("tr", {}, headTick, cols.map((c) => h("th", { text: c.label })))),
     h("tbody", {}, people.length ? people.map((p) => {
-      const row = h("tr", { class: `clickable${p.active ? "" : " inactive"}` }, cols.map((c, i) => h("td", {}, c.cell(p), i === 0 && !p.active ? h("span", { class: "badge muted", text: "Inactive" }) : null)));
+      const row = h("tr", { class: `clickable${p.active ? "" : " inactive"}${selection?.has(p.id) ? " is-picked" : ""}` },
+        selection ? tick(selection.has(p.id), `Choose ${personName(p)}`, (on) => selection.set([p.id], on)) : null,
+        cols.map((c, i) => h("td", {}, c.cell(p), i === 0 && !p.active ? h("span", { class: "badge muted", text: "Inactive" }) : null)));
       row.addEventListener("click", () => onOpen(p));
       return row;
-    }) : emptyRow(cols.length, "No people yet."))));
+    }) : emptyRow(cols.length + (selection ? 1 : 0), "No people yet."))));
 }
 
 async function showCompanyDetail(id) {

@@ -4,13 +4,21 @@
 async function renderAccount() {
   const body = clear($("account-body"));
   const me = state.me;
+  const appearance = h("select", { "aria-label": "Appearance" },
+    h("option", { value: "auto", text: "Match this device" }), h("option", { value: "light", text: "Light" }), h("option", { value: "dark", text: "Dark" }));
+  appearance.value = chosenTheme();
+  appearance.addEventListener("change", () => { setTheme(appearance.value); toast("Saved."); });
   body.append(h("div", { class: "panel" },
     h("h3", { text: me.displayName || me.username }),
     h("dl", { class: "facts inline-facts" },
       h("dt", { text: "Username" }), h("dd", { text: me.username }),
       h("dt", { text: "Role" }), h("dd", { text: me.roleName || me.role }),
       multiSite() || me.sites ? [h("dt", { text: "Sites" }), h("dd", { text: me.sites ? state.config.sites.map((x) => x.name).join(", ") : "Every site" })] : null,
-      h("dt", { text: "Signs in with" }), h("dd", { text: me.provider === "entra" ? "Microsoft Entra ID" : "Password" }))));
+      h("dt", { text: "Signs in with" }), h("dd", { text: me.provider === "entra" ? "Microsoft Entra ID" : "Password" }))),
+    h("div", { class: "panel" },
+      h("h3", { text: "Appearance" }),
+      h("p", { class: "muted", text: "Light or dark, or as this device is set. The button with the moon or sun in the header switches too. Kept with your account, so it follows you." }),
+      h("label", { class: "half" }, h("span", { text: "Show" }), appearance)));
 
   if (me.provider === "local") {
     body.append(settingsForm({

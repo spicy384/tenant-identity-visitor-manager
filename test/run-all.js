@@ -14,7 +14,8 @@ const SUITES = [
   "events.test.js",
   "clearance.test.js",
   "templates.test.js",
-  "import.test.js"
+  "import.test.js",
+  "bulk.test.js"
 ];
 
 let failed = 0;

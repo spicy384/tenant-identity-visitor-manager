@@ -493,6 +493,86 @@ app.delete("/api/people/:id", admin, (req, res) => {
   res.json({ ok: true });
 });
 
+// --- several at once: merging companies, bulk changes and deletes ----------------------------------
+
+/** Up to 1,000 record ids from a request body, each once. */
+function idsFrom(body) {
+  const ids = [...new Set((Array.isArray(body?.ids) ? body.ids : []).map(Number))].filter((n) => Number.isInteger(n) && n > 0);
+  if (!ids.length) throw fail(400, "Choose at least one.");
+  if (ids.length > 1000) throw fail(400, "At most 1,000 at once.");
+  return ids;
+}
+
+/** The change to make to each: no names (each keeps its own), nothing that isn't a plain field. */
+function bulkPatch(body, refusedKeys) {
+  const patch = body?.patch && typeof body.patch === "object" ? { ...body.patch } : null;
+  if (!patch || !Object.keys(patch).length) throw fail(400, "Choose what to change.");
+  const refused = refusedKeys.filter((k) => patch[k] !== undefined);
+  if (refused.length) throw fail(400, "Each keeps its own name: change names one at a time.");
+  return patch;
+}
+
+const personName = (p) => `${p.firstName} ${p.lastName}`;
+
+app.post("/api/companies/merge", editDir, (req, res) => {
+  const body = req.body || {};
+  const intoId = positiveInt(body.intoId);
+  if (!intoId || !directory.getCompany(intoId, { sites: req.ctx.sites })) throw fail(404, "No such company to merge into.");
+  const input = body.company && typeof body.company === "object" ? body.company : {};
+  const result = directory.mergeCompanies(intoId, body.fromIds, input, writePlan(req.ctx, "company", input, intoId));
+  auditFrom(req, "company.merge", result.company.name, `merged in ${result.merged.join(", ")}; ${result.peopleMoved} people moved`);
+  res.json({ ok: true, company: recordOut(req.ctx, "company", result.company), merged: result.merged, peopleMoved: result.peopleMoved });
+});
+
+app.post("/api/companies/bulk", editDir, (req, res) => {
+  const ids = idsFrom(req.body);
+  const patch = bulkPatch(req.body, ["name"]);
+  const names = ids.map((id) => directory.getCompany(id, { sites: req.ctx.sites })?.name || `Company ${id}`);
+  const counts = importRows(ids, (id) => {
+    if (!directory.getCompany(id, { sites: req.ctx.sites })) throw fail(404, "No such company, or it is at a site this account can't see.");
+    directory.updateCompany(id, patch, writePlan(req.ctx, "company", patch, id));
+    return "updated";
+  }, (i) => names[i], "changed");
+  auditFrom(req, "company.bulk_update", `${counts.updated} companies`, changedKeys(patch));
+  res.json({ ok: true, updated: counts.updated });
+});
+
+app.post("/api/companies/bulk-delete", admin, (req, res) => {
+  const ids = idsFrom(req.body);
+  const found = ids.map((id) => directory.getCompany(id));
+  if (found.some((c) => !c)) throw fail(404, "One of those companies doesn't exist.");
+  for (const c of found) noBadgesOut("person", directory.listPeople({ companyId: c.id, includeInactive: true, limit: 100000 }).records.map((p) => p.id), `People at ${c.name}`);
+  let peopleRemoved = 0;
+  db.transaction(() => { for (const c of found) peopleRemoved += directory.deleteCompany(c.id).peopleRemoved; });
+  clearance.sweepDigits();
+  auditFrom(req, "company.remove", `${found.length} companies`, `${found.map((c) => c.name).join(", ")}; ${peopleRemoved} people removed with them`);
+  res.json({ ok: true, deleted: found.length, peopleRemoved });
+});
+
+app.post("/api/people/bulk", editDir, (req, res) => {
+  const ids = idsFrom(req.body);
+  const patch = bulkPatch(req.body, ["firstName", "lastName", "preferredName"]);
+  const names = ids.map((id) => { const p = directory.getPerson(id, { sites: req.ctx.sites }); return p ? personName(p) : `Person ${id}`; });
+  const counts = importRows(ids, (id) => {
+    if (!directory.getPerson(id, { sites: req.ctx.sites })) throw fail(404, "No such person, or at a site this account can't see.");
+    directory.updatePerson(id, patch, writePlan(req.ctx, "person", patch, id));
+    return "updated";
+  }, (i) => names[i], "changed");
+  auditFrom(req, "person.bulk_update", `${counts.updated} people`, changedKeys(patch));
+  res.json({ ok: true, updated: counts.updated });
+});
+
+app.post("/api/people/bulk-delete", admin, (req, res) => {
+  const ids = idsFrom(req.body);
+  const found = ids.map((id) => directory.getPerson(id));
+  if (found.some((p) => !p)) throw fail(404, "One of those people doesn't exist.");
+  noBadgesOut("person", found.map((p) => p.id), found.length === 1 ? personName(found[0]) : "Some of them");
+  db.transaction(() => { for (const p of found) directory.deletePerson(p.id); });
+  clearance.sweepDigits();
+  auditFrom(req, "person.remove", `${found.length} people`, found.map(personName).slice(0, 50).join(", "));
+  res.json({ ok: true, deleted: found.length });
+});
+
 // --- CSV export and import ------------------------------------------------------------------
 
 const yesNo = (v) => (v === true ? "yes" : v === false ? "no" : "");
@@ -583,7 +663,7 @@ function rowPatch(row, columns, writable) {
  * Runs `fn(row)` for every row in one transaction; any failure undoes the lot. `where(i)`
  * names a row in the problems listed: a CSV line by default (the header is line 1).
  */
-function importRows(rows, fn, where = (i) => `Line ${i + 2}`) {
+function importRows(rows, fn, where = (i) => `Line ${i + 2}`, verb = "imported") {
   const errors = [];
   const counts = { added: 0, updated: 0 };
   try {
@@ -600,7 +680,7 @@ function importRows(rows, fn, where = (i) => `Line ${i + 2}`) {
   } catch (error) {
     if (!errors.length) throw error;
     const shown = errors.slice(0, 10).join("\n");
-    throw fail(400, `Nothing was imported. ${errors.length} row${errors.length === 1 ? " has" : "s have"} a problem:\n${shown}${errors.length > 10 ? `\n...and ${errors.length - 10} more.` : ""}`);
+    throw fail(400, `Nothing was ${verb}. ${errors.length} ${verb === "imported" ? "row" : "of them"}${errors.length === 1 ? (verb === "imported" ? " has" : " has") : (verb === "imported" ? "s have" : " have")} a problem:\n${shown}${errors.length > 10 ? `\n...and ${errors.length - 10} more.` : ""}`);
   }
   return counts;
 }
@@ -998,7 +1078,7 @@ app.use(createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom,
 // The clearance routes first: they mark everything under /api/clearance no-store, the
 // level list the badge routes answer included.
 app.use(clearanceRoutes.router);
-app.use(createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, admin, auditFrom }));
+app.use(createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, admin, auditFrom, transaction: (fn) => db.transaction(fn) }));
 
 app.use("/api", (req, res) => {
   res.status(404).json({ error: "Not found." });

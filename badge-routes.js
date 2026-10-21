@@ -31,7 +31,7 @@ function positiveInt(value, fallback = null) {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-function createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, admin, auditFrom }) {
+function createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, admin, auditFrom, transaction = (fn) => fn() }) {
   const router = express.Router();
   const staffName = (req) => req.user?.displayName || req.user?.username || null;
 
@@ -182,6 +182,68 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const badge = badges.remove(positiveInt(req.params.id));
     auditFrom(req, "badge.remove", badge.number);
     res.json({ ok: true });
+  });
+
+  // --- several badges at once (Security) ---------------------------------------------------------
+
+  function badgeIds(body) {
+    const ids = [...new Set((Array.isArray(body?.ids) ? body.ids : []).map(Number))].filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length) throw fail(400, "Choose at least one badge.");
+    if (ids.length > 1000) throw fail(400, "At most 1,000 badges at once.");
+    return ids;
+  }
+
+  /** Runs `fn` for each badge in one transaction: if any fails, none changes, and each problem is named. */
+  function allOrNothing(ids, fn) {
+    const errors = [];
+    let done = 0;
+    try {
+      transaction(() => {
+        for (const id of ids) {
+          try {
+            fn(id);
+            done += 1;
+          } catch (error) {
+            const number = badges.get(id)?.number;
+            errors.push(`${number ? `Badge ${number}` : `Badge ${id}`}: ${error.message}`);
+          }
+        }
+        if (errors.length) throw fail(400, "rollback");
+      });
+    } catch (error) {
+      if (!errors.length) throw error;
+      throw fail(409, `Nothing was changed. ${errors.length} of them ${errors.length === 1 ? "has" : "have"} a problem:\n${errors.slice(0, 10).join("\n")}${errors.length > 10 ? `\n...and ${errors.length - 10} more.` : ""}`);
+    }
+    return done;
+  }
+
+  const BULK_KEYS = ["type", "classificationId", "clearanceLevelId", "templateRef", "siteIds", "temporary", "status", "notes"];
+
+  /**
+   * Changes the same things on several badges: move them to another type (visitor, tenant,
+   * personnel), classification or level, the sites they are valid at, temporary, status, notes.
+   * A badge that is out can't change its type, classification, level or temporary flag.
+   */
+  router.post("/api/badges/bulk", manageBadges, (req, res) => {
+    const ids = badgeIds(req.body);
+    const patch = req.body?.patch && typeof req.body.patch === "object" ? req.body.patch : {};
+    const input = Object.fromEntries(BULK_KEYS.filter((k) => patch[k] !== undefined).map((k) => [k, patch[k]]));
+    if (!Object.keys(input).length) throw fail(400, "Choose what to change.");
+    const done = allOrNothing(ids, (id) => {
+      const badge = badges.get(id, { sites: req.ctx.sites });
+      if (!badge) throw fail(404, "no such badge, or not at your sites.");
+      badges.update(id, levelInput(req, input, input.type || badge.type), { sites: req.ctx.sites });
+    });
+    auditFrom(req, "badge.bulk_update", `${done} badges`, Object.keys(input).join(", "));
+    res.json({ ok: true, updated: done });
+  });
+
+  router.post("/api/badges/bulk-delete", manageBadges, (req, res) => {
+    const ids = badgeIds(req.body);
+    const numbers = [];
+    const done = allOrNothing(ids, (id) => { numbers.push(badges.remove(id, { sites: req.ctx.sites }).number); });
+    auditFrom(req, "badge.remove", `${done} badges`, numbers.slice(0, 50).join(", "));
+    res.json({ ok: true, deleted: done });
   });
 
   router.post("/api/badges/:id/assign", editBadges, (req, res) => {

@@ -1,6 +1,6 @@
 /* ============================================================
    Design tokens (the palette of the DMARC analyzer and PBX
-   Manager; dark follows the device setting)
+   Manager; light or dark as chosen, else as the device is set)
    ============================================================ */
 :root {
   color-scheme: light;
@@ -39,8 +39,41 @@
   --tap: 44px;
 }
 
+/* Dark: chosen in the app (data-theme on <html>, 00-theme.js), or the device's setting when
+   nothing is chosen. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #131211;
+  --surface: #1c1b19;
+  --surface-2: #232220;
+  --surface-3: #2b2927;
+  --border: #302e2b;
+  --border-strong: #433f3a;
+  --text: #ece8e2;
+  --text-muted: #aca59c;
+  --primary: #6aabf7;
+  --primary-hover: #9cc6fa;
+  --primary-soft: #272b30;
+  --primary-ring: rgba(106, 171, 247, 0.4);
+  --primary-fg: #121417;
+  --danger: #f87171;
+  --danger-hover: #fca5a5;
+  --danger-soft: #2d1e1c;
+  --danger-fg: #260a0c;
+  --success: #34d399;
+  --success-soft: #1a2a23;
+  --warn: #fbbf24;
+  --warn-soft: #2c2516;
+  --secondary-bg: #2b2927;
+  --secondary-hover: #36332f;
+  --secondary-text: #ece8e2;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #131211;
     --surface: #1c1b19;
@@ -531,3 +564,26 @@ a.dash-row:hover, .dash-add-row:hover { background: var(--surface-3); text-decor
 .import-match-source { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .message.pre { white-space: pre-wrap; }
 @media (max-width: 600px) { .import-match-row { grid-template-columns: 1fr; gap: 4px; } }
+
+/* Choosing several: companies and people */
+.bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 10px; border: 1px solid var(--primary); background: var(--primary-soft); border-radius: var(--radius-sm); }
+.company-pick { display: flex; flex-direction: row; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); font-weight: 400; cursor: pointer; min-height: var(--tap); }
+.company-pick:hover { background: var(--surface-3); }
+.company-pick.is-picked { background: var(--primary-soft); }
+.company-pick.inactive { opacity: 0.55; }
+.pick-cell { width: 36px; padding-right: 0; }
+tr.is-picked td { background: var(--primary-soft); }
+.merge-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; font-weight: 400; }
+.chip { min-height: 28px; padding: 0 10px; border-radius: 999px; background: var(--secondary-bg); color: var(--secondary-text); font-size: 0.82rem; font-weight: 600; }
+.bulk-fields { display: flex; flex-direction: column; gap: 4px; }
+.bulk-field { display: grid; grid-template-columns: minmax(160px, 240px) minmax(0, 1fr); gap: 12px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.bulk-field .check-row { min-height: 0; }
+@media (max-width: 600px) { .bulk-field { grid-template-columns: 1fr; } }
+
+/* The light/dark button in the header */
+.icon-btn { display: inline-grid; place-items: center; width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 999px; background: var(--secondary-bg); color: var(--secondary-text); }
+.icon-btn:hover { background: var(--secondary-hover); }
+.icon-btn svg { width: 18px; height: 18px; }
+#theme-button .theme-sun { display: none; }
+#theme-button.is-dark .theme-sun { display: block; }
+#theme-button.is-dark .theme-moon { display: none; }

@@ -1,6 +1,7 @@
 /**
  * Each person's own preferences, kept on the server so they follow them to any device: the
- * site they last chose in the header, and the modules on their dashboard (Home), in order.
+ * site they last chose in the header, the modules on their dashboard (Home), in order, and
+ * light or dark (or as the device is set).
  *
  * A module is offered only to roles that may see what it shows; one a person can no longer
  * see (their role changed) is left out of what they get back, and refused when saved.
@@ -11,6 +12,8 @@ function fail(status, message) {
   error.status = status;
   return error;
 }
+
+const THEMES = ["auto", "light", "dark"];
 
 function createPrefs({ db, access }) {
   const securityOrAdmin = (ctx) => (access.isSecurity(ctx) || ctx.isAdmin) && access.canSeeClearances(ctx);
@@ -43,7 +46,8 @@ function createPrefs({ db, access }) {
     const allowed = new Set(available(ctx));
     const site = stored.site && (!ctx.sites || ctx.sites.has(Number(stored.site))) ? Number(stored.site) : null;
     const dashboard = Array.isArray(stored.dashboard) ? stored.dashboard.filter((id) => allowed.has(id)) : defaults(ctx);
-    return { site, dashboard, available: [...allowed], defaults: defaults(ctx) };
+    const theme = THEMES.includes(stored.theme) ? stored.theme : "auto";
+    return { site, dashboard, theme, available: [...allowed], defaults: defaults(ctx) };
   }
 
   /** Saves what is given: site (a site id, or null for all their sites) and dashboard (module ids, or null for the defaults). */
@@ -58,6 +62,10 @@ function createPrefs({ db, access }) {
         if (ctx.sites && !ctx.sites.has(id)) throw fail(403, "This account can't see that site.");
         next.site = id;
       }
+    }
+    if (patch.theme !== undefined) {
+      if (!THEMES.includes(patch.theme)) throw fail(400, "The theme is auto, light or dark.");
+      next.theme = patch.theme;
     }
     if (patch.dashboard !== undefined) {
       if (patch.dashboard === null) delete next.dashboard;

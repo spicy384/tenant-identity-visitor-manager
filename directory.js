@@ -294,6 +294,54 @@ function createDirectory({ db, fields }) {
     return getCompany(id);
   }
 
+  /**
+   * Merges companies \`fromIds\` into \`intoId\`: their people, visitors' links, visits and
+   * visitor events move to it, fields added to one of them alone move with them, and then
+   * they are deleted. \`input\` (the kept company's name, sites, phone, custom fields, ...) is
+   * applied last, so it may take a merged company's name. All or nothing.
+   */
+  function mergeCompanies(intoId, fromIds, input = {}, { custom = new Map(), editable = [], callerSites = null } = {}) {
+    const into = getCompany(intoId, { sites: callerSites });
+    if (!into) throw fail(404, "No such company to merge into.");
+    const from = [...new Set((fromIds || []).map(Number))].filter((id) => id !== into.id);
+    if (!from.length) throw fail(400, "Choose at least one other company to merge in.");
+    if (from.length > 50) throw fail(400, "Merge at most 50 companies at once.");
+    const merged = from.map((id) => getCompany(id, { sites: callerSites }));
+    if (merged.some((c) => !c)) throw fail(404, "One of those companies doesn't exist, or is at a site this account can't see.");
+    const ids = merged.map((c) => c.id);
+    const marks = ids.map(() => "?").join(",");
+    const now = Date.now();
+    let peopleMoved = 0;
+    db.transaction(() => {
+      peopleMoved = raw.prepare(`UPDATE people SET company_id = ?, updated_at = ? WHERE company_id IN (${marks})`).run(into.id, now, ...ids).changes;
+      // A visitor linked to both keeps the kept company's link.
+      raw.prepare(`INSERT OR IGNORE INTO visitor_links (visitor_id, company_id, host_id, notes, created_at)
+        SELECT visitor_id, ?, host_id, notes, created_at FROM visitor_links WHERE company_id IN (${marks})`).run(into.id, ...ids);
+      raw.prepare(`DELETE FROM visitor_links WHERE company_id IN (${marks})`).run(...ids);
+      raw.prepare(`UPDATE visits SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
+      raw.prepare(`UPDATE visitor_events SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
+      // Fields added to a merged company alone come along, with their values.
+      for (const id of ids) {
+        const own = raw.prepare("SELECT id FROM field_definitions WHERE entity = 'company' AND record_id = ?").all(id).map((r) => r.id);
+        for (const fid of own) {
+          raw.prepare("UPDATE field_values SET record_id = ? WHERE field_id = ? AND record_id = ?").run(into.id, fid, id);
+          raw.prepare("UPDATE field_definitions SET record_id = ? WHERE id = ?").run(into.id, fid);
+        }
+        fields.forgetRecord("company", id);
+      }
+      raw.prepare(`DELETE FROM companies WHERE id IN (${marks})`).run(...ids);
+      // The sites: as given, else every site any of them was at (the kept company's suite first).
+      const sitesInput = input.sites !== undefined ? input.sites : (() => {
+        const bySite = new Map();
+        for (const c of [into, ...merged]) for (const s of c.sites) if (!bySite.has(s.siteId) || (!bySite.get(s.siteId).suite && s.suite)) bySite.set(s.siteId, { siteId: s.siteId, suite: s.suite || null });
+        return [...bySite.values()];
+      })();
+      updateCompany(into.id, { ...input, sites: sitesInput }, { custom, editable, callerSites });
+      raw.prepare("UPDATE people SET updated_at = ? WHERE company_id = ?").run(now, into.id);
+    });
+    return { company: getCompany(into.id), merged: merged.map((c) => c.name), peopleMoved };
+  }
+
   /** Deletes a company and its people (administrators only; inactive is usually better). */
   function deleteCompany(id) {
     const existing = getCompany(id);
@@ -500,6 +548,7 @@ function createDirectory({ db, fields }) {
     createCompany,
     updateCompany,
     deleteCompany,
+    mergeCompanies,
     listPeople,
     getPerson,
     createPerson,

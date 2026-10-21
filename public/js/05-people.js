@@ -16,13 +16,23 @@ async function loadPeople() {
     return;
   }
   peopleView.total = data.total;
-  const fresh = peopleTable(data.people, { withCompany: true, onOpen: (p) => { location.hash = `#person/${p.id}`; } }).querySelector("table");
-  table.replaceChildren(...fresh.children);
-  if (!data.people.length) clear(table.tBodies[0]).append(emptyRow(table.tHead.rows[0].cells.length, q ? "Nobody matches." : "Nobody yet. Add a company, then its people."));
+  peopleView.people = data.people;
+  peopleView.query = q;
+  drawPeople();
   const from = data.total ? peopleView.offset + 1 : 0;
   $("people-page").textContent = `${from}-${peopleView.offset + data.people.length} of ${data.total}`;
   $("people-prev").disabled = peopleView.offset === 0;
   $("people-next").disabled = peopleView.offset + PEOPLE_PAGE >= data.total;
+}
+
+/** Draws the page of people already loaded (again after ticking some, without asking the server). */
+function drawPeople() {
+  const table = $("people-table");
+  const people = peopleView.people || [];
+  const fresh = peopleTable(people, { withCompany: true, onOpen: (p) => { location.hash = `#person/${p.id}`; }, selection: canEditDirectory() ? peopleSelection : null }).querySelector("table");
+  table.replaceChildren(...fresh.children);
+  if (!people.length) clear(table.tBodies[0]).append(emptyRow(table.tHead.rows[0].cells.length, peopleView.query ? "Nobody matches." : "Nobody yet. Add a company, then its people."));
+  renderPeopleActions();
 }
 
 const reloadPeople = debounce(() => { peopleView.offset = 0; loadPeople(); }, 250);

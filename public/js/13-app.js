@@ -135,6 +135,28 @@ $("site-button").addEventListener("click", () => {
 document.addEventListener("click", (e) => { if (!e.target.closest("#site-picker")) closeSiteMenu(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("site-menu").hidden) { closeSiteMenu(); $("site-button").focus(); } });
 
+// --- light or dark -------------------------------------------------------------------------------
+
+/** The header button shows what a click switches to. */
+function showThemeButton() {
+  const dark = currentTheme() === "dark";
+  const label = dark ? "Switch to light" : "Switch to dark";
+  $("theme-button").title = label;
+  $("theme-button").setAttribute("aria-label", label);
+  $("theme-button").classList.toggle("is-dark", dark);
+}
+
+/** "light", "dark" or "auto": shown at once, kept in this browser and with the account. */
+function setTheme(theme) {
+  applyTheme(theme);
+  showThemeButton();
+  if (state.me) api("/api/me/prefs", { method: "PUT", body: { theme } }).catch(() => {});
+}
+
+$("theme-button").addEventListener("click", () => setTheme(currentTheme() === "dark" ? "light" : "dark"));
+if (window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListener("change", showThemeButton);
+showThemeButton();
+
 // --- routing ---------------------------------------------------------------------------------------
 
 function showView(name, sub = null) {
@@ -249,6 +271,9 @@ async function startApp() {
   let saved = "";
   try { saved = localStorage.getItem(SITE_KEY) || ""; } catch { /* storage blocked */ }
   state.site = state.prefs.site ? String(state.prefs.site) : saved;
+  // Light or dark as chosen on their account, wherever they chose it.
+  applyTheme(state.prefs.theme);
+  showThemeButton();
   applyConfig();
   $("main").hidden = false;
   $("nav").hidden = false;

@@ -388,6 +388,31 @@ level only for roles that see clearance levels) in server.js; each target has it
 permission in import-routes.js (people/companies directory edit, visitors visitor edit,
 badges manage), and reading a file needs any of them.
 
+## Several at once: merging companies, bulk changes (2026-10-21)
+
+Asked for by the user: choose several companies to delete or merge, choosing which to keep
+and editing things such as its name while merging; bulk edit people (delete, inactive, other
+fields, custom fields). Built: directory.mergeCompanies (people, visitor_links with the kept
+company's link winning, visits, visitor_events and record-only fields move; the others are
+deleted before the kept one is updated, so it can take a merged one's name; sites default to
+the union), routes /api/companies/merge, /api/companies/bulk, /api/companies/bulk-delete,
+/api/people/bulk, /api/people/bulk-delete (bulk: no names; all or nothing via importRows with
+"changed" wording; deletes admin-only and refused while anyone holds a badge),
+public/js/21-bulk.js. Choices made while building it: merge needs directory change (managers
+can), as it loses no people; bulk edit leaves out names and email.
+
+## Several badges at once, and light or dark (2026-10-21)
+
+Asked for by the user: the same choosing-several for badges, including moving badges between
+visitor, tenant and personnel; and a switch between dark and light (it only followed the
+device, which here is dark). Built: /api/badges/bulk and /api/badges/bulk-delete (manage;
+all or nothing through the transaction now passed to badge-routes; level by image for roles
+without clearance levels via levelInput), tick boxes and Change/Retire/Delete on the Badges
+page (21-bulk.js); public/js/00-theme.js in <head> (data-theme on <html>, localStorage, no
+inline script because of the CSP), the dark palette under :root[data-theme=dark] and under the
+device media query unless data-theme=light, a header button, Account > Appearance, and theme
+in prefs.js. The kiosk keeps its own look.
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

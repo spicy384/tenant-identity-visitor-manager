@@ -3,7 +3,8 @@
 // Settings > Badges and clearances.
 
 const BADGES_PAGE = 200;
-const badgesView = { offset: 0 };
+// picked: badges chosen to change several at once (Security; 21-bulk.js), id -> the badge as listed.
+const badgesView = { offset: 0, picked: new Map() };
 const BADGE_TYPE_LABELS = { personnel: "Personnel", tenant: "Tenant", visitor: "Visitor" };
 const BADGE_STATUS_LABELS = { active: "Active", lost: "Lost", retired: "Retired" };
 let clearanceCache = null;
@@ -101,7 +102,10 @@ function temporaryText(a) {
 async function loadBadges() {
   const table = $("badges-table");
   const head = ["Badge", "Type", "Classification", ...(multiSite() ? ["Valid at"] : []), "Status", "Held by", "Since"];
-  table.tHead.replaceChildren(h("tr", {}, head.map((t) => h("th", { text: t }))));
+  const picking = canManageBadges();
+  const all = h("input", { type: "checkbox", "aria-label": "Choose every badge on this page" });
+  table.tHead.replaceChildren(h("tr", {}, picking ? h("th", { class: "pick-cell" }, all) : null, head.map((t) => h("th", { text: t }))));
+  if (picking) head.push("");
   const q = $("badges-search").value.trim();
   let data;
   try {
@@ -110,8 +114,11 @@ async function loadBadges() {
     clear(table.tBodies[0]).append(emptyRow(head.length, error.message));
     return;
   }
+  const boxes = [];
   const rows = data.badges.map((b) => {
-    const row = h("tr", { class: `clickable${b.status !== "active" ? " inactive" : ""}` },
+    const box = picking ? h("input", { type: "checkbox", "aria-label": `Choose badge ${b.number}` }) : null;
+    const row = h("tr", { class: `clickable${b.status !== "active" ? " inactive" : ""}${badgesView.picked.has(b.id) ? " is-picked" : ""}` },
+      picking ? h("td", { class: "pick-cell", onclick: (e) => e.stopPropagation() }, box) : null,
       h("td", {}, h("strong", { class: "mono", text: b.number }), b.temporary ? h("span", { class: "badge muted", text: "Temporary" }) : null),
       h("td", { text: BADGE_TYPE_LABELS[b.type] }),
       h("td", { class: "small-text" }, h("span", { class: "with-thumb" }, templateImg(b.template), h("span", { text: badgeClassText(b) }))),
@@ -120,8 +127,24 @@ async function loadBadges() {
       h("td", {}, b.holder ? [h("span", { text: b.holder.name }), b.holder.company ? h("div", { class: "muted small-text", text: b.holder.company }) : null, b.holder.temporary ? h("div", { class: `small-text ${b.holder.overdue ? "bad-text" : "muted"}`, text: temporaryText(b.holder) }) : null] : ""),
       h("td", { class: "small-text nowrap", text: b.holder ? fmtDateTime(b.holder.assignedAt) : "" }));
     row.addEventListener("click", () => { location.hash = `#badge/${b.id}`; });
+    if (box) {
+      box.checked = badgesView.picked.has(b.id);
+      box.addEventListener("change", () => {
+        if (box.checked) badgesView.picked.set(b.id, b);
+        else badgesView.picked.delete(b.id);
+        row.classList.toggle("is-picked", box.checked);
+        all.checked = boxes.every((x) => x.box.checked);
+        renderBadgeActions();
+      });
+      boxes.push({ box, b });
+    }
     return row;
   });
+  all.checked = boxes.length > 0 && boxes.every((x) => x.box.checked);
+  all.addEventListener("change", () => {
+    for (const x of boxes) if (x.box.checked !== all.checked) { x.box.checked = all.checked; x.box.dispatchEvent(new Event("change")); }
+  });
+  renderBadgeActions();
   clear(table.tBodies[0]).append(...(rows.length ? rows : [emptyRow(head.length, q || $("badges-state").value || $("badges-type").value ? "No badges match." : "No badges yet. Add one, or a range of them.")]));
   const from = data.total ? badgesView.offset + 1 : 0;
   $("badges-page").textContent = `${from}-${badgesView.offset + data.badges.length} of ${data.total}`;

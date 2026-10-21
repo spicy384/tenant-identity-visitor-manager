@@ -26,6 +26,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   account too, so it follows you to another desk.
 - **Settings** has a grouped menu down the side: Building, Directory, Security, Accounts and
   Records.
+- **Light or dark.** The moon/sun button in the header switches at once; Account > Appearance
+  also offers "Match this device" (the default). The choice is kept with the account, so it
+  follows you, and applied before the page draws.
 
 ## The directory
 
@@ -34,6 +37,15 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Companies** with contact details, placed at one or more sites with a suite or floor at each.
 - **People** in a company: names, job title, email, phones, the site they work at, whether they
   can host visitors.
+- **Several at once.** On Companies, **Select** turns the list into tick boxes: **Merge** the
+  chosen companies into one (choose which to keep, then edit its name and details, with each
+  other company's different value offered under its field; its sites become everywhere any of
+  them was), make them inactive or active, or delete them (administrators). A merge moves their
+  people, visitors' links, visits and visitor events, and fields added to one company alone,
+  then deletes the others. On People, tick boxes beside each row (and one for the whole page)
+  choose people across pages: **Edit** sets the ticked fields, custom ones included, the same
+  for all of them (a ticked field left empty is cleared), or make them inactive or active, or
+  delete them (administrators). Each is all or nothing, and audited.
 - **Custom fields** for companies and people: text, long text, number, date, yes/no, choice
   list, email, phone, web address. A field is either on every record (and can be required) or
   added to one record only, and can later be made a field for every record.
@@ -119,6 +131,11 @@ The design and decisions are in [PLAN.md](PLAN.md).
   badge today?" on their dialog), records which badge it stands in for, and is due back by
   midnight where they work. Their own badge stays theirs. One not back in time shows as
   overdue on the Badges page and in the navigation until someone takes it back.
+- **Several badges at once** (Security): tick boxes on the Badges page, then **Change** to move
+  them to another type (visitor, tenant or personnel), classification or level, the sites they
+  are valid at, temporary, status or notes, or **Retire** or **Delete** them. A badge that is out
+  can't change type, classification, level or temporary until it is taken back, and one that
+  has been given out can only be retired; if any chosen badge can't take the change, none does.
 - **Access.** Each role has a badge level as well as directory and visitor levels: read to
   look; issue and return to give badges out and take them back (Front desk and Manager to
   start with); or issue, return and manage, which also adds, changes, retires and removes
