@@ -219,6 +219,69 @@ async function validateFromQueue(q) {
 
 $("clearance-refresh").addEventListener("click", () => showClearance());
 
+// --- Security > Re-checks and expiry (Security and administrators) --------------------------------
+
+let overviewCache = null;
+
+/** Clearances coming up, shared by this page and the dashboard modules for a few seconds. */
+function clearanceOverview(fresh = false) {
+  if (fresh || !overviewCache || overviewCache.at < Date.now() - 15000) {
+    overviewCache = { at: Date.now(), promise: api("/api/clearance/overview") };
+    overviewCache.promise.catch(() => { overviewCache = null; });
+  }
+  return overviewCache.promise;
+}
+
+const holderHref = (x) => (x.kind === "visitor" ? `#visitor/${x.id}` : `#person/${x.id}`);
+const dateText = (iso) => fmtDate(Date.parse(`${iso}T12:00:00`));
+
+/** Security validates from here too; administrators only look. */
+async function validateHolder(x, done) {
+  let record;
+  try {
+    record = x.kind === "visitor" ? (await api(`/api/visitors/${x.id}`)).visitor : (await api(`/api/people/${x.id}`)).person;
+  } catch (error) {
+    toast(error.message, "error");
+    return;
+  }
+  if (await validateClearance(x.kind, record)) done();
+}
+
+function clearanceTable(list, columns, empty) {
+  if (!list.length) return h("p", { class: "muted", text: empty });
+  return h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+    h("thead", {}, h("tr", {}, ["Name", ...columns.map((c) => c.label), ""].map((t) => h("th", { text: t })))),
+    h("tbody", {}, list.map((x) => h("tr", {},
+      h("td", {}, h("a", { href: holderHref(x), text: x.name }), h("div", { class: "muted small-text", text: [x.kind === "visitor" ? "Visitor" : "Person", x.organisation].filter(Boolean).join(" · ") })),
+      columns.map((c) => h("td", { class: "small-text" }, c.cell(x))),
+      h("td", {}, isSecurity() ? h("button", { type: "button", class: "secondary small", text: "Validate", onclick: () => validateHolder(x, () => showClearances()) }) : null))))));
+}
+
+async function showClearances() {
+  const body = $("clearances-body");
+  let o;
+  try {
+    o = await clearanceOverview(true);
+  } catch (error) {
+    body.replaceChildren(h("p", { class: "message error", text: error.message }));
+    return;
+  }
+  const level = { label: "Clearance", cell: (x) => x.levelName || "None" };
+  body.replaceChildren(
+    h("div", { class: "panel" },
+      h("div", { class: "panel-head" }, h("h3", { text: "Visitor re-checks" })),
+      h("p", { class: "muted", text: `A visitor's validation lasts ${o.recheckDays} days (Settings > Badges and clearances). These run out within ${o.withinDays} days, or already have: until Security validates them again, their clearance counts as none.` }),
+      clearanceTable(o.rechecks, [level, { label: "Re-check due", cell: (x) => [fmtDate(x.dueAt), x.overdue ? h("span", { class: "badge bad", text: "Overdue" }) : null] },
+        { label: "Last validated", cell: (x) => `${fmtDate(x.validatedAt)}${x.validatedBy ? ` by ${x.validatedBy}` : ""}` }], "No visitor re-checks coming up.")),
+    h("div", { class: "panel" },
+      h("div", { class: "panel-head" }, h("h3", { text: "Clearances expiring" })),
+      h("p", { class: "muted", text: `Clearances on record that expire within ${o.expiringDays} days, or expired in the last 30. An expired clearance counts as none.` }),
+      clearanceTable(o.expiring, [level, { label: "Expires", cell: (x) => [dateText(x.expires), x.expired ? h("span", { class: "badge bad", text: "Expired" }) : null] }], "Nothing expiring soon.")),
+    h("div", { class: "panel" },
+      h("div", { class: "panel-head" }, h("h3", { text: "Recently validated" })),
+      clearanceTable(o.recent, [level, { label: "Validated", cell: (x) => `${fmtDateTime(x.validatedAt)}${x.validatedBy ? ` by ${x.validatedBy}` : ""}` }], `Nothing validated in the last ${o.recentDays} days.`)));
+}
+
 // --- Settings > Badges and clearances: the visitor re-check period ---------------------------------
 
 function recheckPanel() {

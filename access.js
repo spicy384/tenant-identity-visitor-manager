@@ -19,15 +19,18 @@ const { ENTITIES, ACCESS_LEVELS, builtIn, builtInField, SEARCH_COLUMNS, areaOf }
 const { outputValue } = require("./fields");
 
 const AREA_LEVELS = ["none", "read", "edit"];
+// Badges: read to look, edit to issue and take back, manage to add, change and remove them too.
+const BADGE_LEVELS = ["none", "read", "edit", "manage"];
 const ROLE_KINDS = { user: "Staff accounts", kiosk: "Kiosk devices", api: "API clients" };
 
 const DEFAULT_ROLES = [
   // clearances: sees clearance level names (the rest see badge template images instead).
-  { id: "admin", name: "Administrator", kind: "user", directory: "edit", visitors: "edit", badges: "edit", clearances: true, position: 0 },
+  { id: "admin", name: "Administrator", kind: "user", directory: "edit", visitors: "edit", badges: "manage", clearances: true, position: 0 },
   { id: "manager", name: "Manager", kind: "user", directory: "edit", visitors: "edit", badges: "edit", clearances: true, position: 10 },
   { id: "frontdesk", name: "Front desk", kind: "user", directory: "read", visitors: "edit", badges: "edit", position: 20 },
   // The only role that validates and sets clearances, and sees the validation queue.
-  { id: "security", name: "Security", kind: "user", directory: "read", visitors: "read", badges: "read", clearances: true, position: 25 },
+  // Security also keeps the badge stock: only it (and administrators) add, change and remove badges.
+  { id: "security", name: "Security", kind: "user", directory: "read", visitors: "read", badges: "manage", clearances: true, position: 25 },
   { id: "viewer", name: "Viewer", kind: "user", directory: "read", visitors: "read", badges: "read", position: 30 },
   { id: "kiosk", name: "Kiosk", kind: "kiosk", directory: "read", visitors: "none", badges: "none", position: 90 },
   { id: "checkout", name: "Equipment Checkout", kind: "api", directory: "read", visitors: "none", badges: "none", position: 91 }
@@ -127,6 +130,14 @@ function createAccess({ db, fields }) {
       db.setSetting("roles.badges_seeded", "1");
     });
   }
+  // Managing the badge stock came later still: once, Security and Administrator get it, and
+  // the other built-in roles keep issuing and taking badges back.
+  if (!db.getSetting("roles.badges_manage_seeded")) {
+    db.transaction(() => {
+      raw.prepare("UPDATE roles SET badges = 'manage' WHERE id IN ('admin', 'security') AND built_in = 1").run();
+      db.setSetting("roles.badges_manage_seeded", "1");
+    });
+  }
   // As did seeing clearance level names: once, for the built-in roles that start with it.
   if (!db.getSetting("roles.clearances_seeded")) {
     db.transaction(() => {
@@ -142,8 +153,8 @@ function createAccess({ db, fields }) {
     return id;
   }
 
-  function checkArea(value, label) {
-    if (!AREA_LEVELS.includes(value)) throw fail(400, `${label} must be one of: ${AREA_LEVELS.join(", ")}.`);
+  function checkArea(value, label, levels = AREA_LEVELS) {
+    if (!levels.includes(value)) throw fail(400, `${label} must be one of: ${levels.join(", ")}.`);
     return value;
   }
 
@@ -154,7 +165,7 @@ function createAccess({ db, fields }) {
     if (raw.prepare("SELECT 1 FROM roles WHERE name = ?").get(clean)) throw fail(409, "A role with that name already exists.");
     checkArea(directory, "Directory access");
     checkArea(visitors, "Visitor access");
-    checkArea(badges, "Badge access");
+    checkArea(badges, "Badge access", BADGE_LEVELS);
     const source = getRole(copyFrom);
     if (!source || source.kind !== "user") throw fail(400, "Copy the field access of a staff role.");
     const id = roleId(clean);
@@ -191,7 +202,7 @@ function createAccess({ db, fields }) {
     }
     if (patch.directory !== undefined) next.directory = checkArea(patch.directory, "Directory access");
     if (patch.visitors !== undefined) next.visitors = checkArea(patch.visitors, "Visitor access");
-    if (patch.badges !== undefined) next.badges = checkArea(patch.badges, "Badge access");
+    if (patch.badges !== undefined) next.badges = checkArea(patch.badges, "Badge access", BADGE_LEVELS);
     if (patch.clearances !== undefined) next.clearances = patch.clearances === true;
     raw.prepare("UPDATE roles SET name = ?, directory = ?, visitors = ?, badges = ?, clearances = ? WHERE id = ?").run(next.name, next.directory, next.visitors, next.badges, next.clearances ? 1 : 0, id);
     return getRole(id);
@@ -403,8 +414,11 @@ function createAccess({ db, fields }) {
   const isSecurity = (ctx) => ctx.role?.id === "security";
   /** Sees clearance level names (Settings > Roles); everyone else sees badge template images. */
   const canSeeClearances = (ctx) => Boolean(ctx.clearances);
-  const canReadBadges = (ctx) => ctx.badges === "read" || ctx.badges === "edit";
-  const canEditBadges = (ctx) => ctx.badges === "edit";
+  const canReadBadges = (ctx) => ["read", "edit", "manage"].includes(ctx.badges);
+  /** Issues badges and takes them back. */
+  const canEditBadges = (ctx) => ctx.badges === "edit" || ctx.badges === "manage";
+  /** Keeps the badge stock: adds, changes and removes badges. */
+  const canManageBadges = (ctx) => ctx.badges === "manage";
 
   /** Fields of `entity` the caller can see (for `recordId`'s own fields too), each with its level. */
   function fieldsFor(ctx, entity, { recordId = null } = {}) {
@@ -519,6 +533,7 @@ function createAccess({ db, fields }) {
     canEditBadges,
     isSecurity,
     canSeeClearances,
+    canManageBadges,
     fieldsFor,
     siteVisible,
     project,
@@ -528,4 +543,4 @@ function createAccess({ db, fields }) {
   };
 }
 
-module.exports = { createAccess, DEFAULT_ROLES, AREA_LEVELS, ROLE_KINDS, NEW_FIELD_VISIBILITY, customKey };
+module.exports = { createAccess, DEFAULT_ROLES, AREA_LEVELS, BADGE_LEVELS, ROLE_KINDS, NEW_FIELD_VISIBILITY, customKey };

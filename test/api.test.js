@@ -95,7 +95,7 @@ async function main() {
   check("keys: a staff session isn't an API key", (await fetch(`${BASE}/api/v1/whoami`, { headers: { cookie: Object.entries(admin.jar).map(([k, v]) => `${k}=${v}`).join("; ") } })).status === 401);
   check("keys: only administrators manage API clients", (await staff().get("/api/api-clients")).status === 401);
   let r = await admin.post("/api/api-clients", { name: "Checkout Harbour", sites: [harbour.id], canWrite: false });
-  check("keys: a client is added and its key shown once", r.status === 200 && /^ivm_\d+_[A-Za-z0-9_-]{40,}$/.test(r.data.key) && !JSON.stringify((await admin.get("/api/api-clients")).data).includes(r.data.key.split("_")[2]));
+  check("keys: a client is added and its key shown once", r.status === 200 && /^ivm_\d+_[A-Za-z0-9_-]{40,}$/.test(r.data.key) && !JSON.stringify((await admin.get("/api/api-clients")).data).includes(r.data.key.replace(/^ivm_\d+_/, "")));
   const harbourClient = r.data.client;
   const reader = apiAs(r.data.key);
   check("keys: the client starts with the template's fields", JSON.stringify(harbourClient.fields.person) === JSON.stringify(["firstName", "lastName", "preferredName", "company", "jobTitle", "email", "workPhone", "active"]), JSON.stringify(harbourClient.fields));

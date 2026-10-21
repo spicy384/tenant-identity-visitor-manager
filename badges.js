@@ -92,6 +92,8 @@ function createBadges({ db, clearance, now = Date.now }) {
     const sc = scope(sites);
     if (sc.sql) { where.push(sc.sql); params.push(...sc.params); }
     if (TYPES.includes(type)) { where.push("b.type = ?"); params.push(type); }
+    // "people": the badges people (not visitors) wear, personnel and tenant.
+    if (type === "people") where.push("b.type IN ('personnel', 'tenant')");
     if (classificationId) { where.push("b.classification_id = ?"); params.push(classificationId); }
     if (levelId) { where.push("b.clearance_level_id = ?"); params.push(levelId); }
     if (siteId) { const v = validAt([siteId]); where.push(v.sql); params.push(...v.params); }

@@ -6,7 +6,7 @@ const express = require("express");
 const { loadKey } = require("./db-key");
 const { openDatabase } = require("./db");
 const { createFields, TYPES: FIELD_TYPES, TYPE_LABELS: FIELD_TYPE_LABELS } = require("./fields");
-const { createAccess, AREA_LEVELS, NEW_FIELD_VISIBILITY } = require("./access");
+const { createAccess, AREA_LEVELS, BADGE_LEVELS, NEW_FIELD_VISIBILITY } = require("./access");
 const { createSites } = require("./sites");
 const { createDirectory } = require("./directory");
 const { createVisitors } = require("./visitors");
@@ -22,6 +22,7 @@ const { createEvents } = require("./events");
 const { createBadgeRoutes } = require("./badge-routes");
 const { createClearanceRoutes } = require("./clearance-routes");
 const { createBadgeTemplates } = require("./badge-templates");
+const { createPrefs } = require("./prefs");
 const { createAuth } = require("./auth-routes");
 const { createEntra } = require("./entra");
 const { resolveTlsOptions } = require("./tls-setup");
@@ -184,6 +185,7 @@ const apiClients = createApiClients({ db, access, sites });
 const clearance = createClearance({ db, digitsHours: CLEARANCE_DIGITS_HOURS });
 const badges = createBadges({ db, clearance });
 const templates = createBadgeTemplates({ db, clearance });
+const prefs = createPrefs({ db, access });
 const events = createEvents({ db });
 const store = { read: db.readDoc, write: db.writeDoc };
 const entra = createEntra({ store, roles: () => access.listRoles({ kind: "user" }) });
@@ -301,6 +303,16 @@ app.get("/api/config", (req, res) => {
 });
 
 /** The fields the caller sees for each record type, with whether each is editable. */
+// --- the signed-in person's own preferences (site, dashboard) -----------------------------------
+
+app.get("/api/me/prefs", (req, res) => {
+  res.json(prefs.get(req.user, req.ctx));
+});
+
+app.put("/api/me/prefs", (req, res) => {
+  res.json(prefs.save(req.user, req.ctx, req.body || {}, { siteExists: (id) => Boolean(sites.get(id)) }));
+});
+
 app.get("/api/schema", (req, res) => {
   res.json(Object.fromEntries(ENTITIES.map((e) => [e, publicFields(access.fieldsFor(req.ctx, e))])));
 });
@@ -714,7 +726,7 @@ function rolesOut() {
 }
 
 app.get("/api/roles", admin, (req, res) => {
-  res.json({ roles: rolesOut(), levels: AREA_LEVELS });
+  res.json({ roles: rolesOut(), levels: AREA_LEVELS, badgeLevels: BADGE_LEVELS });
 });
 
 app.post("/api/roles", admin, (req, res) => {

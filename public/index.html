@@ -11,7 +11,7 @@
 </head>
 <body>
   <header class="app-header">
-    <div class="brand">
+    <a class="brand" href="#home" title="Home">
       <span class="brand-mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="11" r="2.5" /><path d="M5.5 17c.6-1.8 2-2.8 3.5-2.8s2.9 1 3.5 2.8" /><path d="M15 10h3M15 13.5h3" />
@@ -21,27 +21,24 @@
         <h1>Identity and Visitor Manager</h1>
         <p class="brand-sub" id="brand-sub">Tenant directory</p>
       </div>
-    </div>
-    <nav id="nav" class="nav" aria-label="Pages" hidden>
-      <a href="#companies" data-view="companies">Companies</a>
-      <a href="#people" data-view="people">People</a>
-      <a href="#here" data-view="here" data-visitors>In the building <span id="nav-here" class="pill" hidden></span></a>
-      <a href="#visitors" data-view="visitors" data-visitors>Visitors <span id="nav-review" class="pill" hidden title="Registered at a kiosk, not yet checked"></span></a>
-      <a href="#expected" data-view="expected" data-visitors>Expected <span id="nav-expected" class="pill" hidden title="Expected today, not yet arrived"></span></a>
-      <a href="#visits" data-view="visits" data-visitors>Visit log</a>
-      <a href="#badges" data-view="badges" data-badges>Badges <span id="nav-badges" class="pill" hidden title="Badges out past their time: visitor badges with visitors who have left, and temporary badges not back by the end of their day"></span></a>
-      <a href="#clearance" data-view="clearance" data-security hidden>Clearances <span id="nav-clearance" class="pill" hidden title="Clearances waiting to be validated"></span></a>
-      <a href="#settings" data-view="settings" data-admin>Settings</a>
-    </nav>
+    </a>
+    <!-- The sections; each section's pages are in the bar below (13-app.js) -->
+    <nav id="nav" class="nav" aria-label="Sections" hidden></nav>
     <div class="header-actions" id="header-actions" hidden>
-      <label class="site-picker" id="site-picker" hidden>
-        <span class="visually-hidden">Site</span>
-        <select id="site-select" aria-label="Site"></select>
-      </label>
+      <div class="site-switch" id="site-picker" hidden>
+        <button type="button" id="site-button" class="site-button" aria-haspopup="true" aria-expanded="false" title="Switch site">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" /></svg>
+          <span id="site-current">All sites</span>
+          <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6" /></svg>
+        </button>
+        <div id="site-menu" class="site-menu" hidden></div>
+      </div>
       <a href="#account" id="current-user" class="user-chip" title="Your account"></a>
       <button id="logout-btn" type="button" class="secondary small">Sign out</button>
     </div>
   </header>
+
+  <nav id="subnav" class="subnav" aria-label="Pages" hidden></nav>
 
   <main id="main" hidden>
     <!-- Kiosk visitors still waiting for a badge (18-badge-alerts.js) -->
@@ -171,6 +168,7 @@
         <input id="badges-search" type="search" placeholder="Search number, holder or company" />
         <select id="badges-type" aria-label="Type">
           <option value="">All types</option>
+          <option value="people">Personnel and tenant</option>
           <option value="personnel">Personnel</option>
           <option value="tenant">Tenant</option>
           <option value="visitor">Visitor</option>
@@ -186,8 +184,8 @@
           <option value="retired">Retired</option>
         </select>
         <span class="spacer"></span>
-        <button type="button" id="badges-range" class="secondary" data-badge-editor>Add a range</button>
-        <button type="button" id="badges-add" class="primary" data-badge-editor>Add badge</button>
+        <button type="button" id="badges-range" class="secondary" data-badge-manager>Add a range</button>
+        <button type="button" id="badges-add" class="primary" data-badge-manager>Add badge</button>
       </div>
       <div class="table-wrap">
         <table class="table" id="badges-table"><thead></thead><tbody></tbody></table>
@@ -197,6 +195,31 @@
         <span id="badges-page" class="muted"></span>
         <button type="button" id="badges-next" class="secondary small">Next</button>
       </div>
+    </section>
+
+    <!-- Home: each person's dashboard (19-dashboard.js) -->
+    <section id="view-home" class="view" data-title="Home" hidden>
+      <div class="toolbar dashboard-head">
+        <div>
+          <h2 id="home-greeting" class="page-title">Home</h2>
+          <div id="home-sites" class="site-chips" role="group" aria-label="Site"></div>
+        </div>
+        <span class="spacer"></span>
+        <button type="button" id="home-customize" class="secondary small">Customize</button>
+      </div>
+      <div id="home-edit-bar" class="dashboard-edit-bar" hidden>
+        <span class="muted small-text">Add, remove and reorder your modules. Only modules your role can see are offered.</span>
+        <span class="spacer"></span>
+        <button type="button" id="home-reset" class="link-btn small-text">Back to the default</button>
+        <button type="button" id="home-cancel" class="secondary small">Cancel</button>
+        <button type="button" id="home-save" class="primary small">Done</button>
+      </div>
+      <div id="home-modules" class="dashboard"></div>
+    </section>
+
+    <!-- Security: clearances coming up (Security and administrators) -->
+    <section id="view-clearances" class="view" data-title="Clearances" hidden>
+      <div id="clearances-body" class="stack"></div>
     </section>
 
     <!-- The Security role's clearance validation queue -->
@@ -211,21 +234,33 @@
 
     <!-- Settings (administrators) -->
     <section id="view-settings" class="view" data-title="Settings" hidden>
-      <div class="tabs" id="settings-tabs" role="tablist">
-        <button type="button" data-tab="sites" class="is-active">Sites</button>
-        <button type="button" data-tab="fields">Fields</button>
-        <button type="button" data-tab="access">Field access</button>
-        <button type="button" data-tab="visits">Visits</button>
-        <button type="button" data-tab="kiosks">Kiosks</button>
-        <button type="button" data-tab="badges">Badges and clearances</button>
-        <button type="button" data-tab="api">API clients</button>
-        <button type="button" data-tab="roles">Roles</button>
-        <button type="button" data-tab="users">Users</button>
-        <button type="button" data-tab="entra">Microsoft Entra ID</button>
-        <button type="button" data-tab="data">Import, export and backup</button>
-        <button type="button" data-tab="audit">Audit log</button>
+      <div class="settings-layout">
+        <nav class="settings-nav" id="settings-tabs" aria-label="Settings">
+          <div class="settings-group"><span class="settings-group-label">Building</span>
+            <button type="button" data-tab="sites" class="is-active">Sites</button>
+            <button type="button" data-tab="kiosks">Kiosks</button>
+            <button type="button" data-tab="visits">Visits</button>
+          </div>
+          <div class="settings-group"><span class="settings-group-label">Directory</span>
+            <button type="button" data-tab="fields">Fields</button>
+            <button type="button" data-tab="access">Field access</button>
+            <button type="button" data-tab="data">Import, export and backup</button>
+          </div>
+          <div class="settings-group"><span class="settings-group-label">Security</span>
+            <button type="button" data-tab="badges">Badges and clearances</button>
+          </div>
+          <div class="settings-group"><span class="settings-group-label">Accounts</span>
+            <button type="button" data-tab="users">Users</button>
+            <button type="button" data-tab="roles">Roles</button>
+            <button type="button" data-tab="entra">Microsoft Entra ID</button>
+            <button type="button" data-tab="api">API clients</button>
+          </div>
+          <div class="settings-group"><span class="settings-group-label">Records</span>
+            <button type="button" data-tab="audit">Audit log</button>
+          </div>
+        </nav>
+        <div id="settings-body" class="settings-body"></div>
       </div>
-      <div id="settings-body" class="settings-body"></div>
     </section>
 
     <!-- Account -->
@@ -310,6 +345,7 @@
   <script src="/js/16-expected.js"></script>
   <script src="/js/17-clearance.js"></script>
   <script src="/js/18-badge-alerts.js"></script>
+  <script src="/js/19-dashboard.js"></script>
   <script src="/js/13-app.js"></script>
 </body>
 </html>

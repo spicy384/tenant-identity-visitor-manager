@@ -31,6 +31,7 @@ function showAuth(message = "", step = "login") {
   state.csrfToken = null;
   $("main").hidden = true;
   $("nav").hidden = true;
+  $("subnav").hidden = true;
   $("header-actions").hidden = true;
   $("footer").hidden = true;
   $("auth").hidden = false;

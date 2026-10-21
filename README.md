@@ -8,6 +8,25 @@ role can see. Visitors check themselves in and out on an iPad kiosk in each lobb
 clearances are tracked and validated, and Equipment Checkout takes its people from here.
 The design and decisions are in [PLAN.md](PLAN.md).
 
+## Finding your way
+
+- **Sections.** The header has Home, Tenants (companies, people, their badges), Visitors (in
+  the building, expected, visitors, the visit log, visitor badges), Security (the clearance
+  queue, re-checks and expiry, all badges: for Security and administrators) and Settings
+  (administrators). The pages of the chosen section are in the bar under the header; a
+  section or page the account can't open isn't shown.
+- **Home** is each person's dashboard. **Customize** adds, removes and reorders modules: who
+  is in the building, who is expected today, kiosk visitors waiting for a badge, visitors to
+  check, badges out past their time, a quick list of tenants, and for Security the clearance
+  queue, visitor re-checks, clearances expiring and recent validations (administrators get
+  all but the queue). Only modules the role can see are offered, every role starts with a
+  layout that suits it, and the choice is kept with the account, on any device.
+- **Sites.** The site button in the header (and the buttons on Home) switch site at once:
+  every page, count and module follows it, or "All sites". The choice is kept with the
+  account too, so it follows you to another desk.
+- **Settings** has a grouped menu down the side: Building, Directory, Security, Accounts and
+  Records.
+
 ## The directory
 
 - **Sites.** One or more buildings, each with its own name and logo (for its kiosk), time
@@ -101,7 +120,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   midnight where they work. Their own badge stays theirs. One not back in time shows as
   overdue on the Badges page and in the navigation until someone takes it back.
 - **Access.** Each role has a badge level as well as directory and visitor levels: read to
-  look, change to add badges and give them out. Front desk can change badges by default.
+  look; issue and return to give badges out and take them back (Front desk and Manager to
+  start with); or issue, return and manage, which also adds, changes, retires and removes
+  badges (Security and Administrator). Only those who manage badges keep the stock.
 - **Who sees clearance levels.** Each role has a **Sees clearance levels** switch under
   Settings > Roles: on for Administrator, Manager and Security to start with (Security
   always), off for Front desk, Viewer, new roles, kiosks and API clients. Roles without it

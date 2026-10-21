@@ -286,6 +286,46 @@ async function overHttp() {
   r = await admin.put("/api/clearance/settings", { visitorRecheckDays: 30 });
   check("http: an administrator can", r.status === 200 && r.data.visitorRecheckDays === 30 && (await viewer.get("/api/config")).data.clearance.visitorRecheckDays === 30);
 
+  // --- clearances coming up (Security > Re-checks and expiry, and the dashboard) -----------------------
+  r = await security.get("/api/clearance/overview");
+  check("overview: Security sees what was validated lately, with the level", r.status === 200 && r.data.recent.some((x) => x.name === "Pat Person" && x.levelName === "TS" && x.validatedBy === "sec"));
+  check("overview: so do administrators", (await admin.get("/api/clearance/overview")).status === 200);
+  check("overview: nobody else", (await manager.get("/api/clearance/overview")).status === 403 && (await desk.get("/api/clearance/overview")).status === 403 && (await viewer.get("/api/clearance/overview")).status === 403);
+  check("overview: Security at another site doesn't see Harbour Point's people", !(await riverSecurity.get("/api/clearance/overview")).data.recent.some((x) => x.name === "Pat Person"));
+  const soon = new Date(Date.now() + 20 * 86400000).toISOString().slice(0, 10);
+  await security.post("/api/clearance/validate", { kind: "visitor", id: visitor.id, levelId: L.Secret.id, expires: soon });
+  r = await security.get("/api/clearance/overview?within=60");
+  check("overview: a visitor's re-check, with its due date", r.data.rechecks.some((x) => x.name === "Val Visitor" && x.dueAt > Date.now() && !x.overdue));
+  check("overview: and a clearance expiring soon", r.data.expiring.some((x) => x.name === "Val Visitor" && x.expires === soon && !x.expired));
+  check("overview: never the SSN digits", !mentions(JSON.stringify(r.data)) && !mentions(JSON.stringify(r.data), OTHER));
+
+  // --- each person's preferences: their site and dashboard ----------------------------------------
+  r = await security.get("/api/me/prefs");
+  check("prefs: Security starts with the clearance modules", r.data.dashboard[0] === "clearanceQueue" && r.data.dashboard.includes("rechecks") && r.data.site === null);
+  r = await desk.get("/api/me/prefs");
+  check("prefs: front desk with its own, and no clearance modules on offer", r.data.dashboard[0] === "badgeNeeded" && !r.data.available.some((m) => ["clearanceQueue", "rechecks", "expiring", "validations"].includes(m)));
+  check("prefs: a module they may not have is refused", (await desk.put("/api/me/prefs", { dashboard: ["here", "clearanceQueue"] })).status === 403);
+  r = await desk.put("/api/me/prefs", { dashboard: ["tenants", "here"], site: other.id });
+  check("prefs: their own order and site are kept", r.status === 200 && r.data.dashboard.join() === "tenants,here" && r.data.site === other.id && (await desk.get("/api/me/prefs")).data.site === other.id);
+  check("prefs: only their own", (await security.get("/api/me/prefs")).data.site === null);
+  check("prefs: not a site they can't see", (await riverSecurity.put("/api/me/prefs", { site: site.id })).status === 403);
+  check("prefs: nor one that doesn't exist", (await desk.put("/api/me/prefs", { site: 9999 })).status === 400);
+  r = await desk.put("/api/me/prefs", { dashboard: null, site: null });
+  check("prefs: back to the defaults", r.data.dashboard[0] === "badgeNeeded" && r.data.site === null);
+  check("prefs: administrators see re-checks but not the queue", (await admin.get("/api/me/prefs")).data.available.includes("rechecks") && !(await admin.get("/api/me/prefs")).data.available.includes("clearanceQueue"));
+
+  // --- who keeps the badge stock --------------------------------------------------------------------
+  const uncl = (await admin.get("/api/clearance")).data.classifications.find((c) => !c.requiresClearance);
+  check("badges: Security adds them", (await security.post("/api/badges", { number: "SEC-1", type: "visitor", classificationId: uncl.id })).status === 200);
+  check("badges: front desk and managers don't", (await desk.post("/api/badges", { number: "D-1", type: "visitor", classificationId: uncl.id })).status === 403
+    && (await manager.post("/api/badges", { number: "M-1", type: "visitor", classificationId: uncl.id })).status === 403);
+  const secBadge = (await security.get("/api/badges?q=SEC-1")).data.badges[0];
+  check("badges: but they issue and take them back", (await desk.post(`/api/badges/${secBadge.id}/assign`, { kind: "visitor", holderId: visitor.id })).status === 200
+    && (await manager.post(`/api/badges/${secBadge.id}/return`)).status === 200);
+  check("badges: only Security changes one", (await desk.put(`/api/badges/${secBadge.id}`, { notes: "x" })).status === 403 && (await security.put(`/api/badges/${secBadge.id}`, { notes: "spare" })).status === 200);
+  check("roles: badge access has a manage level", (await admin.get("/api/roles")).data.badgeLevels.join() === "none,read,edit,manage"
+    && (await admin.get("/api/roles")).data.roles.find((x) => x.id === "security").badges === "manage" && (await admin.get("/api/roles")).data.roles.find((x) => x.id === "frontdesk").badges === "edit");
+
   // Where the digits must never be.
   const audit = await admin.get("/api/audit?limit=500");
   check("audit: requests, views and validations are recorded", ["clearance.request", "clearance.digits_view", "clearance.validate", "clearance.cancel"].every((a) => audit.data.entries.some((e) => e.action === a)));

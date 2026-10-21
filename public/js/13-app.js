@@ -1,10 +1,12 @@
-// 09-app.js: page routing (the part of the address after #), the site picker and
-// start-up.
+// 13-app.js: page routing (the part of the address after #), the sections and their pages,
+// the site switcher and start-up.
 //
-//   #companies  #company/3  #people  #person/7  #here  #visitors  #visitor/5  #visits
+//   #home  #companies  #company/3  #people  #person/7  #here  #visitors  #visitor/5  #visits
+//   #expected  #badges(/tenants|/visitors)  #badge/4  #clearance  #clearances
 //   #settings  #settings/fields  #account
 
 const VIEWS = {
+  home: showHome,
   companies: showCompanies,
   people: showPeople,
   here: showHere,
@@ -13,11 +15,75 @@ const VIEWS = {
   expected: showExpected,
   badges: showBadges,
   clearance: showClearance,
+  clearances: showClearances,
   settings: showSettings,
   account: showAccount
 };
 
 const SITE_KEY = "ivm-site";
+const seesSecurity = () => isSecurity() || (isAdmin() && canSeeClearances());
+
+/**
+ * The sections in the header and the pages in each (the bar below it). A page is listed
+ * only where the account may open it; a section with no pages it may open isn't shown.
+ * Badges appear in three sections, each showing its own kind of badge.
+ */
+const SECTIONS = [
+  { id: "home", label: "Home", href: "#home", pages: [] },
+  { id: "tenants", label: "Tenants", pages: [
+    { view: "companies", href: "#companies", label: "Companies", show: canReadDirectory },
+    { view: "people", href: "#people", label: "People", show: canReadDirectory },
+    { view: "badges", sub: "tenants", href: "#badges/tenants", label: "Badges", show: canReadBadges }
+  ] },
+  { id: "visitors", label: "Visitors", pill: "nav-visitors", pages: [
+    { view: "here", href: "#here", label: "In the building", pill: "nav-here", show: canReadVisitors },
+    { view: "expected", href: "#expected", label: "Expected", pill: "nav-expected", title: "Expected today, not yet arrived", show: canReadVisitors },
+    { view: "visitors", href: "#visitors", label: "Visitors", pill: "nav-review", title: "Registered at a kiosk, not yet checked", show: canReadVisitors },
+    { view: "visits", href: "#visits", label: "Visit log", show: canReadVisitors },
+    { view: "badges", sub: "visitors", href: "#badges/visitors", label: "Badges", pill: "nav-badges", title: "Badges out past their time: visitor badges with visitors who have left, and temporary badges not back by the end of their day", show: canReadBadges }
+  ] },
+  { id: "security", label: "Security", pill: "nav-security", show: seesSecurity, pages: [
+    { view: "clearance", href: "#clearance", label: "Clearance queue", pill: "nav-clearance", title: "Clearances waiting to be validated", show: isSecurity },
+    { view: "clearances", href: "#clearances", label: "Re-checks and expiry", show: seesSecurity },
+    { view: "badges", sub: "all", href: "#badges", label: "All badges", show: canReadBadges }
+  ] },
+  { id: "settings", label: "Settings", href: "#settings", show: isAdmin, pages: [] }
+];
+
+const pagesOf = (section) => section.pages.filter((p) => p.show());
+const sectionShown = (section) => (section.show ? section.show() : true) && (section.href || pagesOf(section).length > 0);
+
+/** Which section a page belongs to (badges: by the part of the address after it). */
+function sectionOf(view, sub) {
+  if (view === "badges") return sub === "tenants" ? "tenants" : sub === "visitors" ? "visitors" : seesSecurity() ? "security" : "visitors";
+  for (const s of SECTIONS) if (s.pages.some((p) => p.view === view) || s.id === view) return s.id;
+  return null;
+}
+
+function renderNav() {
+  $("nav").replaceChildren(...SECTIONS.filter(sectionShown).map((s) => {
+    const first = pagesOf(s)[0];
+    return h("a", { href: s.href || first.href, dataset: { section: s.id } }, s.label, s.pill ? h("span", { id: s.pill, class: "pill attention", hidden: true }) : null);
+  }));
+}
+
+function renderSubnav() {
+  const section = SECTIONS.find((s) => s.id === state.section);
+  const pages = section ? pagesOf(section) : [];
+  $("subnav").hidden = pages.length < 2;
+  $("subnav").replaceChildren(...pages.map((p) => h("a", {
+    href: p.href,
+    class: p.view === state.view && (!p.sub || p.sub === (state.badgesScope || "all")) ? "is-active" : null
+  }, p.label, p.pill ? h("span", { id: p.pill, class: "pill", hidden: true, title: p.title || null }) : null)));
+  for (const a of $("nav").querySelectorAll("a")) a.classList.toggle("is-active", a.dataset.section === state.section);
+  showCounts();
+}
+
+// --- sites ---------------------------------------------------------------------------------------
+
+const activeSites = () => state.config.sites.filter((s) => s.active);
+const siteName = (id) => activeSites().find((s) => String(s.id) === String(id))?.name || null;
+const allSitesLabel = () => (state.config.access.sitesLimited ? "All my sites" : "All sites");
 
 function applyConfig() {
   const c = state.config;
@@ -25,39 +91,57 @@ function applyConfig() {
   $("current-user").textContent = state.me.displayName || state.me.username;
   for (const el of document.querySelectorAll("[data-admin]")) el.hidden = !isAdmin();
   for (const el of document.querySelectorAll("[data-editor]")) el.hidden = !canEditDirectory();
-  for (const a of $("nav").querySelectorAll("[data-view=companies],[data-view=people]")) a.hidden = !canReadDirectory();
   for (const el of document.querySelectorAll("[data-visitors]")) el.hidden = !canReadVisitors();
   for (const el of document.querySelectorAll("[data-visitor-editor]")) el.hidden = !canEditVisitors();
   for (const el of document.querySelectorAll("[data-badges]")) el.hidden = !canReadBadges();
-  for (const el of document.querySelectorAll("[data-badge-editor]")) el.hidden = !canEditBadges();
-  for (const el of document.querySelectorAll("[data-security]")) el.hidden = !isSecurity();
-  showCounts();
+  for (const el of document.querySelectorAll("[data-badge-manager]")) el.hidden = !canManageBadges();
+  renderNav();
 
-  // The site picker: only when there is more than one site to choose from.
-  const picker = $("site-select");
-  const sites = c.sites.filter((s) => s.active);
+  // The site switcher: only when there is more than one site to choose from.
+  const sites = activeSites();
   $("site-picker").hidden = sites.length < 2;
-  clear(picker).append(h("option", { value: "", text: c.access.sitesLimited ? "All my sites" : "All sites" }), ...sites.map((s) => h("option", { value: String(s.id), text: s.name })));
-  let saved = "";
-  try { saved = localStorage.getItem(SITE_KEY) || ""; } catch { /* storage blocked */ }
-  state.site = sites.some((s) => String(s.id) === saved) ? saved : "";
-  picker.value = state.site;
-  const current = sites.find((s) => String(s.id) === state.site);
-  $("brand-sub").textContent = current ? current.name : sites.length === 1 ? sites[0].name : "Tenant directory";
+  if (!sites.some((s) => String(s.id) === String(state.site))) state.site = "";
+  $("site-current").textContent = siteName(state.site) || allSitesLabel();
+  $("brand-sub").textContent = siteName(state.site) || (sites.length === 1 ? sites[0].name : "Tenant directory");
+  renderSubnav();
 }
 
-$("site-select").addEventListener("change", () => {
-  state.site = $("site-select").value;
+/** Switches site everywhere: the pages, the counts, the banner, and their saved choice. */
+function setSite(id) {
+  state.site = id ? String(id) : "";
   try { localStorage.setItem(SITE_KEY, state.site); } catch { /* storage blocked */ }
+  api("/api/me/prefs", { method: "PUT", body: { site: state.site ? Number(state.site) : null } }).catch(() => {});
   applyConfig();
   refreshCurrentView();
-  loadBadgeAlerts();
-});
+  refreshCounts();
+  toast(state.site ? `Now at ${siteName(state.site)}.` : `Showing ${allSitesLabel().toLowerCase()}.`);
+}
 
-function showView(name) {
+function closeSiteMenu() {
+  $("site-menu").hidden = true;
+  $("site-button").setAttribute("aria-expanded", "false");
+}
+
+$("site-button").addEventListener("click", () => {
+  const menu = $("site-menu");
+  if (!menu.hidden) return closeSiteMenu();
+  const choice = (id, label) => h("button", { type: "button", class: `site-option${String(id) === String(state.site) ? " is-current" : ""}`, onclick: () => { closeSiteMenu(); setSite(id); } }, label);
+  menu.replaceChildren(choice("", allSitesLabel()), ...activeSites().map((s) => choice(s.id, s.name)));
+  menu.hidden = false;
+  $("site-button").setAttribute("aria-expanded", "true");
+  menu.querySelector(".is-current")?.focus();
+  return null;
+});
+document.addEventListener("click", (e) => { if (!e.target.closest("#site-picker")) closeSiteMenu(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("site-menu").hidden) { closeSiteMenu(); $("site-button").focus(); } });
+
+// --- routing ---------------------------------------------------------------------------------------
+
+function showView(name, sub = null) {
   state.view = name;
+  state.section = sectionOf(name, sub) || state.section;
   for (const section of document.querySelectorAll("main > .view")) section.hidden = section.id !== `view-${name}`;
-  for (const a of $("nav").querySelectorAll("a")) a.classList.toggle("is-active", a.dataset.view === name);
+  renderSubnav();
 }
 
 /** Reads the address and shows what it names. Detail pages open over their list. */
@@ -65,9 +149,8 @@ function route() {
   if (!state.me) return;
   refreshCounts();
   const [name, sub] = location.hash.replace(/^#/, "").split("/");
-  const start = canReadVisitors() ? "here" : canReadDirectory() ? "companies" : "account";
   if (name === "visitor" && sub && canReadVisitors()) {
-    if (!state.view || !["visitors", "here", "visits"].includes(state.view)) { showView("visitors"); showVisitors(); }
+    if (!state.view || !["visitors", "here", "visits", "home"].includes(state.view)) { showView("visitors"); showVisitors(); }
     openVisitor(Number(sub), refreshCurrentView);
     return;
   }
@@ -81,18 +164,19 @@ function route() {
     openPerson(Number(sub), refreshCurrentView);
     return;
   }
-  let view = VIEWS[name] ? name : start;
-  if (view === "settings" && !isAdmin()) view = start;
-  if ((view === "companies" || view === "people") && !canReadDirectory()) view = start;
-  if (["here", "visitors", "visits", "expected"].includes(view) && !canReadVisitors()) view = start;
-  if (view === "badges" && !canReadBadges()) view = start;
-  if (view === "clearance" && !isSecurity()) view = start;
   if (name === "badge" && sub && canReadBadges()) {
-    if (state.view !== "badges") { showView("badges"); showBadges(); }
+    if (state.view !== "badges" && state.view !== "home") { showView("badges"); showBadges(); }
     openBadge(Number(sub), refreshCurrentView);
     return;
   }
-  showView(view);
+  let view = VIEWS[name] ? name : "home";
+  if (view === "settings" && !isAdmin()) view = "home";
+  if ((view === "companies" || view === "people") && !canReadDirectory()) view = "home";
+  if (["here", "visitors", "visits", "expected"].includes(view) && !canReadVisitors()) view = "home";
+  if (view === "badges" && !canReadBadges()) view = "home";
+  if (view === "clearance" && !isSecurity()) view = "home";
+  if (view === "clearances" && !seesSecurity()) view = "home";
+  showView(view, sub);
   VIEWS[view](sub);
 }
 
@@ -106,27 +190,35 @@ function refreshCurrentView() {
   else if (state.view === "expected") loadExpected();
   else if (state.view === "badges") loadBadges();
   else if (state.view === "clearance") showClearance();
+  else if (state.view === "home") loadDashboard();
   else if (VIEWS[state.view]) VIEWS[state.view]();
 }
 
 window.addEventListener("hashchange", route);
 
-/** The counts in the navigation: who is in the building (at the chosen site) and visitors to check. */
+// --- counts in the navigation ----------------------------------------------------------------
+
+function setPill(id, n) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = String(n);
+  el.hidden = !n;
+}
+
+/** The counts beside the sections and pages: who is in the building (at the chosen site), and what needs attention. */
 function showCounts() {
   const v = state.config?.visits;
   const here = v ? Object.entries(v.here).filter(([site]) => !state.site || site === String(state.site)).reduce((n, [, c]) => n + c, 0) : 0;
-  $("nav-here").textContent = String(here);
-  $("nav-here").hidden = !here;
-  $("nav-review").textContent = String(v?.review || 0);
-  $("nav-review").hidden = !v?.review;
-  $("nav-expected").textContent = String(v?.expected || 0);
-  $("nav-expected").hidden = !v?.expected;
   const late = (v?.badgesLeft || 0) + (v?.tempOverdue || 0);
-  $("nav-badges").textContent = String(late);
-  $("nav-badges").hidden = !late;
   const queue = state.config?.clearance?.queue || 0;
-  $("nav-clearance").textContent = String(queue);
-  $("nav-clearance").hidden = !queue;
+  setPill("nav-here", here);
+  setPill("nav-review", v?.review || 0);
+  setPill("nav-expected", v?.expected || 0);
+  setPill("nav-badges", late);
+  setPill("nav-clearance", queue);
+  // On the sections, only what needs someone to act.
+  setPill("nav-visitors", (v?.review || 0) + late);
+  setPill("nav-security", queue);
 }
 
 async function refreshCounts() {
@@ -147,11 +239,16 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 async function startApp() {
   try {
     state.config = await api("/api/config");
+    state.prefs = await api("/api/me/prefs");
     await loadSchema();
   } catch (error) {
     showAuth(error.message);
     return;
   }
+  // The site they chose last, wherever they chose it; this browser's choice if they never have.
+  let saved = "";
+  try { saved = localStorage.getItem(SITE_KEY) || ""; } catch { /* storage blocked */ }
+  state.site = state.prefs.site ? String(state.prefs.site) : saved;
   applyConfig();
   $("main").hidden = false;
   $("nav").hidden = false;

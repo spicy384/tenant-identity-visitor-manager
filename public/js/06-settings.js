@@ -70,7 +70,7 @@ async function reloadConfig() {
 }
 
 async function renderSettings() {
-  for (const b of $("settings-tabs").children) b.classList.toggle("is-active", b.dataset.tab === settingsTab);
+  for (const b of $("settings-tabs").querySelectorAll("button[data-tab]")) b.classList.toggle("is-active", b.dataset.tab === settingsTab);
   const body = clear($("settings-body"));
   try {
     const render = { sites: settingsSites, fields: settingsFields, access: settingsAccess, visits: settingsVisits, kiosks: settingsKiosks, badges: settingsBadges, api: settingsApiClients, roles: settingsRoles, users: settingsUsers, entra: settingsEntra, data: settingsData, audit: settingsAudit }[settingsTab] || settingsSites;
@@ -292,7 +292,7 @@ async function settingsRoles(body) {
         h("td", { class: "small-text", text: r.kind === "api" && r.builtIn ? "Template for new API clients" : KIND_LABELS[r.kind] }),
         h("td", { class: "small-text", text: AREA_LABELS[r.directory] }),
         h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.visitors] : "—" }),
-        h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.badges] : "—" }),
+        h("td", { class: "small-text", text: r.kind === "user" ? BADGE_LABELS[r.badges] : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? (r.clearances ? "Sees them" : "Badge images") : "—" }),
         h("td", { text: r.kind === "user" ? String(r.accounts) : "—" }),
         h("td", {}, r.id === "admin" || r.kind !== "user" ? (r.kind === "api" && !r.builtIn ? h("a", { href: "#settings/api", class: "small-text", text: "Set under API clients" }) : null) : h("div", { class: "btn-row" },
@@ -308,7 +308,7 @@ async function editRole(role, staff) {
       role?.builtIn ? { type: "readonly", name: "name", label: "Name", value: role.name } : { name: "name", label: "Name", value: role?.name, required: true },
       { name: "directory", label: "Companies and people", type: "select", value: role?.directory || "read", options: levels, half: true },
       { name: "visitors", label: "Visitors and visits", type: "select", value: role?.visitors || "none", options: levels, half: true },
-      { name: "badges", label: "Badges", type: "select", value: role?.badges || "none", options: levels, half: true, hint: "Read to look; change to add badges, give them out and take them back." },
+      { name: "badges", label: "Badges", type: "select", value: role?.badges || "none", options: Object.entries(BADGE_LABELS).map(([value, label]) => ({ value, label })), half: true, hint: "Read to look; issue and return to give badges out and take them back; manage also adds, changes and removes badges (Security)." },
       { name: "clearances", label: "Sees clearance levels", type: "checkbox", value: Boolean(role?.clearances), disabled: role?.id === "security",
         hint: role?.id === "security" ? "Security validates clearances, so it always sees them." : "Level names on people, visitors and badges. Without it the role sees each badge's image instead, and clearance details stay hidden whatever the field access grid says." },
       ...(role ? [] : [{ name: "copyFrom", label: "Start its field access from", type: "select", value: "viewer", options: staff.map((r) => ({ value: r.id, label: r.name })), hint: "You can change any cell afterwards under Field access." }])

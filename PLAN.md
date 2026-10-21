@@ -352,6 +352,23 @@ banner they can't act on would be noise); a "No badge needed" button so an escor
 doesn't keep it up all day; staff check-ins never raise it (the desk dialog already offers
 a badge).
 
+## Sections, Home and site switching (2026-10-21)
+
+Asked for by the user: the Settings tabs didn't fit (Audit was cut off); a top menu of
+categories (Tenants, Visitors, Security, Settings), Security only for the Security role and
+administrators; a dashboard on sign-in with modules each person adds (tenants, expected
+visitors, for Security the clearance queue and re-checks); and quick switching between the
+sites someone can see. User decisions: Badges appear under Tenants, Visitors and Security, and
+only Security configures and edits badges (others issue and return): badge access gained a
+"manage" level (BADGE_LEVELS; Security and Administrator, migrated once); administrators see
+everything under Security except the queue; each person arranges their own dashboard. Built:
+SECTIONS and a second nav row (13-app.js), the site switcher (setSite, kept server-side in
+prefs.js as prefs.<user id> documents, with the dashboard), Home (19-dashboard.js, ten
+modules, Customize with up/down/remove/add), Security > Re-checks and expiry
+(clearance.overview, /api/clearance/overview), a grouped Settings side menu. Choices made
+while building it: administrators keep full badge access as everywhere else; the app's name
+hides below 1180 px so the sections fit an iPad in landscape.
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

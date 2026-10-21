@@ -187,6 +187,19 @@ function createClearanceRoutes({ access, clearance, directory, visitors, admin, 
 
   // --- settings --------------------------------------------------------------------------------
 
+  // --- what is coming up: the Security pages and dashboard (Security and administrators) --------
+
+  const securityOrAdmin = (req, res, next) => ((access.isSecurity(req.ctx) || req.ctx.isAdmin) && access.canSeeClearances(req.ctx)
+    ? next() : res.status(403).json({ error: "Only Security and administrators see clearances coming up." }));
+
+  router.get("/api/clearance/overview", securityOrAdmin, (req, res) => {
+    const days = (v, fallback) => Math.min(Math.max(positiveInt(v, fallback), 1), 365);
+    const o = clearance.overview({ withinDays: days(req.query.within, 30), expiringDays: days(req.query.expiring, 60), recentDays: days(req.query.recent, 30) });
+    // Only people and visitors the caller can see (site limits).
+    const visible = (x) => !req.ctx.sites || Boolean(visibleHolder(req, x.kind, x.id));
+    res.json({ ...o, rechecks: o.rechecks.filter(visible), expiring: o.expiring.filter(visible), recent: o.recent.filter(visible) });
+  });
+
   router.get("/api/clearance/settings", (req, res) => {
     res.json(clearance.settings());
   });

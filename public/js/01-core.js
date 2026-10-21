@@ -53,8 +53,11 @@ const isAdmin = () => Boolean(state.config?.access?.isAdmin);
 const canEditDirectory = () => state.config?.access?.directory === "edit";
 const canReadVisitors = () => ["read", "edit"].includes(state.config?.access?.visitors);
 const canEditVisitors = () => state.config?.access?.visitors === "edit";
-const canReadBadges = () => ["read", "edit"].includes(state.config?.access?.badges);
-const canEditBadges = () => state.config?.access?.badges === "edit";
+const canReadBadges = () => ["read", "edit", "manage"].includes(state.config?.access?.badges);
+/** Gives badges out and takes them back. */
+const canEditBadges = () => ["edit", "manage"].includes(state.config?.access?.badges);
+/** Keeps the badge stock: adds, changes and removes badges (Security). */
+const canManageBadges = () => state.config?.access?.badges === "manage";
 /** Sees clearance level names (Settings > Roles); everyone else sees badge template images instead. */
 const canSeeClearances = () => Boolean(state.config?.access?.clearances);
 const multiSite = () => (state.config?.sites || []).length > 1;
@@ -149,6 +152,7 @@ function personName(p) {
 }
 
 const AREA_LABELS = { none: "No access", read: "Read only", edit: "Read and change" };
+const BADGE_LABELS = { none: "No access", read: "Read only", edit: "Issue and return", manage: "Issue, return and manage" };
 const ACCESS_LABELS = { hidden: "Hidden", view: "Read only", edit: "Can change" };
 
 // --- feedback --------------------------------------------------------------------

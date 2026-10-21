@@ -117,12 +117,13 @@ async function main() {
   check("clearance: a level in use can't be removed", (await admin.del(`/api/clearance/levels/${L["TS//SCI"].id}`)).status === 409);
 
   // --- badges ------------------------------------------------------------------------------------
-  check("badges: front desk can't set a level by its id (they choose it by image)", (await desk.post("/api/badges", { number: "T-099", type: "tenant", classificationId: cleared.id, clearanceLevelId: L.TS.id })).status === 403);
-  r = await manager.post("/api/badges", { number: "T-100", type: "tenant", classificationId: cleared.id, clearanceLevelId: L["TS//SCI"].id });
-  check("badges: a manager adds one, with its level", r.status === 200 && r.data.badge.clearanceLevelName === "TS//SCI");
+  check("badges: front desk can't add badges (only Security keeps the stock)", (await desk.post("/api/badges", { number: "T-099", type: "tenant", classificationId: cleared.id, clearanceLevelId: L.TS.id })).status === 403);
+  r = await security.post("/api/badges", { number: "T-100", type: "tenant", classificationId: cleared.id, clearanceLevelId: L["TS//SCI"].id });
+  check("badges: a manager can't either", (await manager.post("/api/badges", { number: "T-098", type: "tenant", classificationId: uncleared.id })).status === 403);
+  check("badges: Security adds one, with its level", r.status === 200 && r.data.badge.clearanceLevelName === "TS//SCI");
   const sciBadge = r.data.badge;
-  const tsBadge = (await manager.post("/api/badges", { number: "T-101", type: "tenant", classificationId: cleared.id, clearanceLevelId: L.TS.id })).data.badge;
-  const fspBadge = (await manager.post("/api/badges", { number: "T-102", type: "tenant", classificationId: cleared.id, clearanceLevelId: L["TS//SCI FSP"].id })).data.badge;
+  const tsBadge = (await security.post("/api/badges", { number: "T-101", type: "tenant", classificationId: cleared.id, clearanceLevelId: L.TS.id })).data.badge;
+  const fspBadge = (await security.post("/api/badges", { number: "T-102", type: "tenant", classificationId: cleared.id, clearanceLevelId: L["TS//SCI FSP"].id })).data.badge;
   const riverBadge = (await admin.post("/api/badges", { number: "R-1", type: "tenant", classificationId: uncleared.id, siteIds: [other.id] })).data.badge;
   check("badges: a role without badge access sees none", (await nobadge.get("/api/badges")).status === 403);
   check("badges: a viewer sees them", (await viewer.get("/api/badges")).data.total === 4);
@@ -189,7 +190,7 @@ async function main() {
   check("expected: no one left to expect", (await desk.get("/api/visits/summary")).data.expected === 0);
 
   // A visitor badge with the check-in, which stays out after they leave.
-  const vBadge = (await desk.post("/api/badges", { number: "V-1", type: "visitor", classificationId: uncleared.id })).data.badge;
+  const vBadge = (await security.post("/api/badges", { number: "V-1", type: "visitor", classificationId: uncleared.id })).data.badge;
   const visit = (await desk.get("/api/visits?status=open")).data.visits[0];
   r = await desk.post(`/api/badges/${vBadge.id}/assign`, { kind: "visitor", holderId: graceId, visitId: visit.id });
   check("visitor badge: given with the visit", r.status === 200 && r.data.badge.holder.visitId === visit.id);
@@ -201,8 +202,8 @@ async function main() {
   check("visitor badge: taken back, the count clears", (await desk.get("/api/visits/summary")).data.badgesLeft === 0);
 
   // A temporary badge for someone who forgot theirs.
-  const own = (await desk.post("/api/badges", { number: "T-200", type: "tenant", classificationId: uncleared.id })).data.badge;
-  const tmp = (await desk.post("/api/badges", { number: "TMP-1", type: "tenant", classificationId: uncleared.id, temporary: true })).data.badge;
+  const own = (await security.post("/api/badges", { number: "T-200", type: "tenant", classificationId: uncleared.id })).data.badge;
+  const tmp = (await security.post("/api/badges", { number: "TMP-1", type: "tenant", classificationId: uncleared.id, temporary: true })).data.badge;
   r = await desk.get(`/api/badge-holders/person/${host.id}`);
   check("temporary: not offered to someone without a badge", r.data.temporary.length === 0 && !r.data.available.some((b) => b.number === "TMP-1"));
   await desk.post(`/api/badges/${own.id}/assign`, { kind: "person", holderId: host.id });

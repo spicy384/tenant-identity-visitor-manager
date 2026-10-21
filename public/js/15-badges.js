@@ -324,9 +324,9 @@ async function openBadge(id, onChange = () => {}) {
           h("td", { class: "small-text" }, a.outcome === "lost" ? h("span", { class: "badge bad", text: "Lost" }) : "", a.temporary ? h("div", { class: "muted", text: `in place of ${a.replacesNumber || "their badge"}` }) : null, a.note ? h("div", { class: "muted", text: a.note }) : null))))))
       : h("p", { class: "muted", text: "Never given out." }));
   const actions = [];
-  if (isAdmin() && !held.length) actions.push({ label: "Delete", kind: "danger", value: "delete" });
+  if (canManageBadges() && !held.length) actions.push({ label: "Delete", kind: "danger", value: "delete" });
+  if (canManageBadges()) actions.push({ label: "Edit", value: "edit" });
   if (canEditBadges()) {
-    actions.push({ label: "Edit", value: "edit" });
     if (badge.holder) {
       actions.push({ label: "Lost", value: "lost" });
       actions.push({ label: "Take back", value: "back" });
@@ -417,7 +417,7 @@ function badgeSection(kind, holderId) {
             }
           } }))));
       } else {
-        parts.push(h("p", { class: "muted small-text", text: "Forgot their badge today? No temporary badge is free that they may hold. Mark some badges as temporary under Badges." }));
+        parts.push(h("p", { class: "muted small-text", text: "Forgot their badge today? No temporary badge is free that they may hold. Security marks badges as temporary under Badges." }));
       }
     }
     if (data.past.length) {
@@ -543,6 +543,14 @@ function editClassification(c) {
   });
 }
 
-function showBadges() {
+/** The Badges page: under Tenants it shows people's badges, under Visitors visitors', under Security all. */
+function showBadges(scope) {
+  const type = { tenants: "people", visitors: "visitor" }[scope] ?? "";
+  if ((scope || "all") !== (state.badgesScope || "all")) {
+    $("badges-type").value = type;
+    badgesView.offset = 0;
+  }
+  state.badgesScope = scope || "all";
+  renderSubnav();
   loadBadges();
 }

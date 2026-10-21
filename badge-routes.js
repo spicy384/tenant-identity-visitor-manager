@@ -37,7 +37,8 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
 
   const need = (test, message) => (req, res, next) => (test(req.ctx) ? next() : res.status(403).json({ error: message }));
   const readBadges = need(access.canReadBadges, "This account can't see badges.");
-  const editBadges = need(access.canEditBadges, "This account can't change badges.");
+  const editBadges = need(access.canEditBadges, "This account can't give badges out or take them back.");
+  const manageBadges = need(access.canManageBadges, "Only Security adds, changes and removes badges.");
   const readVisitors = need(access.canReadVisitors, "This account can't see visitors.");
   const editVisitors = need(access.canEditVisitors, "This account can't change visitors.");
 
@@ -153,21 +154,21 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     res.json({ badge: badgeOut(req, badge), history: badges.history(badge.id) });
   });
 
-  router.post("/api/badges", editBadges, (req, res) => {
+  router.post("/api/badges", manageBadges, (req, res) => {
     const body = req.body || {};
     const badge = badges.create(levelInput(req, body, body.type), { sites: req.ctx.sites });
     auditFrom(req, "badge.add", badge.number, `${badge.type}; ${badge.classificationName}${badge.clearanceLevelName ? ` ${badge.clearanceLevelName}` : ""}`);
     res.json({ ok: true, badge: badgeOut(req, badge) });
   });
 
-  router.post("/api/badges/range", editBadges, (req, res) => {
+  router.post("/api/badges/range", manageBadges, (req, res) => {
     const body = req.body || {};
     const made = badges.createRange(levelInput(req, body, body.type), { sites: req.ctx.sites });
     auditFrom(req, "badge.add", `${made.length} badges`, `${made[0]?.number} to ${made[made.length - 1]?.number}`);
     res.json({ ok: true, count: made.length, first: badgeOut(req, made[0]), last: badgeOut(req, made[made.length - 1]) });
   });
 
-  router.put("/api/badges/:id", editBadges, (req, res) => {
+  router.put("/api/badges/:id", manageBadges, (req, res) => {
     const id = positiveInt(req.params.id);
     const existing = badges.get(id, { sites: req.ctx.sites });
     if (!existing) throw fail(404, "No such badge.");
@@ -177,7 +178,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     res.json({ ok: true, badge: badgeOut(req, badge) });
   });
 
-  router.delete("/api/badges/:id", admin, (req, res) => {
+  router.delete("/api/badges/:id", manageBadges, (req, res) => {
     const badge = badges.remove(positiveInt(req.params.id));
     auditFrom(req, "badge.remove", badge.number);
     res.json({ ok: true });

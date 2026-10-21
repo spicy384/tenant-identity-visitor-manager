@@ -422,6 +422,44 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     for (const id of [...digitsStore.keys()]) wipeDigits(id);
   }
 
+  // --- what is coming up (the Security pages and dashboard) -----------------------------------
+
+  /**
+   * Clearances that need attention soon: visitors whose validation runs out (re-check) within
+   * \`withinDays\` or already has, clearances on record that expire within \`expiringDays\` or
+   * expired in the last 30, and validations of the last \`recentDays\`. Holders only, levels
+   * named: for roles that see clearance levels. The caller drops those it can't see.
+   */
+  function overview({ withinDays = 30, expiringDays = 60, recentDays = 30 } = {}) {
+    const t = now();
+    const days = recheckDays(db);
+    const holders = (where, params = []) => [
+      ...raw.prepare(`SELECT 'person' AS kind, p.id, p.first_name, p.last_name, c.name AS org, l.name AS level_name, p.clearance_expires, p.clearance_validated_at, p.clearance_validated_by
+        FROM people p JOIN companies c ON c.id = p.company_id LEFT JOIN clearance_levels l ON l.id = p.clearance_level_id WHERE ${where.replace(/\bX\./g, "p.")}`).all(...params),
+      ...raw.prepare(`SELECT 'visitor' AS kind, v.id, v.first_name, v.last_name, v.organisation AS org, l.name AS level_name, v.clearance_expires, v.clearance_validated_at, v.clearance_validated_by
+        FROM visitors v LEFT JOIN clearance_levels l ON l.id = v.clearance_level_id WHERE ${where.replace(/\bX\./g, "v.")}`).all(...params)
+    ];
+    const item = (r, extra = {}) => ({
+      kind: r.kind, id: r.id, name: `${r.first_name} ${r.last_name}`, organisation: r.org || null, levelName: r.level_name || null,
+      expires: r.clearance_expires || null, validatedAt: r.clearance_validated_at || null, validatedBy: r.clearance_validated_by || null, ...extra
+    });
+    const recheckBy = t + withinDays * DAY_MS;
+    const rechecks = raw.prepare(`SELECT 'visitor' AS kind, v.id, v.first_name, v.last_name, v.organisation AS org, l.name AS level_name, v.clearance_expires, v.clearance_validated_at, v.clearance_validated_by
+        FROM visitors v JOIN clearance_levels l ON l.id = v.clearance_level_id
+        WHERE v.clearance_validated_at IS NOT NULL AND v.clearance_validated_at + ? <= ? ORDER BY v.clearance_validated_at`).all(days * DAY_MS, recheckBy)
+      .map((r) => item(r, { dueAt: r.clearance_validated_at + days * DAY_MS, overdue: r.clearance_validated_at + days * DAY_MS < t }));
+    const todayStr = today(undefined, t);
+    const from = today(undefined, t - 30 * DAY_MS);
+    const to = today(undefined, t + expiringDays * DAY_MS);
+    const expiring = holders("X.clearance_level_id IS NOT NULL AND X.clearance_expires IS NOT NULL AND X.clearance_expires >= ? AND X.clearance_expires <= ?", [from, to])
+      .map((r) => item(r, { expired: r.clearance_expires < todayStr }))
+      .sort((a, b) => a.expires.localeCompare(b.expires));
+    const recent = holders("X.clearance_validated_at >= ?", [t - recentDays * DAY_MS])
+      .map((r) => item(r))
+      .sort((a, b) => b.validatedAt - a.validatedAt);
+    return { recheckDays: days, withinDays, expiringDays, recentDays, rechecks, expiring, recent };
+  }
+
   /** True when `holderLevel` (a level or null) covers `badgeLevel` (a level or null). */
   function covers(holderLevel, badgeLevel) {
     if (!badgeLevel) return true;
@@ -455,6 +493,7 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     cancelRequest,
     forgetHolder,
     sweepDigits,
+    overview,
     stop
   };
 }
