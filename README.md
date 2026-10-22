@@ -66,6 +66,21 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Sign-in** carried over from Equipment Checkout: local accounts with password, authenticator
   code and passkeys, plus Microsoft Entra ID. App roles in Entra match role names (`Manager`,
   `FrontDesk`, ...).
+- **Entra with a certificate instead of a client secret.** Under Settings > Microsoft Entra ID,
+  choose how the app proves who it is to Microsoft:
+  - **Make a certificate** creates a key and a self-signed certificate (1, 2 or 3 years). The
+    private key stays in the encrypted database and never leaves the server. Upload the
+    downloaded `.cer` file to the app registration (Certificates & secrets > Certificates).
+  - **Upload a certificate** takes your own, as a PFX/P12 file with its password (modern AES
+    ones and older 3DES/RC2 ones, from Windows or OpenSSL) or as PEM files (the key may be
+    encrypted). It must be RSA, 2048 bits or more. The password isn't kept.
+  - Each sign-in request is signed with the key (a PS256 client assertion), so no secret is sent.
+  - **Test with Microsoft** asks Entra for a token with the saved settings, or with one
+    certificate, and shows whether it is accepted (and Microsoft's reason if not).
+  - Settings shows each certificate's thumbprint (as the Entra admin center shows it) and
+    expiry date, and warns 30 days before the one in use expires; the server log warns too.
+  - To renew without a gap: make a new certificate, add it in Entra, test it, choose **Use this
+    one**, then remove the old one here and in Entra. Up to 5 can be kept.
 - **CSV import and export**, an **encrypted backup download** and an **audit log** that
   records which fields changed, never their values.
 
@@ -370,6 +385,8 @@ override the compose file's defaults.
 | `TZ` | `UTC` | The server's time zone (each site has its own for visits) |
 | `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | | Microsoft Entra sign-in; or set it up in the app under Settings |
 | `ENTRA_DEFAULT_ROLE` | `none` | The role a new Entra user gets |
+| `ENTRA_CERT_FILE`, `ENTRA_KEY_FILE`, `ENTRA_KEY_PASSPHRASE` | | Sign in to Entra with a certificate (PEM files) instead of `ENTRA_CLIENT_SECRET`; they win over a secret |
+| `ENTRA_PFX_FILE`, `ENTRA_PFX_PASSWORD` (or `ENTRA_PFX_PASSWORD_FILE`) | | The same from one PFX/P12 file |
 | `CLEARANCE_DIGITS_HOURS` | `36` | Hours SSN digits given for clearance validation stay in memory (at most 168) |
 | `LOGIN_RATE_LIMIT` | `20` | Failed sign-ins allowed before a pause; `0` turns the limit off |
 | `PASSKEY_RP_ID`, `PASSKEY_ORIGIN` | from the request | The passkey domain and origin, if the proxy hides them |
@@ -544,7 +561,8 @@ database in test/fixtures, made by make-access-fixture.ps1), merging and bulk ch
   machine), including the compose file's memory, swap and core-dump limits
 - Sealing the database key to a TPM (deploy/tpm/): the script's logic was run against a
   stand-in for systemd-creds, not on a real Debian or Ubuntu host with a TPM
-- Microsoft Entra sign-in against a real tenant (only a fake Microsoft)
+- Microsoft Entra sign-in against a real tenant (only a fake Microsoft), including signing in
+  with a certificate and the Test button
 - Passkeys on a real device
 - The kiosk on a real iPad (only a desktop browser at iPad sizes): the on-screen keyboard,
   Home Screen mode, Guided Access

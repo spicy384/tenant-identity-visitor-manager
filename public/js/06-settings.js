@@ -438,7 +438,7 @@ async function settingsEntra(body) {
     h("ol", { class: "plain-list numbered" },
       h("li", {}, "In the Entra admin center: App registrations > New registration. Supported account types: this organisational directory only."),
       h("li", {}, "Redirect URI: platform Web, ", h("code", { class: "copy", text: redirectUri }), appUrlSet ? null : h("span", { class: "muted", text: " (taken from the address you are using now; set APP_URL to fix it)" })),
-      h("li", {}, "Certificates & secrets > New client secret. Copy the value (not the ID) into the form below."),
+      h("li", {}, "Certificates & secrets: either Certificates > Upload certificate, with the .cer file from Certificates below (recommended: nothing secret leaves this server), or Client secrets > New client secret, copying the value (not the ID) into the form below."),
       h("li", {}, `Optional: App roles whose value is a role's name without spaces (${roles.map((r) => r.name.replace(/\s+/g, "")).join(", ")}), assigned to users or groups under Enterprise applications. A role in the sign-in overrides the role stored here.`),
       h("li", {}, "Optional: Enterprise applications > this app > Properties > Assignment required = Yes, so only assigned people can sign in at all.")));
   const { form } = settingsForm({
@@ -448,7 +448,11 @@ async function settingsEntra(body) {
       { name: "enabled", label: "Allow sign-in with Microsoft", type: "checkbox", value: entra.enabled, disabled: entra.readOnly },
       { name: "tenantId", label: "Directory (tenant) ID", value: entra.tenantId, half: true, disabled: entra.readOnly },
       { name: "clientId", label: "Application (client) ID", value: entra.clientId, half: true, disabled: entra.readOnly },
-      { name: "clientSecret", label: "Client secret", type: "password", half: true, placeholder: entra.hasSecret ? "Saved; type to replace" : "", disabled: entra.readOnly },
+      { name: "credential", label: "The app proves who it is with", type: "select", value: entra.credential, half: true, disabled: entra.readOnly, options: [
+        { value: "certificate", label: "A certificate (recommended)" },
+        { value: "secret", label: "A client secret" }],
+        hint: "A certificate needs one in use under Certificates below, added to the app registration." },
+      { name: "clientSecret", label: "Client secret", type: "password", half: true, placeholder: entra.hasSecret ? "Saved; type to replace" : "", disabled: entra.readOnly, hint: "Only used when the app uses a client secret." },
       { name: "buttonLabel", label: "Button text", value: entra.buttonLabel, half: true, disabled: entra.readOnly },
       { name: "defaultRole", label: "Someone who signs in for the first time", type: "select", value: entra.defaultRole, disabled: entra.readOnly, options: [
         { value: "none", label: "Is refused unless an administrator added them under Users (or they have an app role)" },
@@ -457,10 +461,154 @@ async function settingsEntra(body) {
     onSave: async (v) => {
       if (entra.readOnly) throw new Error("Configured by environment variables.");
       await api("/api/entra", { method: "PUT", body: v });
-      return v.enabled ? "Saved. Sign out and use \"Sign in with Microsoft\" to try it." : "Saved.";
-    }
+      return v.enabled ? "Saved. Test it below, then sign out and use \"Sign in with Microsoft\" to try it." : "Saved.";
+    },
+    extra: (values, msg) => h("button", { type: "button", class: "secondary", text: "Test with Microsoft", title: "Asks Microsoft for a token with the saved settings: no one is signed in", onclick: () => testEntraCredential(null, msg) })
   });
-  body.append(form, steps);
+  body.append(form, entraCertificatesPanel(entra), steps);
+}
+
+/** Asks Microsoft whether it accepts the saved credential, or one certificate (by id); shows the answer in `msg` or a toast. */
+async function testEntraCredential(certificateId, msg = null) {
+  try {
+    const r = await api("/api/entra/test", { method: "POST", body: certificateId ? { certificateId } : {} });
+    if (msg) {
+      msg.className = `message ${r.ok ? "success" : "error"}`;
+      msg.textContent = r.message;
+      msg.hidden = false;
+    } else {
+      toast(r.message, r.ok ? "ok" : "error");
+    }
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+const CERT_SOURCES = { generated: "Made here", uploaded: "Uploaded", environment: "From the environment" };
+
+/** The certificates the app can sign in with: made here or uploaded, one in use, each to download, test, use or remove. */
+function entraCertificatesPanel(entra) {
+  const reload = () => renderSettings();
+  const run = (fn) => async () => {
+    try {
+      await fn();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+  const certs = entra.certificates;
+  const inUse = entra.credential === "certificate";
+  const status = (c) => {
+    if (c.expired) return h("span", { class: "badge bad", text: "Expired" });
+    const tags = [];
+    if (c.active) tags.push(h("span", { class: `badge${inUse ? " ok" : ""}`, text: inUse ? "In use" : "Chosen", title: inUse ? null : "The one used when the app signs in with a certificate; it uses its client secret for now" }));
+    if (c.expiring) tags.push(h("span", { class: "badge warn", text: `Expires in ${c.daysLeft} ${c.daysLeft === 1 ? "day" : "days"}` }));
+    return tags;
+  };
+  const rows = certs.map((c) => h("tr", {},
+    h("td", {}, h("div", { text: c.subject }), h("div", { class: "muted small-text", text: CERT_SOURCES[c.source] || c.source }), status(c)),
+    h("td", {}, h("code", { class: "copy thumbprint", text: c.thumbprint, title: "SHA-1 thumbprint, as the Entra admin center shows it" })),
+    h("td", { class: "small-text nowrap", text: fmtDate(c.notAfter) }),
+    h("td", {}, h("div", { class: "btn-row" },
+      h("button", { type: "button", class: "link-btn", text: "Download .cer", onclick: run(() => download(`/api/entra/certificates/${c.id}/cer`)) }),
+      h("button", { type: "button", class: "link-btn", text: "Test", title: "Asks Microsoft whether it accepts this certificate for the app", onclick: () => testEntraCredential(c.id) }),
+      !entra.readOnly && !c.active && !c.expired ? h("button", { type: "button", class: "link-btn", text: "Use this one", onclick: run(async () => {
+        if (!(await confirmDialog(`Sign in with the certificate ${c.thumbprint} from now on? Add it to the app registration in Entra first (Test says whether it is there), or Microsoft sign-in will fail.`, { confirmLabel: "Use it" }))) return;
+        await api(`/api/entra/certificates/${c.id}/use`, { method: "POST" });
+        toast("Now in use. Once you're sure it works, remove the old one here and in Entra.");
+        reload();
+      }) }) : null,
+      !entra.readOnly ? h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: run(async () => {
+        if (!(await confirmDialog(`Remove the certificate ${c.thumbprint} and its private key from this app? Remove it from the app registration in Entra too.`, { danger: true, confirmLabel: "Remove" }))) return;
+        await api(`/api/entra/certificates/${c.id}`, { method: "DELETE" });
+        toast("Removed.");
+        reload();
+      }) }) : null))));
+  return h("div", { class: "panel" },
+    h("div", { class: "panel-head" },
+      h("h3", { text: "Certificates" }),
+      entra.readOnly ? null : h("div", { class: "btn-row" },
+        h("button", { type: "button", class: "secondary small", text: "Upload a certificate", onclick: run(async () => { if (await uploadEntraCertificate()) reload(); }) }),
+        h("button", { type: "button", class: "primary small", text: "Make a certificate", onclick: run(async () => { if (await makeEntraCertificate()) reload(); }) }))),
+    h("p", { class: "muted", text: entra.readOnly
+      ? "Set by ENTRA_CERT_FILE and ENTRA_KEY_FILE, or ENTRA_PFX_FILE."
+      : "Instead of a secret, the app can sign each request to Microsoft with a certificate's private key, which is kept in the encrypted database and never leaves this server. Make one here (or upload your own), download its .cer file and upload that to the app registration. To renew, make a new one, add it in Entra, test it, then use it and remove the old one: sign-in carries on throughout." }),
+    entra.certificateError ? h("p", { class: "message error", text: entra.certificateError }) : null,
+    certs.length ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+      h("thead", {}, h("tr", {}, ["Certificate", "Thumbprint", "Valid until", ""].map((t) => h("th", { text: t })))),
+      h("tbody", {}, rows)))
+      : h("p", { class: "muted small-text", text: "No certificates yet." }));
+}
+
+async function makeEntraCertificate() {
+  const made = await formDialog({
+    title: "Make a certificate",
+    intro: h("p", { class: "muted", text: "A new key and a self-signed certificate for Microsoft sign-in. The private key stays in the encrypted database; you download only the certificate, to upload to the app registration in Entra (Certificates & secrets > Certificates)." }),
+    fields: [{ name: "years", label: "Valid for", type: "select", value: "2", options: [{ value: "1", label: "1 year" }, { value: "2", label: "2 years" }, { value: "3", label: "3 years" }],
+      hint: "Settings warns 30 days before it expires; make the next one then." }],
+    submitLabel: "Make it",
+    onSubmit: async (v) => (await api("/api/entra/certificates/generate", { method: "POST", body: { years: Number(v.years) } })).certificate
+  });
+  if (!made) return null;
+  await download(`/api/entra/certificates/${made.id}/cer`);
+  toast(made.active ? "Made. Upload the downloaded .cer file to the app registration in Entra, then test it." : "Made. Upload the downloaded .cer file to Entra, test it, then choose Use this one.");
+  return made;
+}
+
+/** Reads a chosen file: as base64 (binary) or as text. */
+function readChosenFile(input, asText) {
+  const file = input.files[0];
+  if (!file) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(asText ? reader.result : String(reader.result).replace(/^data:[^,]*,/, ""));
+    reader.onerror = () => reject(new Error("That file can't be read."));
+    if (asText) reader.readAsText(file);
+    else reader.readAsDataURL(file);
+  });
+}
+
+async function uploadEntraCertificate() {
+  const kind = h("select", { name: "kind" },
+    h("option", { value: "pfx", text: "A PFX / P12 file (certificate and key together)" }),
+    h("option", { value: "pem", text: "PEM files (certificate, and its private key)" }));
+  const pfxFile = h("input", { type: "file", accept: ".pfx,.p12,application/x-pkcs12" });
+  const pfxPassword = h("input", { type: "password", autocomplete: "off" });
+  const certFile = h("input", { type: "file", accept: ".pem,.crt,.cer" });
+  const keyFile = h("input", { type: "file", accept: ".pem,.key" });
+  const passphrase = h("input", { type: "password", autocomplete: "off" });
+  const field = (label, input, hint = null) => h("label", {}, h("span", { text: label }), input, hint ? h("span", { class: "hint", text: hint }) : null);
+  const pfxPart = h("div", { class: "stack" }, field("PFX file", pfxFile), field("Its password", pfxPassword, "Only used to open the file; it isn't kept."));
+  const pemPart = h("div", { class: "stack", hidden: true }, field("Certificate (PEM)", certFile, "May include its chain; the one matching the key is used."), field("Private key (PEM)", keyFile), field("Key passphrase", passphrase, "If the key is encrypted. It isn't kept."));
+  kind.addEventListener("change", () => { pfxPart.hidden = kind.value !== "pfx"; pemPart.hidden = kind.value !== "pem"; });
+  const done = await openDialog({
+    title: "Upload a certificate",
+    body: h("div", { class: "stack" },
+      h("p", { class: "muted", text: "Your own certificate for Microsoft sign-in, with its private key. It needs an RSA key of 2048 bits or more. The key is kept in the encrypted database; upload the certificate (without the key) to the app registration in Entra too." }),
+      field("What you have", kind), pfxPart, pemPart),
+    actions: [
+      { label: "Cancel", value: null },
+      {
+        label: "Upload",
+        kind: "primary",
+        onClick: async () => {
+          let bodyData;
+          if (kind.value === "pfx") {
+            const pfx = await readChosenFile(pfxFile, false);
+            if (!pfx) throw new Error("Choose the PFX file.");
+            bodyData = { pfx, password: pfxPassword.value };
+          } else {
+            const [certPem, keyPem] = await Promise.all([readChosenFile(certFile, true), readChosenFile(keyFile, true)]);
+            if (!certPem || !keyPem) throw new Error("Choose the certificate and the private key.");
+            bodyData = { certPem, keyPem, passphrase: passphrase.value };
+          }
+          return (await api("/api/entra/certificates/upload", { method: "POST", body: bodyData })).certificate;
+        }
+      }
+    ]
+  });
+  if (done) toast(done.active ? "Uploaded and in use once the app uses a certificate. Add it to the app registration in Entra, then test it." : "Uploaded. Add it to Entra, test it, then choose Use this one.");
+  return done;
 }
 
 // --- import, export and backup ----------------------------------------------------------------------------

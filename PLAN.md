@@ -464,6 +464,24 @@ or the middle button while drawing). Fixed: closing an office's dialog drew a hu
 browser's focus ring on the shape, stretched by the 1x1 drawing), and a click on a plan in a
 dialog scrolled it (clicking focused the scrolling box) so the click missed.
 
+## Entra sign-in with a certificate (2026-10-22)
+
+Asked for by the user: the option to use a certificate instead of a client secret for the
+Microsoft login. Built as proposed: entra-cert.js (node crypto only) makes an RSA 2048 key and a
+self-signed X.509 v3 certificate (a small DER writer; client authentication only), reads PEM
+(chains, encrypted keys) and PFX/P12 files (a small DER reader; PBES2 with PBKDF2 and AES or
+3DES, and PKCS#12 PBE with 3DES or RC2, RC2 written out because node's OpenSSL 3 no longer has
+it; the MAC is checked first so a wrong password says so), and signs client assertions (PS256,
+x5t#S256, ten minutes, aud = the token endpoint). entra.js: credential "secret" or
+"certificate", certificates kept in the "entra" document (private keys only ever there), one in
+use, up to 5 for rotation; ENTRA_CERT_FILE/ENTRA_KEY_FILE or ENTRA_PFX_FILE in the environment
+win over a secret; testCredential() asks for a client-credentials token (Graph .default, by the
+authority's cloud). Routes /api/entra/certificates/generate|upload|:id/use|:id (DELETE)|:id/cer
+and /api/entra/test; Settings > Microsoft Entra ID. node-forge was considered for PFX and
+dropped: it has an open high-severity advisory with no fix. Tested against a fake Microsoft
+that checks assertions as Entra does, with PFX fixtures from OpenSSL (modern, 3DES, RC2) and
+Windows (test/fixtures/entra).
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

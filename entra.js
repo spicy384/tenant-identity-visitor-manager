@@ -2,15 +2,22 @@
  * Sign-in with Microsoft Entra ID: the OpenID Connect authorization-code flow with
  * PKCE, using only node's crypto and fetch.
  *
- * The app is a confidential client (it holds a client secret). The browser is sent to
+ * The app is a confidential client: it proves who it is to Microsoft with a client secret, or
+ * with a certificate (entra-cert.js: a short token signed with the certificate's key, so no
+ * secret is ever sent). Certificates are made here (the private key never leaves the
+ * encrypted database) or uploaded; several can be kept, one in use, so one can be rotated
+ * without a gap: add the new one to the app registration, then switch to it. The browser is sent to
  * Microsoft with a random state, nonce and PKCE challenge; Microsoft sends it back
  * with a code; the code is exchanged server-side for an ID token, whose signature is
  * checked against the tenant's published keys before any claim in it is believed.
  *
- * Configuration comes from the environment (ENTRA_*), which wins and is shown as
- * read-only, or from the "entra" document in the encrypted database, set under Settings.
+ * Configuration comes from the environment (ENTRA_*, with ENTRA_CERT_FILE and ENTRA_KEY_FILE or
+ * ENTRA_PFX_FILE for a certificate), which wins and is shown as read-only, or from the "entra"
+ * document in the encrypted database, set under Settings.
  */
 const crypto = require("crypto");
+const fs = require("fs");
+const { generateCertificate, readPem, readPfx, certificateInfo, certificateDer, clientAssertion } = require("./entra-cert");
 
 const DEFAULT_AUTHORITY = "https://login.microsoftonline.com";
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -19,6 +26,13 @@ const JWKS_TTL_MS = 24 * 60 * 60 * 1000;
 const JWKS_REFRESH_MIN_MS = 5 * 60 * 1000;
 const CLOCK_SKEW_S = 300;
 const HTTP_TIMEOUT_MS = 15 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Settings warns this many days before the certificate in use expires.
+const CERT_WARN_DAYS = 30;
+const MAX_CERTIFICATES = 5;
+const CREDENTIALS = ["secret", "certificate"];
+// Where the credential test asks for a token, by the cloud of the authority.
+const GRAPH_BY_AUTHORITY = { "login.microsoftonline.us": "https://graph.microsoft.us", "login.chinacloudapi.cn": "https://microsoftgraph.chinacloudapi.cn" };
 
 function fail(status, message) {
   const error = new Error(message);
@@ -64,13 +78,40 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
   const flows = new Map(); // state -> { verifier, nonce, expiresAt, returnTo }
   let jwks = { keys: [], fetchedAt: 0, tenantId: null };
 
+  // A certificate given by files in the environment: read once, when first wanted.
+  let envCertificate;
+  let envCertificateError = null;
+  function certificateFromEnv() {
+    if (envCertificate !== undefined) return envCertificate;
+    envCertificate = null;
+    try {
+      let pair = null;
+      if (env.ENTRA_PFX_FILE) {
+        const password = env.ENTRA_PFX_PASSWORD_FILE ? fs.readFileSync(env.ENTRA_PFX_PASSWORD_FILE, "utf8").replace(/\r?\n$/, "") : String(env.ENTRA_PFX_PASSWORD || "");
+        pair = readPfx(fs.readFileSync(env.ENTRA_PFX_FILE), password);
+      } else if (env.ENTRA_CERT_FILE || env.ENTRA_KEY_FILE) {
+        if (!env.ENTRA_CERT_FILE || !env.ENTRA_KEY_FILE) throw new Error("Set both ENTRA_CERT_FILE and ENTRA_KEY_FILE.");
+        pair = readPem(fs.readFileSync(env.ENTRA_CERT_FILE, "utf8"), fs.readFileSync(env.ENTRA_KEY_FILE, "utf8"), String(env.ENTRA_KEY_PASSPHRASE || ""));
+      }
+      if (pair) envCertificate = { id: "env", ...certificateInfo(pair.certPem), ...pair, source: "environment", createdAt: null, active: true };
+    } catch (error) {
+      envCertificateError = `The certificate in the environment can't be used: ${error.message}`;
+    }
+    return envCertificate;
+  }
+  const certificateInEnv = () => Boolean(env.ENTRA_PFX_FILE || env.ENTRA_CERT_FILE || env.ENTRA_KEY_FILE);
+
   function fromEnv() {
     if (!env.ENTRA_TENANT_ID && !env.ENTRA_CLIENT_ID) return null;
+    const certificate = certificateFromEnv();
     return {
       enabled: String(env.ENTRA_ENABLED || "true").toLowerCase() !== "false",
       tenantId: String(env.ENTRA_TENANT_ID || "").trim(),
       clientId: String(env.ENTRA_CLIENT_ID || "").trim(),
       clientSecret: String(env.ENTRA_CLIENT_SECRET || ""),
+      // Certificate files win over a secret.
+      credential: certificateInEnv() ? "certificate" : "secret",
+      certificates: certificate ? [certificate] : [],
       defaultRole: defaultRoles().includes(env.ENTRA_DEFAULT_ROLE) ? env.ENTRA_DEFAULT_ROLE : "none",
       buttonLabel: String(env.ENTRA_BUTTON_LABEL || "").trim() || "Sign in with Microsoft",
       source: "env"
@@ -87,17 +128,49 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
       tenantId: stored.tenantId || "",
       clientId: stored.clientId || "",
       clientSecret: stored.clientSecret || "",
+      credential: stored.credential === "certificate" ? "certificate" : "secret",
+      certificates: Array.isArray(stored.certificates) ? stored.certificates : [],
       defaultRole: defaultRoles().includes(stored.defaultRole) ? stored.defaultRole : "none",
       buttonLabel: stored.buttonLabel || "Sign in with Microsoft",
       source: "settings"
     };
   }
 
-  function isReady(c = config()) {
-    return Boolean(c.enabled && GUID_RE.test(c.tenantId) && GUID_RE.test(c.clientId) && c.clientSecret);
+  const activeCertificate = (c) => (c.certificates || []).find((x) => x.active) || null;
+
+  /** Whether the chosen credential is there: a secret, or a certificate in use that hasn't expired. */
+  function hasCredential(c) {
+    if (c.credential === "certificate") {
+      const cert = activeCertificate(c);
+      return Boolean(cert && cert.notAfter > now());
+    }
+    return Boolean(c.clientSecret);
   }
 
-  /** What the Settings page shows: everything but the secret. */
+  function isReady(c = config()) {
+    return Boolean(c.enabled && GUID_RE.test(c.tenantId) && GUID_RE.test(c.clientId) && hasCredential(c));
+  }
+
+  /** A certificate as Settings shows it: never its private key. */
+  function publicCertificate(cert) {
+    const daysLeft = Math.floor((cert.notAfter - now()) / DAY_MS);
+    return {
+      id: cert.id,
+      subject: cert.subject,
+      thumbprint: cert.thumbprint,
+      thumbprintSha256: cert.thumbprintSha256,
+      notBefore: cert.notBefore,
+      notAfter: cert.notAfter,
+      source: cert.source,
+      createdAt: cert.createdAt,
+      active: Boolean(cert.active),
+      daysLeft,
+      expired: cert.notAfter <= now(),
+      expiring: cert.notAfter > now() && daysLeft < CERT_WARN_DAYS
+    };
+  }
+
+  /** What the Settings page shows: everything but the secret and private keys. */
   function publicConfig() {
     const c = config();
     return {
@@ -105,7 +178,11 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
       ready: isReady(c),
       tenantId: c.tenantId,
       clientId: c.clientId,
+      credential: c.credential,
       hasSecret: Boolean(c.clientSecret),
+      certificates: c.certificates.map(publicCertificate),
+      certificateError: c.source === "env" ? envCertificateError : null,
+      warnDays: CERT_WARN_DAYS,
       defaultRole: c.defaultRole,
       buttonLabel: c.buttonLabel,
       readOnly: c.source === "env",
@@ -128,6 +205,10 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
       if (v && !GUID_RE.test(v)) throw fail(400, "The client ID must be the application (client) ID, a GUID.");
       next.clientId = v;
     }
+    if (patch.credential !== undefined) {
+      if (!CREDENTIALS.includes(patch.credential)) throw fail(400, "The credential is a client secret or a certificate.");
+      next.credential = patch.credential;
+    }
     // An empty secret in the form means "keep the one stored".
     if (patch.clientSecret) next.clientSecret = String(patch.clientSecret);
     if (patch.clearSecret) next.clientSecret = "";
@@ -136,12 +217,127 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
       next.defaultRole = patch.defaultRole;
     }
     if (patch.buttonLabel !== undefined) next.buttonLabel = String(patch.buttonLabel || "").trim().slice(0, 60);
-    if (next.enabled && !isReady({ ...next, enabled: true })) {
-      throw fail(400, "To turn on Entra sign-in, enter the tenant ID, client ID and client secret.");
+    const proposed = { ...next, enabled: true, credential: next.credential === "certificate" ? "certificate" : "secret", certificates: next.certificates || [] };
+    if (next.enabled && !isReady(proposed)) {
+      throw fail(400, proposed.credential === "certificate"
+        ? "To turn on Entra sign-in, enter the tenant ID and client ID, and have a certificate in use that hasn't expired."
+        : "To turn on Entra sign-in, enter the tenant ID, client ID and client secret.");
     }
     store.write(DOC, next);
     jwks = { keys: [], fetchedAt: 0, tenantId: null };
     return publicConfig();
+  }
+
+  // --- certificates ---------------------------------------------------------
+
+  function settingsOnly() {
+    if (fromEnv()) throw fail(409, "Entra ID is configured by environment variables (ENTRA_*); change it there.");
+    return store.read(DOC, {}) || {};
+  }
+
+  function addCertificate(pair, source) {
+    const current = settingsOnly();
+    const list = Array.isArray(current.certificates) ? current.certificates : [];
+    if (list.length >= MAX_CERTIFICATES) throw fail(409, `Keep at most ${MAX_CERTIFICATES} certificates: remove one you no longer use first.`);
+    const info = certificateInfo(pair.certPem);
+    if (list.some((x) => x.thumbprint === info.thumbprint)) throw fail(409, "That certificate is already here.");
+    if (info.notAfter <= now()) throw fail(400, "That certificate has expired.");
+    // The first one is used at once; a later one waits until it is chosen (after it is added to Entra).
+    const cert = { id: crypto.randomBytes(6).toString("hex"), ...info, certPem: pair.certPem, keyPem: pair.keyPem, source, createdAt: now(), active: !list.some((x) => x.active) };
+    store.write(DOC, { ...current, certificates: [...list, cert] });
+    return publicCertificate(cert);
+  }
+
+  /** Makes a key and a self-signed certificate valid for `years` (1 to 3); the key stays here. */
+  function newCertificate({ years = 2 } = {}) {
+    settingsOnly();
+    const y = Number(years);
+    if (![1, 2, 3].includes(y)) throw fail(400, "A certificate is made for 1, 2 or 3 years.");
+    return addCertificate(generateCertificate({ commonName: "Identity and Visitor Manager", days: y * 365, now: new Date(now()) }), "generated");
+  }
+
+  /** Adds an uploaded certificate: { pfx (base64), password } or { certPem, keyPem, passphrase }. */
+  function uploadCertificate(input = {}) {
+    settingsOnly();
+    let pair;
+    if (input.pfx) {
+      const bytes = Buffer.from(String(input.pfx), "base64");
+      if (!bytes.length || bytes.length > 100 * 1024) throw fail(400, "Choose a PFX file (under 100 KB).");
+      pair = readPfx(bytes, String(input.password ?? ""));
+    } else {
+      pair = readPem(input.certPem, input.keyPem, String(input.passphrase || ""));
+    }
+    return addCertificate(pair, "uploaded");
+  }
+
+  function findCertificate(id, c = config()) {
+    const cert = c.certificates.find((x) => x.id === String(id));
+    if (!cert) throw fail(404, "No such certificate.");
+    return cert;
+  }
+
+  /** Uses this certificate from now on (add it to the app registration in Entra first). */
+  function useCertificate(id) {
+    const current = settingsOnly();
+    const cert = findCertificate(id);
+    if (cert.notAfter <= now()) throw fail(400, "That certificate has expired.");
+    store.write(DOC, { ...current, certificates: current.certificates.map((x) => ({ ...x, active: x.id === cert.id })) });
+    return publicCertificate({ ...cert, active: true });
+  }
+
+  function removeCertificate(id) {
+    const current = settingsOnly();
+    const c = config();
+    const cert = findCertificate(id, c);
+    if (cert.active && c.enabled && c.credential === "certificate") {
+      throw fail(409, "Sign-in uses this certificate. Use another one first, or switch to the client secret.");
+    }
+    store.write(DOC, { ...current, certificates: current.certificates.filter((x) => x.id !== cert.id) });
+    return publicCertificate(cert);
+  }
+
+  /** The certificate (no key) as a .cer file, to upload to the app registration. */
+  function certificateFile(id) {
+    const cert = findCertificate(id);
+    return { der: certificateDer(cert.certPem), name: `identity-visitor-manager-${cert.thumbprint.slice(0, 8).toLowerCase()}.cer`, thumbprint: cert.thumbprint };
+  }
+
+  const tokenUrl = (c) => `${authorityHost}/${c.tenantId}/oauth2/v2.0/token`;
+
+  /** The token request's proof of who the app is: the secret, or a client assertion signed with `certificate`. */
+  function credentialParams(c, certificate = null) {
+    if (certificate || c.credential === "certificate") {
+      const cert = certificate || activeCertificate(c);
+      if (!cert) throw fail(409, "No certificate is in use for Entra sign-in.");
+      return {
+        client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        client_assertion: clientAssertion({ certPem: cert.certPem, keyPem: cert.keyPem, clientId: c.clientId, audience: tokenUrl(c), now: now() })
+      };
+    }
+    return { client_secret: c.clientSecret };
+  }
+
+  /**
+   * Asks Microsoft for a token for this app on its own (client credentials), with the saved
+   * credential or one certificate (by id, to try a new one before using it): whether Entra
+   * accepts it. No permissions are needed for that.
+   */
+  async function testCredential({ certificateId = null } = {}) {
+    const c = config();
+    if (!GUID_RE.test(c.tenantId) || !GUID_RE.test(c.clientId)) throw fail(400, "Save the tenant ID and client ID first.");
+    const certificate = certificateId ? findCertificate(certificateId, c) : null;
+    const usingCertificate = Boolean(certificate) || c.credential === "certificate";
+    if (!usingCertificate && !c.clientSecret) throw fail(400, "Save the client secret first.");
+    const graph = GRAPH_BY_AUTHORITY[new URL(authorityHost).host] || "https://graph.microsoft.com";
+    const { ok, body } = await fetchJson(tokenUrl(c), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: c.clientId, grant_type: "client_credentials", scope: `${graph}/.default`, ...credentialParams(c, certificate) }).toString()
+    });
+    const what = usingCertificate ? `the certificate ${(certificate || activeCertificate(c)).thumbprint}` : "the client secret";
+    if (ok && body.access_token) return { ok: true, message: `Microsoft accepted ${what}.` };
+    const reason = body.error_description ? String(body.error_description).split(/\r?\n/)[0] : body.error || "no answer";
+    return { ok: false, message: `Microsoft refused ${what}: ${reason}` };
   }
 
   // --- the flow --------------------------------------------------------------
@@ -238,12 +434,12 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
     flows.delete(state);
     if (!code) throw fail(401, "Microsoft did not return an authorization code.");
     const c = config();
-    const { ok, body } = await fetchJson(`${authorityHost}/${c.tenantId}/oauth2/v2.0/token`, {
+    const { ok, body } = await fetchJson(tokenUrl(c), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         client_id: c.clientId,
-        client_secret: c.clientSecret,
+        ...credentialParams(c),
         grant_type: "authorization_code",
         code: String(code),
         redirect_uri: flow.redirectUri,
@@ -266,7 +462,11 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
     };
   }
 
-  return { config, publicConfig, isReady, save, begin, complete, verifyIdToken, authorityHost };
+  return {
+    config, publicConfig, isReady, save, begin, complete, verifyIdToken, authorityHost,
+    newCertificate, uploadCertificate, useCertificate, removeCertificate, certificateFile, testCredential,
+    activeCertificate: () => activeCertificate(config())
+  };
 }
 
 module.exports = { createEntra, roleFromClaims, GUID_RE };

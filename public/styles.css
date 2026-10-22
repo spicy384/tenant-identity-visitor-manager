@@ -706,3 +706,4 @@ polyline.plan-draft { fill: none; }
 .dash-stat strong { font-size: 1.2rem; }
 .occupancy-bar { height: 8px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
 .occupancy-bar span { display: block; height: 100%; background: var(--office-occupied); }
+.thumbprint { word-break: break-all; font-size: 0.78rem; }

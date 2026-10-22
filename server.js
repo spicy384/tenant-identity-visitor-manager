@@ -1072,8 +1072,47 @@ app.get("/api/entra", admin, (req, res) => {
 
 app.put("/api/entra", admin, (req, res) => {
   const saved = entra.save(req.body || {});
-  auditFrom(req, "entra.update", saved.tenantId || "(none)", `${saved.enabled ? "on" : "off"}; default role ${saved.defaultRole}${req.body?.clientSecret ? "; secret changed" : ""}`);
+  auditFrom(req, "entra.update", saved.tenantId || "(none)", `${saved.enabled ? "on" : "off"}; ${saved.credential === "certificate" ? "certificate" : "client secret"}; default role ${saved.defaultRole}${req.body?.clientSecret ? "; secret changed" : ""}`);
   res.json({ ok: true, entra: saved });
+});
+
+// Certificates instead of a client secret. Private keys and PFX passwords never leave the
+// server or reach the audit log; only thumbprints do.
+app.post("/api/entra/certificates/generate", admin, (req, res) => {
+  const certificate = entra.newCertificate(req.body || {});
+  auditFrom(req, "entra.certificate_add", certificate.thumbprint, `made here, valid to ${new Date(certificate.notAfter).toISOString().slice(0, 10)}`);
+  res.json({ ok: true, certificate });
+});
+
+app.post("/api/entra/certificates/upload", admin, (req, res) => {
+  const certificate = entra.uploadCertificate(req.body || {});
+  auditFrom(req, "entra.certificate_add", certificate.thumbprint, `uploaded, valid to ${new Date(certificate.notAfter).toISOString().slice(0, 10)}`);
+  res.json({ ok: true, certificate });
+});
+
+app.post("/api/entra/certificates/:id/use", admin, (req, res) => {
+  const certificate = entra.useCertificate(req.params.id);
+  auditFrom(req, "entra.certificate_use", certificate.thumbprint);
+  res.json({ ok: true, certificate });
+});
+
+app.delete("/api/entra/certificates/:id", admin, (req, res) => {
+  const certificate = entra.removeCertificate(req.params.id);
+  auditFrom(req, "entra.certificate_remove", certificate.thumbprint);
+  res.json({ ok: true });
+});
+
+app.get("/api/entra/certificates/:id/cer", admin, (req, res) => {
+  const file = entra.certificateFile(req.params.id);
+  res.setHeader("Content-Type", "application/pkix-cert");
+  res.setHeader("Content-Disposition", `attachment; filename="${file.name}"`);
+  res.send(file.der);
+});
+
+app.post("/api/entra/test", admin, async (req, res) => {
+  const result = await entra.testCredential({ certificateId: req.body?.certificateId ? String(req.body.certificateId) : null });
+  auditFrom(req, "entra.test", result.ok ? "accepted" : "refused", result.message.slice(0, 300));
+  res.json(result);
 });
 
 app.get("/api/audit", admin, (req, res) => {
@@ -1158,7 +1197,12 @@ if (require.main === module) {
     console.log(`Kiosks: ${kiosks.list().length} (${KIOSK_PORT ? `on port ${KIOSK_PORT}` : "pages at /kiosk/ on this port"})`);
     console.log(`API clients: ${apiClients.list().length} (API at /api/v1)`);
     clock.start();
-    console.log(`Entra ID sign-in: ${entra.isReady() ? `on (tenant ${entra.config().tenantId}${entra.config().source === "env" ? ", from environment" : ""})` : "off"}`);
+    console.log(`Entra ID sign-in: ${entra.isReady() ? `on (tenant ${entra.config().tenantId}, ${entra.config().credential === "certificate" ? "certificate" : "client secret"}${entra.config().source === "env" ? ", from environment" : ""})` : "off"}`);
+    const entraCert = entra.config().credential === "certificate" ? entra.activeCertificate() : null;
+    if (entraCert && entraCert.notAfter - Date.now() < 30 * 24 * 60 * 60 * 1000) {
+      console.warn(`Entra ID: the sign-in certificate ${entraCert.thumbprint} ${entraCert.notAfter <= Date.now() ? "has expired" : `expires on ${new Date(entraCert.notAfter).toISOString().slice(0, 10)}`}; make a new one under Settings > Microsoft Entra ID.`);
+    }
+    if (entra.publicConfig().certificateError) console.warn(`Entra ID: ${entra.publicConfig().certificateError}`);
     if (authGuard.cookieSecure) {
       console.log("Session cookie: Secure (requires HTTPS end to end - sign-in fails over plain HTTP)");
     } else {
