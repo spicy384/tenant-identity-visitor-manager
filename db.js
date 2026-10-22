@@ -18,7 +18,8 @@ const DB_FILE = "identity.db";
 // 3: API clients. 4: badges, clearances, building staff, visitor events. 5: clearance validation.
 // 6: badge template images, and which roles see clearance levels. 7: kiosk visits waiting for a badge.
 // 8: facilities (floors, offices, office assignments, rates) and the roles that reach them.
-const SCHEMA_VERSION = 8;
+// 9: room types and classified subcategories, each with a color.
+const SCHEMA_VERSION = 9;
 
 function fail(status, message) {
   const error = new Error(message);
@@ -419,6 +420,26 @@ CREATE TABLE IF NOT EXISTS site_rates (
   updated_at INTEGER NOT NULL
 );
 
+-- Kinds of room (Office, Conference Room, ...), each with a color for the plan and whether it
+-- is assigned to companies; and the subcategories of a classified room (SCAR, SCIF). A room with
+-- no subcategory is unclassified (its color is the setting facilities.unclassified_color).
+CREATE TABLE IF NOT EXISTS room_types (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  color TEXT NOT NULL,
+  assignable INTEGER NOT NULL DEFAULT 1,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS room_classes (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  color TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS company_rates (
   company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
   rate REAL NOT NULL,
@@ -461,7 +482,10 @@ const ADDED_COLUMNS = [
   ["floors", "scale_feet", "REAL"],
   ["floors", "scale_line", "TEXT"],
   // Roles that add and change custom fields (Settings > Roles).
-  ["roles", "fields", "INTEGER NOT NULL DEFAULT 0"]
+  ["roles", "fields", "INTEGER NOT NULL DEFAULT 0"],
+  // A room's type and, when classified, its subcategory.
+  ["offices", "room_type_id", "INTEGER REFERENCES room_types(id)"],
+  ["offices", "class_id", "INTEGER REFERENCES room_classes(id)"]
 ];
 
 function addColumns(db) {

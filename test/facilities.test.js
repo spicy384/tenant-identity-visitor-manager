@@ -180,6 +180,51 @@ async function main() {
   check("scale: cleared on request", (await manager.put(`/api/floors/${level2.id}/scale`, { feet: null })).data.floor.scale === null);
   await manager.del(`/api/floors/${level2.id}`);
 
+  // --- room types and classifications ------------------------------------------------------------------
+  let kinds = (await lee.get("/api/facilities/room-kinds")).data;
+  check("kinds: the room types to start with, with colors", kinds.types.map((t) => t.name).join() === "Office,Conference Room,Meeting Room,Storage,IT Room"
+    && kinds.types.every((t) => /^#[0-9a-f]{6}$/.test(t.color)));
+  check("kinds: offices and storage are assigned to companies, the rest are shared", kinds.types.filter((t) => t.assignable).map((t) => t.name).join() === "Office,Storage");
+  check("kinds: classified as SCAR or SCIF, or unclassified", kinds.classes.map((c) => c.name).join() === "SCAR,SCIF" && kinds.unclassified.name === "Unclassified" && /^#/.test(kinds.unclassified.color));
+  const typeId = (name) => kinds.types.find((t) => t.name === name).id;
+  const classId = (name) => kinds.classes.find((c) => c.name === name).id;
+  check("kinds: a new room is an office, unclassified", o101.roomType?.name === "Office" && o101.classification === null && o101.assignable);
+  r = await manager.post("/api/offices", { floorId: level1.id, name: "Boardroom", sqft: 600, roomTypeId: typeId("Conference Room"), classId: classId("SCIF") });
+  const boardroom = r.data.office;
+  check("kinds: a conference room, classified SCIF", r.status === 200 && boardroom.roomType.name === "Conference Room" && boardroom.classification.name === "SCIF" && boardroom.classification.color === kinds.classes.find((c) => c.name === "SCIF").color);
+  check("kinds: a type that isn't assigned is shared, with no rent", boardroom.status === "shared" && !boardroom.assignable && boardroom.monthly === null);
+  check("kinds: and can't be assigned", (await manager.post(`/api/offices/${boardroom.id}/assignments`, { companyId: acme.id, startDate: "2020-01-01" })).status === 409);
+  check("kinds: an unknown type or classification is refused", (await manager.put(`/api/offices/${boardroom.id}`, { roomTypeId: 9999 })).status === 400
+    && (await manager.put(`/api/offices/${boardroom.id}`, { classId: 9999 })).status === 400);
+  check("kinds: made unclassified again", (await manager.put(`/api/offices/${boardroom.id}`, { classId: null })).data.office.classification === null);
+  check("kinds: read-only roles can't change the lists", (await lee.post("/api/facilities/room-types", { name: "Lab", color: "#123456" })).status === 403);
+  r = await manager.post("/api/facilities/room-types", { name: "Lab", color: "#12AB56", assignable: false });
+  const lab = r.data.type;
+  check("kinds: a room type added, color kept in lower case", r.status === 200 && lab.color === "#12ab56" && !lab.assignable);
+  check("kinds: colors must be #RRGGBB", (await manager.post("/api/facilities/room-types", { name: "Bad", color: "red" })).status === 400);
+  check("kinds: names are unique", (await manager.post("/api/facilities/room-types", { name: "office", color: "#000000" })).status === 409);
+  check("kinds: recolored and renamed", (await manager.put(`/api/facilities/room-types/${typeId("Meeting Room")}`, { name: "Huddle Room", color: "#0f766e" })).data.type.name === "Huddle Room");
+  r = await manager.post("/api/facilities/room-classes", { name: "SAPF", color: "#9333ea" });
+  check("kinds: a classified subcategory added", r.status === 200 && r.data.classification.name === "SAPF");
+  check("kinds: Unclassified isn't a subcategory", (await manager.post("/api/facilities/room-classes", { name: "unclassified", color: "#000000" })).status === 400);
+  check("kinds: the unclassified color is set", (await manager.put("/api/facilities/unclassified-color", { color: "#22C55E" })).data.color === "#22c55e");
+  await manager.put(`/api/offices/${boardroom.id}`, { classId: classId("SCAR") });
+  check("kinds: one in use can't be removed", (await manager.del(`/api/facilities/room-classes/${classId("SCAR")}`)).status === 409
+    && (await manager.del(`/api/facilities/room-types/${typeId("Conference Room")}`)).status === 409);
+  check("kinds: an unused one can", (await manager.del(`/api/facilities/room-types/${lab.id}`)).status === 200 && (await manager.del(`/api/facilities/room-classes/${r.data.classification.id}`)).status === 200);
+  kinds = (await lee.get("/api/facilities/room-kinds")).data;
+  check("kinds: counted", kinds.types.find((t) => t.name === "Conference Room").rooms === 1 && kinds.classes.find((c) => c.name === "SCAR").rooms === 1);
+  check("kinds: the rooms list by type", (await manager.get(`/api/offices?roomTypeId=${typeId("Conference Room")}`)).data.offices.map((o) => o.name).join() === "Boardroom");
+  // A type stays assignable while one of its rooms is assigned.
+  const storeroom = (await manager.post("/api/offices", { floorId: level1.id, name: "Store 1", roomTypeId: typeId("Storage") })).data.office;
+  await manager.post(`/api/offices/${storeroom.id}/assignments`, { companyId: acme.id, startDate: "2099-01-01" });
+  check("kinds: a type stays assignable while one of its rooms is assigned", (await manager.put(`/api/facilities/room-types/${typeId("Storage")}`, { assignable: false })).status === 409);
+  check("kinds: nor can such a room become a shared type", (await manager.put(`/api/offices/${storeroom.id}`, { roomTypeId: typeId("IT Room") })).status === 409);
+  check("kinds: shared rooms aren't offered as free", !(await manager.get(`/api/offices?site=${harbour.id}&freeFrom=2030-01-01`)).data.offices.some((o) => o.name === "Boardroom"));
+  for (const a of (await manager.get(`/api/offices/${storeroom.id}`)).data.office.assignments) await manager.del(`/api/office-assignments/${a.id}`);
+  await manager.del(`/api/offices/${storeroom.id}`);
+  await manager.del(`/api/offices/${boardroom.id}`);
+
   // --- rates -------------------------------------------------------------------------------------------
   check("rates: front desk can't set them", (await desk.put(`/api/facilities/site-rates/${harbour.id}`, { rate: 3 })).status === 403);
   check("rates: nor can read-only roles", (await lee.put(`/api/facilities/site-rates/${harbour.id}`, { rate: 3 })).status === 403);

@@ -511,6 +511,23 @@ company/person". Then (same day, asked for by the user): badge fields for both S
 switch seeded on once for it) and managers: a role with the switch shapes badge fields when it
 issues or manages badges (badges edit or manage); filling a badge's values in still takes manage.
 
+## Room types and classification (2026-10-22)
+
+Asked for by the user: classify rooms (Office, Conference Room, Meeting Room, Storage, IT Room),
+mark them Unclassified or Classified with a subcategory of SCAR or SCIF, and set a color for
+each. Decided with the user: a "Color by" switch on the plan (availability, room type,
+classification); a per-type "assigned to companies" switch (Office and Storage on), the rest
+shown as shared with no rent; everyone with Facilities access sees the classification; the
+lists are editable. Built (schema 9): room_types (name, color, assignable, position),
+room_classes (name, color, position), offices.room_type_id and class_id (NULL class =
+unclassified; its color is the setting facilities.unclassified_color); seeded once, existing
+rooms made Offices. Status "shared" for rooms of an unassigned type; they can't be assigned,
+aren't offered as free, cost nothing; a type can't stop being assigned (nor a room become a
+shared type) while assigned now or later; a type or subcategory in use can't be removed.
+Routes /api/facilities/room-kinds, room-types, room-classes, unclassified-color; GET
+/api/offices?roomTypeId. Front end: Facilities > Room types (color inputs), Color by and its
+key on the plan, type and classification in the room dialog and the Rooms table (was Offices).
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

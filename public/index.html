@@ -247,22 +247,27 @@
     <section id="view-floors" class="view" data-title="Floor plans" hidden>
       <div id="floors-body"></div>
     </section>
-    <section id="view-offices" class="view" data-title="Offices" hidden>
+    <section id="view-offices" class="view" data-title="Rooms" hidden>
       <div class="toolbar">
-        <input id="offices-search" type="search" placeholder="Search office, floor or company" />
+        <input id="offices-search" type="search" placeholder="Search room, floor, type or company" />
+        <select id="offices-type" aria-label="Room type"><option value="">Every type</option></select>
         <select id="offices-status" aria-label="Status">
-          <option value="">Every office</option>
+          <option value="">Every status</option>
           <option value="available">Available</option>
           <option value="occupied">Occupied</option>
           <option value="upcoming">Upcoming (assigned from a later date)</option>
+          <option value="shared">Shared (not assigned to companies)</option>
           <option value="unavailable">Unavailable</option>
         </select>
         <span class="spacer"></span>
-        <button type="button" id="offices-add" class="primary" hidden>Add office</button>
+        <button type="button" id="offices-add" class="primary" hidden>Add room</button>
       </div>
       <div class="table-wrap">
         <table class="table" id="offices-table"><thead></thead><tbody></tbody><tfoot></tfoot></table>
       </div>
+    </section>
+    <section id="view-roomtypes" class="view" data-title="Room types" hidden>
+      <div id="roomtypes-body" class="stack"></div>
     </section>
     <section id="view-rates" class="view" data-title="Rates" hidden>
       <div id="rates-body" class="stack"></div>

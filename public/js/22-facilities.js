@@ -15,8 +15,31 @@ const OFFICE_STATUS = {
   available: { label: "Available", badge: "ok" },
   occupied: { label: "Occupied", badge: "" },
   upcoming: { label: "Upcoming", badge: "warn", hint: "Free now; assigned from a later date" },
+  shared: { label: "Shared", badge: "muted", hint: "A kind of room that isn't assigned to companies, such as a conference room" },
   unavailable: { label: "Unavailable", badge: "muted" }
 };
+
+// What colors the rooms on the plan: their availability, their type, or their classification.
+const COLOR_BY = { status: "Availability", type: "Room type", classification: "Classification" };
+const COLOR_BY_KEY = "ivm-plan-color";
+function planColorBy() {
+  try { return COLOR_BY[localStorage.getItem(COLOR_BY_KEY)] ? localStorage.getItem(COLOR_BY_KEY) : "status"; } catch { return "status"; }
+}
+
+/** Room types and classifications (with colors), read once a page and after changes. */
+async function roomKinds(fresh = false) {
+  if (fresh || !facilitiesView.kinds) facilitiesView.kinds = await api("/api/facilities/room-kinds");
+  return facilitiesView.kinds;
+}
+
+/** A room's color in the chosen view, or null for its availability's (CSS). */
+function roomColor(o, colorBy = planColorBy()) {
+  if (colorBy === "type") return o.roomType?.color || "#94a3b8";
+  if (colorBy === "classification") return o.classification?.color || facilitiesView.kinds?.unclassified.color || "#16a34a";
+  return null;
+}
+
+const classificationText = (o) => (o.classification ? `Classified: ${o.classification.name}` : "Unclassified");
 const RATE_SOURCES = { company: "the company's rate", office: "the office's rate", site: "the site's default" };
 
 const moneyFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -103,10 +126,17 @@ async function loadFloors() {
   const picker = h("select", { "aria-label": "Floor", onchange: () => { location.hash = `#floors/${picker.value}`; } },
     floors.map((f) => h("option", { value: String(f.id), text: multiSite() && !state.site ? `${f.siteName}: ${f.name}` : f.name })));
   picker.value = String(floor.id);
-  const draw = h("button", { type: "button", class: facilitiesView.drawing ? "primary" : "secondary", text: facilitiesView.drawing ? "Done drawing" : "Draw offices",
+  const draw = h("button", { type: "button", class: facilitiesView.drawing ? "primary" : "secondary", text: facilitiesView.drawing ? "Done drawing" : "Draw rooms",
     disabled: !floor.planRef, title: floor.planRef ? null : "Upload a floor plan first", onclick: () => setDrawing(!facilitiesView.drawing) });
+  await roomKinds();
+  const colorBy = planColorBy();
+  const colorSwitch = h("div", { class: "segmented", role: "group", "aria-label": "Color the rooms by" }, Object.entries(COLOR_BY).map(([id, label]) => h("button", {
+    type: "button", class: id === colorBy ? "is-current" : null, "aria-pressed": String(id === colorBy), text: label,
+    onclick: () => { try { localStorage.setItem(COLOR_BY_KEY, id); } catch { /* storage blocked */ } loadFloors(); }
+  })));
   const toolbar = h("div", { class: "toolbar" },
     h("label", { class: "inline-label" }, h("span", { text: "Floor" }), picker),
+    h("div", { class: "inline-label" }, h("span", { class: "muted small-text", text: "Color by" }), colorSwitch),
     h("span", { class: "spacer" }),
     editor ? [
       draw,
@@ -334,13 +364,15 @@ window.addEventListener("blur", () => {
 function drawOffice(plan, o) {
   const who = o.current?.companyName || o.next?.companyName || null;
   const shape = svgEl("polygon", { class: `plan-shape status-${o.status}${facilitiesView.selected === o.id ? " is-selected" : ""}`, points: pointsAttr(o.points), "data-id": String(o.id) });
+  const color = roomColor(o);
+  if (color) shape.style.setProperty("--office", color);
   const title = svgEl("title");
-  title.textContent = [o.name, OFFICE_STATUS[o.status].label, officeHolder(o), o.sqft ? fmtSqft(o.sqft) : null].filter(Boolean).join("\n");
+  title.textContent = [o.name, o.roomType?.name, classificationText(o), OFFICE_STATUS[o.status].label, officeHolder(o), o.sqft ? fmtSqft(o.sqft) : null].filter(Boolean).join("\n");
   shape.append(title);
   if (!facilitiesView.drawing) {
     shape.setAttribute("tabindex", "0");
     shape.setAttribute("role", "button");
-    shape.setAttribute("aria-label", `Office ${o.name}, ${OFFICE_STATUS[o.status].label}${who ? `, ${who}` : ""}`);
+    shape.setAttribute("aria-label", `${o.roomType?.name || "Room"} ${o.name}, ${classificationText(o)}, ${OFFICE_STATUS[o.status].label}${who ? `, ${who}` : ""}`);
     shape.addEventListener("click", () => openOffice(o.id, loadFloors));
     shape.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openOffice(o.id, loadFloors); } });
   }
@@ -688,15 +720,43 @@ async function fillSizes(offices) {
 }
 
 /** Beside the plan: the key with counts, the floor's totals, and its offices (with those not yet drawn). */
+/** The key for the chosen colors: each availability, room type or classification, with how many rooms on the floor have it. */
+function planLegend(offices) {
+  const colorBy = planColorBy();
+  const kinds = facilitiesView.kinds;
+  const item = (label, count, { status = null, color = null, hint = null } = {}) => {
+    const swatch = h("span", { class: `plan-swatch${status ? ` status-${status}` : ""}`, "aria-hidden": "true" });
+    if (color) swatch.style.setProperty("--office", color);
+    return h("li", { title: hint }, swatch, h("span", { text: label }), h("strong", { text: String(count) }));
+  };
+  let items;
+  if (colorBy === "type") {
+    items = kinds.types.map((t) => item(t.name, offices.filter((o) => o.roomTypeId === t.id).length, { color: t.color, hint: t.assignable ? "Assigned to companies" : "Shared" }));
+    const untyped = offices.filter((o) => !o.roomTypeId).length;
+    if (untyped) items.push(item("No type", untyped, { color: "#94a3b8" }));
+  } else if (colorBy === "classification") {
+    items = [item("Unclassified", offices.filter((o) => !o.classId).length, { color: kinds.unclassified.color }),
+      ...kinds.classes.map((c) => item(`Classified: ${c.name}`, offices.filter((o) => o.classId === c.id).length, { color: c.color }))];
+  } else {
+    items = Object.entries(OFFICE_STATUS).map(([s, d]) => item(d.label, offices.filter((o) => o.status === s).length, { status: s, hint: d.hint }));
+  }
+  return h("ul", { class: "plan-legend" }, items);
+}
+
 function floorSide(floor, offices) {
-  const counts = Object.fromEntries(Object.keys(OFFICE_STATUS).map((s) => [s, offices.filter((o) => o.status === s).length]));
   const sum = (list, key) => list.reduce((n, o) => n + (o[key] || 0), 0);
   const occupied = offices.filter((o) => o.status === "occupied");
   const free = offices.filter((o) => o.status === "available" || o.status === "upcoming");
   const editor = canEditFacilities();
+  const swatchFor = (o) => {
+    const el = h("span", { class: `plan-swatch status-${o.status}`, "aria-hidden": "true" });
+    const color = roomColor(o);
+    if (color) el.style.setProperty("--office", color);
+    return el;
+  };
   const row = (o) => h("div", { class: "floor-office-row", role: "button", tabindex: "0", onclick: () => openOffice(o.id, loadFloors), onkeydown: (e) => { if (e.key === "Enter") openOffice(o.id, loadFloors); } },
-    h("span", { class: `plan-swatch status-${o.status}`, "aria-hidden": "true" }),
-    h("span", { class: "floor-office-main" }, h("strong", { text: o.name }), h("span", { class: "muted small-text", text: officeHolder(o) || OFFICE_STATUS[o.status].label })),
+    swatchFor(o),
+    h("span", { class: "floor-office-main" }, h("strong", { text: o.name }), h("span", { class: "muted small-text", text: [o.roomType?.name, officeHolder(o) || OFFICE_STATUS[o.status].label].filter(Boolean).join(" · ") })),
     !o.points && facilitiesView.drawing && editor
       ? h("button", { type: "button", class: "link-btn small-text", text: "Place", onclick: (e) => { e.stopPropagation(); Object.assign(facilitiesView, { placing: o, selected: null, tool: facilitiesView.tool === "scale" ? "rect" : facilitiesView.tool }); loadFloors(); } })
       : h("span", { class: "muted small-text", text: o.sqft ? fmtSqft(o.sqft) : "" }));
@@ -706,8 +766,7 @@ function floorSide(floor, offices) {
     h("div", { class: "panel" },
       h("h3", { text: floor.name }),
       multiSite() ? h("p", { class: "muted small-text", text: floor.siteName }) : null,
-      h("ul", { class: "plan-legend" }, Object.entries(OFFICE_STATUS).map(([s, d]) => h("li", { title: d.hint || null },
-        h("span", { class: `plan-swatch status-${s}`, "aria-hidden": "true" }), h("span", { text: d.label }), h("strong", { text: String(counts[s]) })))),
+      planLegend(offices),
       h("dl", { class: "facts small-facts" },
         h("dt", { text: "Space" }), h("dd", { text: fmtSqft(sum(offices, "sqft")) }),
         h("dt", { text: "Let" }), h("dd", { text: fmtSqft(sum(occupied, "sqft")) }),
@@ -719,10 +778,10 @@ function floorSide(floor, offices) {
           editor && floor.scale ? h("button", { type: "button", class: "link-btn small-text danger-text", text: " Clear", onclick: () => clearScale(floor) }) : null)] : null),
       editor && unsized.length ? h("button", { type: "button", class: "secondary small fill-sizes", text: `Fill in ${unsized.length} missing ${unsized.length === 1 ? "size" : "sizes"} from the plan`, onclick: () => fillSizes(offices) }) : null),
     h("div", { class: "panel" },
-      h("div", { class: "panel-head" }, h("h3", { text: `Offices (${offices.length})` }),
+      h("div", { class: "panel-head" }, h("h3", { text: `Rooms (${offices.length})` }),
         editor ? h("button", { type: "button", class: "link-btn small-text", text: "Add without drawing", onclick: async () => { if (await editOffice(null, { floor })) loadFloors(); } }) : null),
-      offices.length ? h("div", { class: "floor-office-list" }, offices.map(row)) : h("p", { class: "muted small-text", text: facilitiesView.drawing || !editor ? "None yet." : "None yet. Choose Draw offices to draw them on the plan." }),
-      undrawn.length && floor.planRef ? h("p", { class: "muted small-text", text: `${undrawn.length} not on the plan yet${editor ? ": choose Draw offices, then Place" : ""}.` }) : null));
+      offices.length ? h("div", { class: "floor-office-list" }, offices.map(row)) : h("p", { class: "muted small-text", text: facilitiesView.drawing || !editor ? "None yet." : "None yet. Choose Draw rooms to draw them on the plan." }),
+      undrawn.length && floor.planRef ? h("p", { class: "muted small-text", text: `${undrawn.length} not on the plan yet${editor ? ": choose Draw rooms, then Place" : ""}.` }) : null));
 }
 
 // --- floors ----------------------------------------------------------------------------------------
@@ -838,6 +897,8 @@ function uploadPlan(floor) {
  */
 async function editOffice(office, { floor = null, points = null } = {}) {
   const measured = office ? office.measuredSqft : floor && points ? measuredSqft(points, floor) : null;
+  const kinds = await roomKinds(true);
+  const officeType = kinds.types.find((t) => t.name === "Office");
   let floors = null;
   if (!office && !floor) {
     ({ floors } = await api(`/api/floors?${facilitySite()}`));
@@ -847,10 +908,15 @@ async function editOffice(office, { floor = null, points = null } = {}) {
     }
   }
   const saved = await formDialog({
-    title: office ? `Edit ${office.name}` : "Add office",
+    title: office ? `Edit ${office.name}` : "Add room",
     fields: [
       floors ? { name: "floorId", label: "Floor", type: "select", options: floors.map((f) => ({ value: String(f.id), label: multiSite() ? `${f.siteName}: ${f.name}` : f.name })) } : null,
       { name: "name", label: "Name or number", value: office?.name, required: true, autofocus: true, placeholder: "Suite 210" },
+      { name: "roomTypeId", label: "Room type", type: "select", half: true, value: String(office ? office.roomTypeId ?? "" : officeType?.id ?? ""),
+        options: [...(office && !office.roomTypeId ? [{ value: "", label: "No type" }] : []), ...kinds.types.map((t) => ({ value: String(t.id), label: `${t.name}${t.assignable ? "" : " (shared)"}` }))],
+        hint: "Shared types (such as conference rooms) aren't assigned to companies." },
+      { name: "classId", label: "Classification", type: "select", half: true, value: String(office?.classId ?? ""),
+        options: [{ value: "", label: "Unclassified" }, ...kinds.classes.map((c) => ({ value: String(c.id), label: `Classified: ${c.name}` }))] },
       { name: "sqft", label: "Size (sq ft)", type: "number", value: office ? office.sqft ?? "" : measured ?? "", step: "any", min: "0", half: true,
         hint: measured ? `About ${measured.toLocaleString("en-US")} sq ft measured on the plan${office ? "" : ": change it to the real size if you know it"}.` : null },
       { name: "rate", label: "Rate ($ per sq ft a month)", type: "number", value: office?.rate ?? "", step: "0.01", min: "0", half: true,
@@ -858,9 +924,10 @@ async function editOffice(office, { floor = null, points = null } = {}) {
       { name: "unavailable", label: "Unavailable (can't be assigned, e.g. under renovation)", type: "checkbox", value: Boolean(office?.unavailable) },
       { name: "notes", label: "Notes", type: "textarea", value: office?.notes ?? "", rows: 2 }
     ].filter(Boolean),
-    submitLabel: office ? "Save" : "Add office",
+    submitLabel: office ? "Save" : "Add room",
     onSubmit: async (v) => {
-      const body = { name: v.name, sqft: v.sqft === "" ? null : Number(v.sqft), rate: v.rate === "" ? null : Number(v.rate), unavailable: v.unavailable, notes: v.notes };
+      const body = { name: v.name, roomTypeId: v.roomTypeId ? Number(v.roomTypeId) : null, classId: v.classId ? Number(v.classId) : null,
+        sqft: v.sqft === "" ? null : Number(v.sqft), rate: v.rate === "" ? null : Number(v.rate), unavailable: v.unavailable, notes: v.notes };
       if (office) return (await api(`/api/offices/${office.id}`, { method: "PUT", body })).office;
       return (await api("/api/offices", { method: "POST", body: { ...body, floorId: floor ? floor.id : Number(v.floorId), ...(points ? { points } : {}) } })).office;
     }
@@ -909,6 +976,9 @@ async function openOffice(id, onChange = () => {}) {
       h("dt", { text: "Status" }), h("dd", {}, statusBadge(office.status), office.status === "unavailable" ? null : h("span", { text: ` ${officeHolder(office) || ""}` })),
       h("dt", { text: "Where" }), h("dd", {}, h("a", { href: `#floors/${office.floorId}`, text: multiSite() ? `${office.siteName}, ${office.floorName}` : office.floorName, onclick: () => pick(null) }),
         office.points ? null : h("span", { class: "muted small-text", text: " (not drawn on the plan)" })),
+      h("dt", { text: "Type" }), h("dd", {}, office.roomType ? colorTag(office.roomType.name, office.roomType.color) : "No type",
+        office.roomType && !office.assignable ? h("span", { class: "muted small-text", text: " (shared: not assigned to companies)" }) : null),
+      h("dt", { text: "Classification" }), h("dd", {}, colorTag(classificationText(office), office.classification?.color || facilitiesView.kinds?.unclassified.color || "#16a34a")),
       h("dt", { text: "Size" }), h("dd", {}, fmtSqft(office.sqft),
         office.measuredSqft && office.measuredSqft !== office.sqft ? h("span", { class: "muted small-text", text: ` (about ${fmtSqft(office.measuredSqft)} measured on the plan)` }) : null),
       h("dt", { text: "Rate" }), h("dd", { text: rateText }),
@@ -918,7 +988,7 @@ async function openOffice(id, onChange = () => {}) {
     h("h4", { class: "form-heading", text: "Assignments" }),
     history);
   const choice = await openDialog({
-    title: `Office ${office.name}`,
+    title: `${office.roomType?.name || "Room"} ${office.name}`,
     body,
     wide: true,
     onOpen: (dlg) => { dialog = dlg; },
@@ -926,7 +996,7 @@ async function openOffice(id, onChange = () => {}) {
       ...(editor ? [
         { label: "Delete", kind: "danger", value: "delete" },
         { label: "Edit", kind: "secondary", value: "edit" },
-        office.unavailable ? null : { label: "Assign to a company", kind: "secondary", value: "assign" }
+        office.unavailable || !office.assignable ? null : { label: "Assign to a company", kind: "secondary", value: "assign" }
       ].filter(Boolean) : []),
       { label: "Close", kind: "primary", value: null }
     ]
@@ -1035,22 +1105,31 @@ function showOffices() {
 async function loadOffices() {
   const params = facilitySite();
   if ($("offices-status").value) params.set("status", $("offices-status").value);
+  // The type filter, from the current list of types.
+  const kinds = await roomKinds(true);
+  const typePick = $("offices-type");
+  const chosen = typePick.value;
+  typePick.replaceChildren(h("option", { value: "", text: "Every type" }), ...kinds.types.map((t) => h("option", { value: String(t.id), text: t.name })));
+  typePick.value = kinds.types.some((t) => String(t.id) === chosen) ? chosen : "";
+  if (typePick.value) params.set("roomTypeId", typePick.value);
   let offices;
   try {
     ({ offices } = await api(`/api/offices?${params}`));
   } catch (error) {
-    $("offices-table").tBodies[0].replaceChildren(emptyRow(8, error.message));
+    $("offices-table").tBodies[0].replaceChildren(emptyRow(9, error.message));
     return;
   }
   const q = $("offices-search").value.trim().toLowerCase();
-  if (q) offices = offices.filter((o) => [o.name, o.floorName, o.siteName, o.current?.companyName, o.next?.companyName].some((s) => String(s || "").toLowerCase().includes(q)));
+  if (q) offices = offices.filter((o) => [o.name, o.floorName, o.siteName, o.roomType?.name, o.classification?.name, o.current?.companyName, o.next?.companyName].some((s) => String(s || "").toLowerCase().includes(q)));
   $("offices-add").hidden = !canEditFacilities();
   const table = $("offices-table");
-  table.tHead.replaceChildren(h("tr", {}, ["Office", "Floor", "Size", "Status", "Company", "Rate", "Monthly"].map((t) => h("th", { text: t }))));
+  table.tHead.replaceChildren(h("tr", {}, ["Room", "Floor", "Type", "Classification", "Size", "Status", "Company", "Rate", "Monthly"].map((t) => h("th", { text: t }))));
   table.tBodies[0].replaceChildren(...(offices.length ? offices.map((o) => {
     const row = h("tr", { class: "clickable" },
       h("td", {}, h("strong", { text: o.name })),
       h("td", { text: officeWhere(o) }),
+      h("td", {}, o.roomType ? colorTag(o.roomType.name, o.roomType.color) : h("span", { class: "muted", text: "—" })),
+      h("td", {}, colorTag(o.classification ? o.classification.name : "Unclassified", o.classification?.color || kinds.unclassified.color)),
       h("td", { class: "num", text: o.sqft === null ? "—" : Number(o.sqft).toLocaleString("en-US") }),
       h("td", {}, statusBadge(o.status)),
       h("td", { text: officeHolder(o) || "" }),
@@ -1058,11 +1137,11 @@ async function loadOffices() {
       h("td", { class: `num${o.status === "occupied" ? "" : " muted"}`, title: o.status === "occupied" ? null : "Asking", text: fmtMoney(o.monthly) }));
     row.addEventListener("click", () => openOffice(o.id, loadOffices));
     return row;
-  }) : [emptyRow(7, q || $("offices-status").value ? "No offices match." : "No offices yet. Add floors and draw their offices under Floor plans.")]));
+  }) : [emptyRow(9, q || $("offices-status").value || typePick.value ? "No rooms match." : "No rooms yet. Add floors and draw their rooms under Floor plans.")]));
   const occupied = offices.filter((o) => o.status === "occupied");
   const sqft = (list) => list.reduce((n, o) => n + (o.sqft || 0), 0);
   table.tFoot.replaceChildren(offices.length ? h("tr", {},
-    h("td", { colspan: 2, text: `${offices.length} ${offices.length === 1 ? "office" : "offices"}` }),
+    h("td", { colspan: 4, text: `${offices.length} ${offices.length === 1 ? "room" : "rooms"}` }),
     h("td", { class: "num", text: Number(sqft(offices)).toLocaleString("en-US") }),
     h("td", { colspan: 3, class: "muted small-text", text: `${occupied.length} occupied, ${Number(sqft(occupied)).toLocaleString("en-US")} sq ft let` }),
     h("td", { class: "num" }, h("strong", { text: fmtMoney(occupied.reduce((n, o) => n + (o.monthly || 0), 0)) }))) : "");
@@ -1070,7 +1149,116 @@ async function loadOffices() {
 
 $("offices-search").addEventListener("input", debounce(loadOffices));
 $("offices-status").addEventListener("change", loadOffices);
+$("offices-type").addEventListener("change", loadOffices);
 $("offices-add").addEventListener("click", async () => { if (await editOffice(null)) loadOffices(); });
+
+/** A name with a small square of its color. */
+function colorTag(text, color) {
+  const swatch = h("span", { class: "color-dot", "aria-hidden": "true" });
+  swatch.style.background = color;
+  return h("span", { class: "color-tag" }, swatch, text);
+}
+
+// --- room types and classifications ----------------------------------------------------------------
+
+async function showRoomTypes() {
+  const body = $("roomtypes-body");
+  let kinds;
+  try {
+    kinds = await roomKinds(true);
+  } catch (error) {
+    body.replaceChildren(h("p", { class: "message error", text: error.message }));
+    return;
+  }
+  const editor = canEditFacilities();
+  const run = (fn) => async () => {
+    try {
+      if (await fn()) showRoomTypes();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+  const remove = (what, url) => run(async () => {
+    if (!(await confirmDialog(`Remove ${what}?`, { danger: true, confirmLabel: "Remove" }))) return false;
+    await api(url, { method: "DELETE" });
+    toast("Removed.");
+    return true;
+  });
+  const roomsText = (n) => `${n} ${n === 1 ? "room" : "rooms"}`;
+  body.replaceChildren(
+    h("p", { class: "muted", text: "Each room has a type and is unclassified or classified. Their colors show on the floor plans when they're colored by room type or by classification (Floor plans > Color by)." }),
+    h("div", { class: "panel" },
+      h("div", { class: "panel-head" }, h("h3", { text: "Room types" }),
+        editor ? h("button", { type: "button", class: "primary small", text: "Add room type", onclick: run(() => editRoomType(null)) }) : null),
+      h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+        h("thead", {}, h("tr", {}, ["Room type", "Assigned to companies", "Rooms", ""].map((t) => h("th", { text: t })))),
+        h("tbody", {}, kinds.types.map((t) => h("tr", {},
+          h("td", {}, colorTag(t.name, t.color)),
+          h("td", { class: "small-text", text: t.assignable ? "Yes: has rent" : "No: shared" }),
+          h("td", { class: "small-text", text: roomsText(t.rooms) }),
+          h("td", {}, editor ? h("div", { class: "btn-row" },
+            h("button", { type: "button", class: "link-btn", text: "Edit", onclick: run(() => editRoomType(t)) }),
+            t.rooms ? null : h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: remove(`the room type ${t.name}`, `/api/facilities/room-types/${t.id}`) })) : null))))))),
+    h("div", { class: "panel" },
+      h("div", { class: "panel-head" }, h("h3", { text: "Classification" }),
+        editor ? h("button", { type: "button", class: "primary small", text: "Add classified subcategory", onclick: run(() => editRoomClass(null)) }) : null),
+      h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+        h("thead", {}, h("tr", {}, ["Classification", "Rooms", ""].map((t) => h("th", { text: t })))),
+        h("tbody", {},
+          h("tr", {},
+            h("td", {}, colorTag("Unclassified", kinds.unclassified.color)),
+            h("td", { class: "small-text", text: roomsText(kinds.unclassified.rooms) }),
+            h("td", {}, editor ? h("button", { type: "button", class: "link-btn", text: "Change color", onclick: run(() => editUnclassifiedColor(kinds.unclassified.color)) }) : null)),
+          kinds.classes.map((c) => h("tr", {},
+            h("td", {}, colorTag(`Classified: ${c.name}`, c.color)),
+            h("td", { class: "small-text", text: roomsText(c.rooms) }),
+            h("td", {}, editor ? h("div", { class: "btn-row" },
+              h("button", { type: "button", class: "link-btn", text: "Edit", onclick: run(() => editRoomClass(c)) }),
+              c.rooms ? null : h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: remove(`the subcategory ${c.name}`, `/api/facilities/room-classes/${c.id}`) })) : null))))))));
+}
+
+async function editRoomType(type) {
+  const saved = await formDialog({
+    title: type ? `Edit ${type.name}` : "Add room type",
+    fields: [
+      { name: "name", label: "Name", value: type?.name, required: true, autofocus: true, placeholder: "Break Room" },
+      { name: "color", label: "Color", type: "color", value: type?.color || "#64748b", half: true },
+      { name: "assignable", label: "Assigned to companies (has rent); otherwise shared, like a conference room", type: "checkbox", value: type ? type.assignable : true }
+    ],
+    submitLabel: type ? "Save" : "Add",
+    onSubmit: async (v) => (type
+      ? await api(`/api/facilities/room-types/${type.id}`, { method: "PUT", body: v })
+      : await api("/api/facilities/room-types", { method: "POST", body: v })).type
+  });
+  if (saved) toast("Saved.");
+  return saved;
+}
+
+async function editRoomClass(kind) {
+  const saved = await formDialog({
+    title: kind ? `Edit ${kind.name}` : "Add classified subcategory",
+    fields: [
+      { name: "name", label: "Name", value: kind?.name, required: true, autofocus: true, placeholder: "SAPF" },
+      { name: "color", label: "Color", type: "color", value: kind?.color || "#dc2626", half: true }
+    ],
+    submitLabel: kind ? "Save" : "Add",
+    onSubmit: async (v) => (kind
+      ? await api(`/api/facilities/room-classes/${kind.id}`, { method: "PUT", body: v })
+      : await api("/api/facilities/room-classes", { method: "POST", body: v })).classification
+  });
+  if (saved) toast("Saved.");
+  return saved;
+}
+
+async function editUnclassifiedColor(color) {
+  const saved = await formDialog({
+    title: "Unclassified rooms' color",
+    fields: [{ name: "color", label: "Color", type: "color", value: color, half: true }],
+    onSubmit: async (v) => api("/api/facilities/unclassified-color", { method: "PUT", body: v })
+  });
+  if (saved) toast("Saved.");
+  return saved;
+}
 
 // --- rates -------------------------------------------------------------------------------------------
 

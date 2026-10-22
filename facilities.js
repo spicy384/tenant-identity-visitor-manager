@@ -11,6 +11,11 @@
  * office has at most one company on any day, so assignments never overlap, and ended ones
  * stay as its history.
  *
+ * Each room has a type (Office, Conference Room, Storage, ...: an editable list, each with a
+ * color for the plan) and is unclassified or classified with a subcategory (SCAR, SCIF, ...:
+ * also editable, with colors). Only rooms of a type that is assigned to companies can be; the
+ * others show as "shared", with no rent.
+ *
  * Rates are per square foot per month. A company's own rate wins; otherwise the office's,
  * otherwise its site's default. An office's monthly cost is its square feet times that rate.
  *
@@ -25,7 +30,19 @@ const REF_RE = /^[A-Za-z0-9_-]{16}$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MAX_RATE = 100000;
 const MAX_SQFT = 10000000;
-const STATUSES = ["available", "occupied", "upcoming", "unavailable"];
+const STATUSES = ["available", "occupied", "upcoming", "shared", "unavailable"];
+const COLOR_RE = /^#[0-9a-f]{6}$/i;
+// What a new database starts with: [name, color, assigned to companies].
+const DEFAULT_ROOM_TYPES = [["Office", "#2563eb", true], ["Conference Room", "#7c3aed", false], ["Meeting Room", "#0d9488", false], ["Storage", "#b45309", true], ["IT Room", "#475569", false]];
+const DEFAULT_ROOM_CLASSES = [["SCAR", "#d97706"], ["SCIF", "#dc2626"]];
+const DEFAULT_UNCLASSIFIED_COLOR = "#16a34a";
+
+function colorInput(value, fallback = null) {
+  if (value === undefined) return fallback;
+  const c = String(value || "").trim();
+  if (!COLOR_RE.test(c)) throw fail(400, "A color is #RRGGBB, such as #2563eb.");
+  return c.toLowerCase();
+}
 
 function fail(status, message) {
   const error = new Error(message);
@@ -154,6 +171,22 @@ function imageSize(data) {
 
 function createFacilities({ db, sites, directory, now = Date.now }) {
   const raw = db.raw;
+
+  // Room types and classified subcategories to start with, once; rooms made before them are offices.
+  if (!db.getSetting("facilities.rooms_seeded")) {
+    db.transaction(() => {
+      const t = now();
+      if (!raw.prepare("SELECT 1 FROM room_types").get()) {
+        DEFAULT_ROOM_TYPES.forEach(([name, color, assignable], i) => raw.prepare("INSERT INTO room_types (name, color, assignable, position, created_at) VALUES (?, ?, ?, ?, ?)").run(name, color, assignable ? 1 : 0, i, t));
+      }
+      if (!raw.prepare("SELECT 1 FROM room_classes").get()) {
+        DEFAULT_ROOM_CLASSES.forEach(([name, color], i) => raw.prepare("INSERT INTO room_classes (name, color, position, created_at) VALUES (?, ?, ?, ?)").run(name, color, i, t));
+      }
+      const office = raw.prepare("SELECT id FROM room_types WHERE name = 'Office'").get();
+      if (office) raw.prepare("UPDATE offices SET room_type_id = ? WHERE room_type_id IS NULL").run(office.id);
+      db.setSetting("facilities.rooms_seeded", "1");
+    });
+  }
 
   // Plans uploaded before their size was kept: read it from the image once.
   for (const r of raw.prepare("SELECT id, plan FROM floors WHERE plan IS NOT NULL AND plan_width IS NULL").all()) {
@@ -409,17 +442,21 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
 
   // --- offices ----------------------------------------------------------------------------------
 
-  const OFFICE_SELECT = `SELECT o.*, f.site_id, f.name AS floor_name, f.plan_width, f.plan_height, f.scale_feet, s.name AS site_name FROM offices o
-    JOIN floors f ON f.id = o.floor_id JOIN sites s ON s.id = f.site_id`;
+  const OFFICE_SELECT = `SELECT o.*, f.site_id, f.name AS floor_name, f.plan_width, f.plan_height, f.scale_feet, s.name AS site_name,
+    t.name AS type_name, t.color AS type_color, t.assignable AS type_assignable, c.name AS class_name, c.color AS class_color FROM offices o
+    JOIN floors f ON f.id = o.floor_id JOIN sites s ON s.id = f.site_id
+    LEFT JOIN room_types t ON t.id = o.room_type_id LEFT JOIN room_classes c ON c.id = o.class_id`;
 
   /** An office as shown: where it is, its status today, who has it, and what it costs. */
   function officeOut(r, list, today, { history = false } = {}) {
     const { current, next } = placeOf(list, today);
-    const status = r.unavailable ? "unavailable" : current ? "occupied" : next ? "upcoming" : "available";
-    // Occupied: what its company pays. Otherwise what it would cost (the office's or site's rate).
-    const { rate, source } = effectiveRate(r, r.site_id, current?.companyId ?? null);
+    // A room of a type that isn't assigned to companies (a conference room, say) is shared.
+    const assignable = r.room_type_id ? Boolean(r.type_assignable) : true;
+    const status = r.unavailable ? "unavailable" : current ? "occupied" : next ? "upcoming" : assignable ? "available" : "shared";
+    // Occupied: what its company pays. Otherwise what it would cost (the office's or site's rate); a shared room costs nothing.
+    const { rate, source } = assignable || current ? effectiveRate(r, r.site_id, current?.companyId ?? null) : { rate: null, source: null };
     // What it costs a company without a rate of its own: the office's rate, else the site's.
-    const askingRate = effectiveRate(r, r.site_id, null).rate;
+    const askingRate = assignable ? effectiveRate(r, r.site_id, null).rate : null;
     // Drawn before outlines: its rectangle's corners.
     const points = r.points ? JSON.parse(r.points) : r.x !== null && r.x !== undefined ? rectPoints(r.x, r.y, r.w, r.h) : null;
     // Its area from the plan, when the floor has a scale: the plan is scale_feet wide and as tall as its shape says.
@@ -436,6 +473,12 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       sqft: r.sqft ?? null,
       rate: r.rate ?? null,
       unavailable: Boolean(r.unavailable),
+      roomTypeId: r.room_type_id || null,
+      roomType: r.room_type_id ? { id: r.room_type_id, name: r.type_name, color: r.type_color, assignable } : null,
+      assignable,
+      // null: unclassified.
+      classId: r.class_id || null,
+      classification: r.class_id ? { id: r.class_id, name: r.class_name, color: r.class_color } : null,
       x: r.x ?? null,
       y: r.y ?? null,
       w: r.w ?? null,
@@ -461,9 +504,12 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
    * company; with freeFrom (and freeTo, else no end), only those that can be assigned for those
    * dates: not unavailable, and no assignment overlapping them.
    */
-  function listOffices({ scope = null, siteId = null, floorId = null, companyId = null, status = null, freeFrom = null, freeTo = null } = {}) {
+  function listOffices({ scope = null, siteId = null, floorId = null, companyId = null, status = null, roomTypeId = null, freeFrom = null, freeTo = null } = {}) {
     const { where, params } = siteScope(scope, siteId);
+    if (roomTypeId) { where.push("o.room_type_id = ?"); params.push(Number(roomTypeId)); }
     if (freeFrom) {
+      // Only rooms of a type that is assigned to companies.
+      where.push("(o.room_type_id IS NULL OR o.room_type_id IN (SELECT id FROM room_types WHERE assignable = 1))");
       const from = dateInput(freeFrom, "start date");
       const to = dateInput(freeTo, "end date", { optional: true });
       if (to && to < from) throw fail(400, "The end date is before the start date.");
@@ -500,6 +546,11 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     out.rate = input.rate !== undefined ? amountInput(input.rate, "rate", MAX_RATE) : existing?.rate ?? null;
     out.unavailable = input.unavailable !== undefined ? input.unavailable === true : Boolean(existing?.unavailable);
     out.notes = input.notes !== undefined ? text(input.notes, 1000) : existing?.notes ?? null;
+    // A new room is an office unless it says otherwise.
+    if (input.roomTypeId !== undefined) out.roomTypeId = input.roomTypeId === null || input.roomTypeId === "" ? null : mustRoomType(input.roomTypeId).id;
+    else out.roomTypeId = existing ? existing.roomTypeId : raw.prepare("SELECT id FROM room_types WHERE name = 'Office'").get()?.id ?? null;
+    if (input.classId !== undefined) out.classId = input.classId === null || input.classId === "" ? null : mustRoomClass(input.classId).id;
+    else out.classId = existing ? existing.classId : null;
     Object.assign(out, shapeInput(input, existing));
     return out;
   }
@@ -509,8 +560,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     const v = officeInput(input);
     if (raw.prepare("SELECT 1 FROM offices WHERE floor_id = ? AND name = ? COLLATE NOCASE").get(floor.id, v.name)) throw fail(409, `${floor.name} already has an office called ${v.name}.`);
     const t = now();
-    const id = raw.prepare("INSERT INTO offices (floor_id, name, sqft, rate, unavailable, x, y, w, h, points, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(floor.id, v.name, v.sqft, v.rate, v.unavailable ? 1 : 0, v.x, v.y, v.w, v.h, v.points, v.notes, t, t).lastInsertRowid;
+    const id = raw.prepare("INSERT INTO offices (floor_id, name, sqft, rate, unavailable, room_type_id, class_id, x, y, w, h, points, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(floor.id, v.name, v.sqft, v.rate, v.unavailable ? 1 : 0, v.roomTypeId, v.classId, v.x, v.y, v.w, v.h, v.points, v.notes, t, t).lastInsertRowid;
     return getOffice(Number(id));
   }
 
@@ -522,8 +573,11 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     if (v.unavailable && !existing.unavailable && (existing.current || existing.next)) {
       throw fail(409, `${existing.name} is assigned to ${(existing.current || existing.next).companyName}. End that assignment before marking it unavailable.`);
     }
-    raw.prepare("UPDATE offices SET name = ?, sqft = ?, rate = ?, unavailable = ?, x = ?, y = ?, w = ?, h = ?, points = ?, notes = ?, updated_at = ? WHERE id = ?")
-      .run(v.name, v.sqft, v.rate, v.unavailable ? 1 : 0, v.x, v.y, v.w, v.h, v.points, v.notes, now(), id);
+    if (v.roomTypeId !== existing.roomTypeId && v.roomTypeId && !mustRoomType(v.roomTypeId).assignable && (existing.current || existing.next)) {
+      throw fail(409, `${existing.name} is assigned to ${(existing.current || existing.next).companyName}, and a ${mustRoomType(v.roomTypeId).name} isn't assigned to companies. End that assignment first.`);
+    }
+    raw.prepare("UPDATE offices SET name = ?, sqft = ?, rate = ?, unavailable = ?, room_type_id = ?, class_id = ?, x = ?, y = ?, w = ?, h = ?, points = ?, notes = ?, updated_at = ? WHERE id = ?")
+      .run(v.name, v.sqft, v.rate, v.unavailable ? 1 : 0, v.roomTypeId, v.classId, v.x, v.y, v.w, v.h, v.points, v.notes, now(), id);
     return getOffice(id);
   }
 
@@ -557,6 +611,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
   function assign(officeId, input = {}, { scope = null, by = null } = {}) {
     const office = mustOffice(officeId, scope);
     if (office.unavailable) throw fail(409, `${office.name} is marked unavailable.`);
+    if (!office.assignable) throw fail(409, `${office.name} is a ${office.roomType.name}, which isn't assigned to companies.`);
     const company = directory.getCompany(Number(input.companyId));
     if (!company) throw fail(400, "Choose the company.");
     const startDate = dateInput(input.startDate, "start date");
@@ -664,6 +719,106 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return out;
   }
 
+  // --- room types and classifications -----------------------------------------------------------
+
+  const typeRow = (r) => r && { id: r.id, name: r.name, color: r.color, assignable: Boolean(r.assignable), position: r.position, rooms: r.rooms };
+  const classRow = (r) => r && { id: r.id, name: r.name, color: r.color, position: r.position, rooms: r.rooms };
+  const TYPE_SELECT = "SELECT t.*, (SELECT count(*) FROM offices o WHERE o.room_type_id = t.id) AS rooms FROM room_types t";
+  const CLASS_SELECT = "SELECT c.*, (SELECT count(*) FROM offices o WHERE o.class_id = c.id) AS rooms FROM room_classes c";
+
+  function mustRoomType(id) {
+    const t = typeRow(raw.prepare(`${TYPE_SELECT} WHERE t.id = ?`).get(Number(id)));
+    if (!t) throw fail(400, "No such room type.");
+    return t;
+  }
+
+  function mustRoomClass(id) {
+    const c = classRow(raw.prepare(`${CLASS_SELECT} WHERE c.id = ?`).get(Number(id)));
+    if (!c) throw fail(400, "No such classification.");
+    return c;
+  }
+
+  const unclassifiedColor = () => db.getSetting("facilities.unclassified_color") || DEFAULT_UNCLASSIFIED_COLOR;
+
+  /** Room types and classifications, each with its color and how many rooms have it. */
+  function roomKinds() {
+    const unclassified = raw.prepare("SELECT count(*) AS n FROM offices WHERE class_id IS NULL").get().n;
+    return {
+      types: raw.prepare(`${TYPE_SELECT} ORDER BY t.position, t.name`).all().map(typeRow),
+      classes: raw.prepare(`${CLASS_SELECT} ORDER BY c.position, c.name`).all().map(classRow),
+      unclassified: { name: "Unclassified", color: unclassifiedColor(), rooms: unclassified }
+    };
+  }
+
+  function nameInput(value, what) {
+    const name = text(value, 40);
+    if (!name) throw fail(400, `Give the ${what} a name.`);
+    return name;
+  }
+
+  function createRoomType(input = {}) {
+    const name = nameInput(input.name, "room type");
+    if (raw.prepare("SELECT 1 FROM room_types WHERE name = ?").get(name)) throw fail(409, "There is a room type with that name already.");
+    const position = (raw.prepare("SELECT max(position) AS p FROM room_types").get().p ?? -1) + 1;
+    const id = raw.prepare("INSERT INTO room_types (name, color, assignable, position, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(name, colorInput(input.color, "#64748b"), input.assignable === false ? 0 : 1, position, now()).lastInsertRowid;
+    return mustRoomType(Number(id));
+  }
+
+  function updateRoomType(id, input = {}) {
+    const existing = mustRoomType(id);
+    const name = input.name !== undefined ? nameInput(input.name, "room type") : existing.name;
+    const clash = raw.prepare("SELECT id FROM room_types WHERE name = ?").get(name);
+    if (clash && clash.id !== existing.id) throw fail(409, "There is a room type with that name already.");
+    const assignable = input.assignable !== undefined ? input.assignable === true : existing.assignable;
+    if (existing.assignable && !assignable) {
+      // Rooms of this type assigned now or later would be left with companies they can't have.
+      const held = listOffices({ roomTypeId: existing.id }).filter((o) => o.current || o.next).map((o) => o.name);
+      if (held.length) throw fail(409, `${held.join(", ")} ${held.length === 1 ? "is" : "are"} assigned to a company now or later. End those assignments first.`);
+    }
+    raw.prepare("UPDATE room_types SET name = ?, color = ?, assignable = ? WHERE id = ?").run(name, colorInput(input.color, existing.color), assignable ? 1 : 0, existing.id);
+    return mustRoomType(existing.id);
+  }
+
+  function removeRoomType(id) {
+    const existing = mustRoomType(id);
+    if (existing.rooms) throw fail(409, `${existing.rooms} ${existing.rooms === 1 ? "room is a" : "rooms are"} ${existing.name}; change ${existing.rooms === 1 ? "its" : "their"} type first.`);
+    raw.prepare("DELETE FROM room_types WHERE id = ?").run(existing.id);
+    return existing;
+  }
+
+  function createRoomClass(input = {}) {
+    const name = nameInput(input.name, "classification");
+    if (/^unclassified$/i.test(name)) throw fail(400, "Unclassified is already there: it is a room with no classification.");
+    if (raw.prepare("SELECT 1 FROM room_classes WHERE name = ?").get(name)) throw fail(409, "There is a classification with that name already.");
+    const position = (raw.prepare("SELECT max(position) AS p FROM room_classes").get().p ?? -1) + 1;
+    const id = raw.prepare("INSERT INTO room_classes (name, color, position, created_at) VALUES (?, ?, ?, ?)").run(name, colorInput(input.color, "#dc2626"), position, now()).lastInsertRowid;
+    return mustRoomClass(Number(id));
+  }
+
+  function updateRoomClass(id, input = {}) {
+    const existing = mustRoomClass(id);
+    const name = input.name !== undefined ? nameInput(input.name, "classification") : existing.name;
+    if (/^unclassified$/i.test(name)) throw fail(400, "Unclassified is a room with no classification; choose another name.");
+    const clash = raw.prepare("SELECT id FROM room_classes WHERE name = ?").get(name);
+    if (clash && clash.id !== existing.id) throw fail(409, "There is a classification with that name already.");
+    raw.prepare("UPDATE room_classes SET name = ?, color = ? WHERE id = ?").run(name, colorInput(input.color, existing.color), existing.id);
+    return mustRoomClass(existing.id);
+  }
+
+  function removeRoomClass(id) {
+    const existing = mustRoomClass(id);
+    if (existing.rooms) throw fail(409, `${existing.rooms} ${existing.rooms === 1 ? "room is" : "rooms are"} ${existing.name}; change ${existing.rooms === 1 ? "its" : "their"} classification first.`);
+    raw.prepare("DELETE FROM room_classes WHERE id = ?").run(existing.id);
+    return existing;
+  }
+
+  function setUnclassifiedColor(value) {
+    const color = colorInput(value);
+    db.setSetting("facilities.unclassified_color", color);
+    return color;
+  }
+
   /** The offices a company has now or later, by name (to refuse deleting it while it does). */
   function heldBy(companyId) {
     const rows = raw.prepare(`SELECT o.name, f.site_id, a.end_date FROM office_assignments a JOIN offices o ON o.id = a.office_id JOIN floors f ON f.id = o.floor_id WHERE a.company_id = ?`).all(companyId);
@@ -676,7 +831,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     listFloors, getFloor, createFloor, updateFloor, removeFloor, setPlan, clearPlan, setScale, planImage,
     listOffices, getOffice, createOffice, updateOffice, removeOffice,
     getAssignment, assign, assignMany, updateAssignment, removeAssignment,
-    forCompany, summary, heldBy
+    forCompany, summary, heldBy,
+    roomKinds, createRoomType, updateRoomType, removeRoomType, createRoomClass, updateRoomClass, removeRoomClass, setUnclassifiedColor
   };
 }
 

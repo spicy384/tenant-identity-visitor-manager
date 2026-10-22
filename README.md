@@ -225,10 +225,19 @@ Home.
   missing sizes** uses it for offices that have none. The size you enter is always the one used
   for costs; a measurement never overwrites it. Replacing the plan keeps the scale when the new
   plan has the same shape, and clears it otherwise.
-- **Status.** Each office is coloured by its status today: **available**, **occupied**,
-  **upcoming** (free now, assigned to a company from a later date) or **unavailable** (marked
-  so, e.g. under renovation, and can't be assigned). The key beside the plan counts them, with
-  the floor's space, the space let and free, and the rent.
+- **Room types and classification.** Each room has a type (Office, Conference Room, Meeting
+  Room, Storage, IT Room to start with) and is **Unclassified** or **Classified** with a
+  subcategory (SCAR or SCIF to start with). Facilities > Room types renames them, adds more,
+  sets each one's color, and removes those no room uses; each type also says whether its rooms
+  are assigned to companies (Office and Storage) or **shared** (the others: no company, no
+  rent). Everyone who sees Facilities sees a room's type and classification.
+- **Colors.** **Color by** above the plan colors the rooms by **Availability** (as below), by
+  **Room type** or by **Classification**, in the colors set for them; the key beside the plan
+  follows, with how many rooms on the floor have each. The choice is kept in this browser.
+- **Status.** Each room's status today: **available**, **occupied**, **upcoming** (free now,
+  assigned to a company from a later date), **shared** (a type that isn't assigned to companies)
+  or **unavailable** (marked so, e.g. under renovation, and can't be assigned). The key beside
+  the plan counts them, with the floor's space, the space let and free, and the rent.
 - **Assigning.** Click an office to see it and **Assign to a company** from a date, to an end
   date (its last day) or with no end. An office has one company at a time, so dates can't
   overlap. **End** sets the last day, and ended assignments stay as the office's history.
@@ -237,8 +246,8 @@ Home.
   foot a month: a **company's** own rate wins, else the **office's**, else the **site's**
   default (Facilities > Rates, and Change rate on a company's page). An office's monthly cost
   is its size times that rate; a free office shows what it would cost.
-- **Offices** lists every office at the chosen site with its floor, size, status, company,
-  rate and monthly cost, totals underneath; filter by status or search.
+- **Rooms** lists every room at the chosen site with its floor, type, classification, size,
+  status, company, rate and monthly cost, totals underneath; filter by type or status, or search.
 - **On a company's page:** its offices now, upcoming and before, the rate it pays, and its
   space and rent now. **Assign offices** gives it offices from there: choose the dates, then
   click free offices on a floor's plan (taken ones are greyed out) or tick them in the list,

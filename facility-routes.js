@@ -122,7 +122,7 @@ function createFacilityRoutes({ access, facilities, directory, sites, auditFrom 
   router.get("/api/offices", readFacilities, (req, res) => {
     const status = str(req.query.status, 20);
     if (status && !STATUSES.includes(status)) throw fail(400, `Status is one of: ${STATUSES.join(", ")}.`);
-    res.json({ offices: facilities.listOffices({ ...scoped(req), siteId: siteParam(req, req.query.site || req.query.siteId), floorId: positiveInt(req.query.floorId), status,
+    res.json({ offices: facilities.listOffices({ ...scoped(req), siteId: siteParam(req, req.query.site || req.query.siteId), floorId: positiveInt(req.query.floorId), status, roomTypeId: positiveInt(req.query.roomTypeId),
       freeFrom: str(req.query.freeFrom, 10) || null, freeTo: str(req.query.freeTo, 10) || null }) });
   });
 
@@ -170,6 +170,54 @@ function createFacilityRoutes({ access, facilities, directory, sites, auditFrom 
     const { office, assignment } = facilities.removeAssignment(idOf(req), scoped(req));
     auditFrom(req, "office.assignment_remove", `${office.floorName}: ${office.name}`, `${assignment.companyName}: ${assignment.startDate} to ${assignment.endDate || "no end date"}`);
     res.json({ ok: true, office });
+  });
+
+  // --- room types and classifications ---------------------------------------------------------
+
+  router.get("/api/facilities/room-kinds", readFacilities, (req, res) => {
+    res.json(facilities.roomKinds());
+  });
+
+  router.post("/api/facilities/room-types", editFacilities, (req, res) => {
+    const type = facilities.createRoomType(req.body || {});
+    auditFrom(req, "room_type.add", type.name, `${type.color}${type.assignable ? ", assigned to companies" : ", shared"}`);
+    res.json({ ok: true, type });
+  });
+
+  router.put("/api/facilities/room-types/:id", editFacilities, (req, res) => {
+    const type = facilities.updateRoomType(idOf(req), req.body || {});
+    auditFrom(req, "room_type.update", type.name, `${type.color}${type.assignable ? ", assigned to companies" : ", shared"}`);
+    res.json({ ok: true, type });
+  });
+
+  router.delete("/api/facilities/room-types/:id", editFacilities, (req, res) => {
+    const type = facilities.removeRoomType(idOf(req));
+    auditFrom(req, "room_type.remove", type.name);
+    res.json({ ok: true });
+  });
+
+  router.post("/api/facilities/room-classes", editFacilities, (req, res) => {
+    const kind = facilities.createRoomClass(req.body || {});
+    auditFrom(req, "room_class.add", kind.name, kind.color);
+    res.json({ ok: true, classification: kind });
+  });
+
+  router.put("/api/facilities/room-classes/:id", editFacilities, (req, res) => {
+    const kind = facilities.updateRoomClass(idOf(req), req.body || {});
+    auditFrom(req, "room_class.update", kind.name, kind.color);
+    res.json({ ok: true, classification: kind });
+  });
+
+  router.delete("/api/facilities/room-classes/:id", editFacilities, (req, res) => {
+    const kind = facilities.removeRoomClass(idOf(req));
+    auditFrom(req, "room_class.remove", kind.name);
+    res.json({ ok: true });
+  });
+
+  router.put("/api/facilities/unclassified-color", editFacilities, (req, res) => {
+    const color = facilities.setUnclassifiedColor(req.body?.color);
+    auditFrom(req, "room_class.update", "Unclassified", color);
+    res.json({ ok: true, color });
   });
 
   // --- rates and companies --------------------------------------------------------------------

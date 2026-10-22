@@ -18,6 +18,7 @@ const VIEWS = {
   clearances: showClearances,
   floors: showFloors,
   offices: showOffices,
+  roomtypes: showRoomTypes,
   rates: showRates,
   settings: showSettings,
   account: showAccount
@@ -47,7 +48,8 @@ const SECTIONS = [
   ] },
   { id: "facilities", label: "Facilities", show: canReadFacilities, pages: [
     { view: "floors", href: "#floors", label: "Floor plans", show: canReadFacilities },
-    { view: "offices", href: "#offices", label: "Offices", show: canReadFacilities },
+    { view: "offices", href: "#offices", label: "Rooms", show: canReadFacilities },
+    { view: "roomtypes", href: "#roomtypes", label: "Room types", show: canReadFacilities },
     { view: "rates", href: "#rates", label: "Rates", show: canReadFacilities }
   ] },
   { id: "security", label: "Security", pill: "nav-security", show: seesSecurity, pages: [
@@ -209,7 +211,7 @@ function route() {
   if (view === "badges" && !canReadBadges()) view = "home";
   if (view === "clearance" && !isSecurity()) view = "home";
   if (view === "clearances" && !seesSecurity()) view = "home";
-  if (["floors", "offices", "rates"].includes(view) && !canReadFacilities()) view = "home";
+  if (["floors", "offices", "roomtypes", "rates"].includes(view) && !canReadFacilities()) view = "home";
   showView(view, sub);
   VIEWS[view](sub);
 }
