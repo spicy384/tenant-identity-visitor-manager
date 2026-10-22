@@ -54,9 +54,11 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Custom fields** for companies and people: text, long text, number, date, yes/no, choice
   list, email, phone, web address. A field is either on every record (and can be required) or
   added to one record only, and can later be made a field for every record. Administrators
-  manage them, and so does any role with **Manages custom fields** (Settings > Roles; Manager to
-  start with): it adds fields and changes their names, choices and whether they're required, for
-  the records that role can change (not badges, unless it manages badges). Deleting a field (and
+  manage them, and so does any role with **Manages custom fields** (Settings > Roles; Manager and
+  Security to start with): it adds fields and changes their names, choices and whether they're
+  required, for the records that role can change, and badge fields if it issues or manages
+  badges (Security: badge fields only). Filling in a badge's fields stays with the roles that
+  manage badges. Deleting a field (and
   every value in it) and the field access grid stay with administrators; such a role sees
   Settings with the Fields page only.
 - **Field access.** A grid of roles × fields, each cell hidden, read only or can change. The

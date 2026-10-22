@@ -27,13 +27,14 @@ const ROLE_KINDS = { user: "Staff accounts", kiosk: "Kiosk devices", api: "API c
 const DEFAULT_ROLES = [
   // clearances: sees clearance level names (the rest see badge template images instead).
   // facilities: floors, offices and who has them; Administrator and Manager by default, and any custom role given it.
-  // fields: adds and changes custom fields for the records it can change (Manager by default; deleting stays with administrators).
+  // fields: adds and changes custom fields for the records it can change, and badge fields when it issues or manages badges
+  // (Manager and Security by default; deleting stays with administrators).
   { id: "admin", name: "Administrator", kind: "user", directory: "edit", visitors: "edit", badges: "manage", clearances: true, facilities: "edit", position: 0 },
   { id: "manager", name: "Manager", kind: "user", directory: "edit", visitors: "edit", badges: "edit", clearances: true, facilities: "edit", fields: true, position: 10 },
   { id: "frontdesk", name: "Front desk", kind: "user", directory: "read", visitors: "edit", badges: "edit", position: 20 },
   // The only role that validates and sets clearances, and sees the validation queue.
   // Security also keeps the badge stock: only it (and administrators) add, change and remove badges.
-  { id: "security", name: "Security", kind: "user", directory: "read", visitors: "read", badges: "manage", clearances: true, position: 25 },
+  { id: "security", name: "Security", kind: "user", directory: "read", visitors: "read", badges: "manage", clearances: true, fields: true, position: 25 },
   { id: "viewer", name: "Viewer", kind: "user", directory: "read", visitors: "read", badges: "read", position: 30 },
   { id: "kiosk", name: "Kiosk", kind: "kiosk", directory: "read", visitors: "none", badges: "none", position: 90 },
   { id: "checkout", name: "Equipment Checkout", kind: "api", directory: "read", visitors: "none", badges: "none", position: 91 }
@@ -168,6 +169,13 @@ function createAccess({ db, fields }) {
     db.transaction(() => {
       for (const r of DEFAULT_ROLES) if (r.fields) raw.prepare("UPDATE roles SET fields = 1 WHERE id = ? AND built_in = 1").run(r.id);
       db.setSetting("roles.fields_seeded", "1");
+    });
+  }
+  // Badge fields came to Security later: once, Security gets the switch too.
+  if (!db.getSetting("roles.fields_security_seeded")) {
+    db.transaction(() => {
+      raw.prepare("UPDATE roles SET fields = 1 WHERE id = 'security' AND built_in = 1").run();
+      db.setSetting("roles.fields_security_seeded", "1");
     });
   }
 
@@ -462,12 +470,13 @@ function createAccess({ db, fields }) {
   const canEditFacilities = (ctx) => ctx.facilities === "edit";
   /**
    * The record types whose custom fields the caller may add and change: administrators every
-   * one; a role with "manages custom fields" those that role itself can change (badges take the
-   * manage level), whatever other roles the account has.
-   * Deleting a field, and the field access grid, stay with administrators.
+   * one; a role with "manages custom fields" those that role itself can change, and badges when
+   * it issues or manages them (only the manage level fills in a badge's values), whatever other
+   * roles the account has. Deleting a field, and the field access grid, stay with administrators.
    */
-  // Each role on its own: a role that manages fields does so for what that role can change.
-  const fieldEntitiesFor = (ctx) => ENTITIES.filter((e) => ctx.isAdmin || (ctx.roles || []).some((r) => r.fields && editsArea(r[areaOf(e)], e)));
+  const shapesFields = (r, e) => (areaOf(e) === "badges" ? ["edit", "manage"].includes(r.badges) : editsArea(r[areaOf(e)], e));
+  // Each role on its own: a role that manages fields does so for what that role reaches.
+  const fieldEntitiesFor = (ctx) => ENTITIES.filter((e) => ctx.isAdmin || (ctx.roles || []).some((r) => r.fields && shapesFields(r, e)));
   const canManageFields = (ctx) => fieldEntitiesFor(ctx).length > 0;
 
   /** Fields of `entity` the caller can see (for `recordId`'s own fields too), each with its level. */

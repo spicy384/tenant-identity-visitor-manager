@@ -507,7 +507,9 @@ Manager); access.fieldEntitiesFor(): each role with the switch, for the records 
 itself can change (badges at manage); /api/fields GET/POST/PUT for those, a field for one
 record only for a record at the caller's sites; DELETE and /api/field-access stay with
 administrators. Such roles see Settings with the Fields tab only, and "Add a field to this
-company/person".
+company/person". Then (same day, asked for by the user): badge fields for both Security (the
+switch seeded on once for it) and managers: a role with the switch shapes badge fields when it
+issues or manages badges (badges edit or manage); filling a badge's values in still takes manage.
 
 ## Tests
 

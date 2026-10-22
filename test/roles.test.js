@@ -150,17 +150,30 @@ async function main() {
   const manny = await as("manny");
   const desk = await as("desk");
   const builtIn = (await admin.get("/api/roles")).data.roles;
-  check("fields: Manager manages them to start with, the others don't", builtIn.find((x) => x.id === "manager").fields === true
-    && builtIn.filter((x) => x.fields).map((x) => x.id).sort().join() === "admin,manager");
+  check("fields: Manager and Security manage them to start with, the others don't", builtIn.find((x) => x.id === "manager").fields === true
+    && builtIn.filter((x) => x.fields).map((x) => x.id).sort().join() === "admin,manager,security");
   cfg = (await manny.get("/api/config")).data.access;
-  check("fields: for the records the role can change (not badges: that's Security's)", cfg.fieldEntities.join() === "company,person,visitor");
+  check("fields: for the records the role can change, and badges it issues", cfg.fieldEntities.join() === "company,person,visitor,badge");
   r = (await manny.get("/api/fields")).data;
-  check("fields: a manager sees the Fields page, without delete", r.entities.join() === "company,person,visitor" && r.canDelete === false && r.fields.badge.length === 0);
+  check("fields: a manager sees the Fields page, without delete", r.entities.join() === "company,person,visitor,badge" && r.canDelete === false);
   check("fields: front desk doesn't", (await desk.get("/api/fields")).status === 403 && (await desk.get("/api/config")).data.access.fieldEntities.length === 0);
   r = await manny.post("/api/fields", { entity: "person", label: "Desk phone", type: "phone", visibility: "all" });
   const deskPhone = r.data.field;
   check("fields: a manager adds one", r.status === 200 && deskPhone.key === "desk_phone");
-  check("fields: but not for badges", (await manny.post("/api/fields", { entity: "badge", label: "Locker", type: "text" })).status === 403);
+  r = await manny.post("/api/fields", { entity: "badge", label: "Locker", type: "text", visibility: "all" });
+  const locker = r.data.field;
+  check("badge fields: a manager adds one", r.status === 200 && locker.entity === "badge");
+  const uncleared = (await admin.get("/api/clearance")).data.classifications.find((c) => !c.requiresClearance);
+  const badge = (await admin.post("/api/badges", { number: "M-1", type: "tenant", classificationId: uncleared.id })).data.badge;
+  check("badge fields: but filling one in stays with those who manage badges", (await manny.put(`/api/badges/${badge.id}`, { custom: { [locker.key]: "12" } })).status === 403
+    && ((await manny.get(`/api/badges/${badge.id}`)).data.badge.custom[locker.key] ?? null) === null);
+  pw.sec = password();
+  await admin.post("/api/users", { username: "sec", password: pw.sec, roles: ["security"] });
+  const sec = await as("sec");
+  check("badge fields: Security manages badge fields only", (await sec.get("/api/config")).data.access.fieldEntities.join() === "badge"
+    && (await sec.post("/api/fields", { entity: "company", label: "Nope", type: "text" })).status === 403);
+  check("badge fields: Security adds one and fills it in", (await sec.post("/api/fields", { entity: "badge", label: "Lanyard", type: "text", visibility: "all" })).status === 200
+    && (await sec.put(`/api/badges/${badge.id}`, { custom: { [locker.key]: "12" } })).data.badge.custom[locker.key] === "12");
   check("fields: front desk can't add one", (await desk.post("/api/fields", { entity: "person", label: "X", type: "text" })).status === 403);
   check("fields: a manager changes one", (await manny.put(`/api/fields/${deskPhone.id}`, { label: "Desk phone number" })).data.field.label === "Desk phone number");
   check("fields: but only an administrator deletes one", (await manny.del(`/api/fields/${deskPhone.id}`)).status === 403 && (await admin.del(`/api/fields/${deskPhone.id}`)).status === 200);
@@ -175,6 +188,9 @@ async function main() {
   await admin.post(`/api/users/${dee.id}/role`, { roles: ["frontdesk", helper.id] });
   check("fields: ... for what that role can change", (await deeC.get("/api/config")).data.access.fieldEntities.join() === "company,person");
   check("fields: switched off again", (await admin.put("/api/roles/manager", { fields: false })).data.role.fields === false && (await manny.get("/api/fields")).status === 403);
+  const deskWithFields = (await admin.post("/api/roles", { name: "Desk plus", directory: "read", visitors: "edit", badges: "edit", fields: true })).data.role;
+  await admin.post(`/api/users/${dee.id}/role`, { roles: [deskWithFields.id] });
+  check("badge fields: any role with the switch that issues badges", (await deeC.get("/api/config")).data.access.fieldEntities.join() === "visitor,badge");
   await admin.put("/api/roles/manager", { fields: true });
 
   // --- the name in the header -------------------------------------------------------------------
