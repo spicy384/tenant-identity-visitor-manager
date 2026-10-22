@@ -527,6 +527,10 @@ shared type) while assigned now or later; a type or subcategory in use can't be 
 Routes /api/facilities/room-kinds, room-types, room-classes, unclassified-color; GET
 /api/offices?roomTypeId. Front end: Facilities > Room types (color inputs), Color by and its
 key on the plan, type and classification in the room dialog and the Rooms table (was Offices).
+Then (asked for by the user): several rooms at once: facilities.updateMany/removeMany (type,
+classification, rate, unavailable, notes; all or none in one transaction, the error naming the
+room), POST /api/offices/bulk and bulk-delete; tick boxes on the Rooms page and a Select rooms
+mode on the plan.
 
 ## Tests
 

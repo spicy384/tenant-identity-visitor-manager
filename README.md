@@ -248,6 +248,11 @@ Home.
   is its size times that rate; a free office shows what it would cost.
 - **Rooms** lists every room at the chosen site with its floor, type, classification, size,
   status, company, rate and monthly cost, totals underneath; filter by type or status, or search.
+- **Several rooms at once.** Tick rooms on the Rooms page, or choose **Select rooms** on a
+  floor plan and click them (or Choose all on this floor), then **Change** to set the room type,
+  classification, rate, unavailable or notes the same on all of them, or **Delete** them. If any
+  room can't take the change (an assigned room can't become a shared type or unavailable, or
+  be deleted), none does, and the message names it.
 - **On a company's page:** its offices now, upcoming and before, the rate it pays, and its
   space and rent now. **Assign offices** gives it offices from there: choose the dates, then
   click free offices on a floor's plan (taken ones are greyed out) or tick them in the list,

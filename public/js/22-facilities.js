@@ -9,7 +9,8 @@
 // tool: rect, outline or scale; selected: the office being reshaped, vertex: its chosen point;
 // placing: an office not yet on the plan, being drawn; keys: the drawing tools' key handler.
 // zooms: each floor's zoom and position (planViewer); spaceDown: Space held, to pan while drawing.
-const facilitiesView = { floorId: null, drawing: false, tool: "rect", placing: null, selected: null, vertex: null, keys: null, floor: null, offices: [], zooms: new Map(), spaceDown: false };
+// choosing: the plan's Select rooms mode; picked: rooms chosen to change together (id -> room), on the plan or the Rooms page.
+const facilitiesView = { floorId: null, drawing: false, tool: "rect", placing: null, selected: null, vertex: null, keys: null, floor: null, offices: [], zooms: new Map(), spaceDown: false, choosing: false, picked: new Map() };
 
 const OFFICE_STATUS = {
   available: { label: "Available", badge: "ok" },
@@ -82,14 +83,113 @@ const PLAN_TOOLS = {
 
 function showFloors(sub) {
   if (sub) facilitiesView.floorId = Number(sub);
-  Object.assign(facilitiesView, { drawing: false, placing: null, selected: null, vertex: null });
+  Object.assign(facilitiesView, { drawing: false, placing: null, selected: null, vertex: null, choosing: false });
+  facilitiesView.picked.clear();
   loadFloors();
 }
 
 /** Turns drawing on or off, with a tool. */
 function setDrawing(on, tool = facilitiesView.tool) {
-  Object.assign(facilitiesView, { drawing: on, tool, vertex: null, ...(on ? {} : { placing: null, selected: null }) });
+  Object.assign(facilitiesView, { drawing: on, tool, vertex: null, ...(on ? { choosing: false } : { placing: null, selected: null }) });
+  if (on) facilitiesView.picked.clear();
   loadFloors();
+}
+
+/** Turns the plan's Select rooms mode on or off (off clears the choice). */
+function setChoosing(on) {
+  Object.assign(facilitiesView, { choosing: on, drawing: false, placing: null, selected: null });
+  if (!on) facilitiesView.picked.clear();
+  loadFloors();
+}
+
+/** Chooses a room, or leaves it out again, and shows the change on the plan, the list and the bar. */
+function toggleRoom(o) {
+  if (facilitiesView.picked.has(o.id)) facilitiesView.picked.delete(o.id);
+  else facilitiesView.picked.set(o.id, o);
+  showChoice();
+}
+
+function showChoice() {
+  for (const el of document.querySelectorAll("#floors-body .plan-shape[data-id], #floors-body [data-room-id]")) {
+    el.classList.toggle("is-chosen", facilitiesView.picked.has(Number(el.dataset.id || el.dataset.roomId)));
+  }
+  const bar = $("floor-actions");
+  if (bar) roomActions(bar, loadFloors, facilitiesView.offices);
+}
+
+/**
+ * The bar for rooms chosen to change together: how many, Change, Delete, Clear (and, given
+ * `all`, a way to choose every one of them).
+ */
+function roomActions(bar, refresh, all = null) {
+  const list = [...facilitiesView.picked.values()];
+  const done = () => { facilitiesView.picked.clear(); refresh(); };
+  bar.hidden = !list.length && !all;
+  bar.replaceChildren(
+    h("span", { class: "small-text", text: list.length ? `${list.length} ${list.length === 1 ? "room" : "rooms"} chosen` : "Click rooms to choose them." }),
+    h("div", { class: "btn-row" },
+      all && all.some((o) => !facilitiesView.picked.has(o.id)) ? h("button", { type: "button", class: "link-btn small-text", text: "Choose all on this floor", onclick: () => { for (const o of all) facilitiesView.picked.set(o.id, o); showChoice(); } }) : null,
+      list.length ? [
+        h("button", { type: "button", class: "primary small", text: "Change…", onclick: async () => { if (await bulkEditRooms(list)) done(); } }),
+        h("button", { type: "button", class: "secondary small danger-text", text: "Delete", onclick: async () => { if (await deleteRooms(list)) done(); } }),
+        h("button", { type: "button", class: "link-btn small-text", text: "Clear", onclick: () => { facilitiesView.picked.clear(); showChoice(); if (!all) refresh(); } })
+      ] : null));
+}
+
+/** Sets the ticked things the same on every chosen room: type, classification, rate, unavailable, notes. */
+async function bulkEditRooms(list) {
+  const kinds = await roomKinds(true);
+  const rows = [];
+  const row = (key, label, el, read, hint = null) => {
+    const change = h("input", { type: "checkbox", "aria-label": `Change ${label}` });
+    const disable = (on) => { el.disabled = on; };
+    disable(true);
+    change.addEventListener("change", () => disable(!change.checked));
+    rows.push({ key, change, read });
+    return h("div", { class: "bulk-field" }, h("label", { class: "check-row" }, change, h("span", { text: label }), hint ? h("span", { class: "muted small-text", text: ` ${hint}` }) : null), el);
+  };
+  const options = (pairs) => pairs.map(([value, label]) => h("option", { value, text: label }));
+  const type = h("select", { "aria-label": "Room type" }, options(kinds.types.map((t) => [String(t.id), `${t.name}${t.assignable ? "" : " (shared)"}`])));
+  const classification = h("select", { "aria-label": "Classification" }, options([["", "Unclassified"], ...kinds.classes.map((c) => [String(c.id), `Classified: ${c.name}`])]));
+  const rate = h("input", { type: "number", step: "0.01", min: "0", "aria-label": "Rate", placeholder: "The site's default" });
+  const unavailable = h("select", { "aria-label": "Unavailable" }, options([["no", "No: can be used"], ["yes", "Yes: unavailable"]]));
+  const notes = h("input", { type: "text", "aria-label": "Notes" });
+  const nodes = [
+    row("roomTypeId", "Room type", type, () => Number(type.value)),
+    row("classId", "Classification", classification, () => (classification.value ? Number(classification.value) : null)),
+    row("rate", "Rate ($ per sq ft a month)", rate, () => (rate.value === "" ? null : Number(rate.value)), "(empty: the site's default)"),
+    row("unavailable", "Unavailable", unavailable, () => unavailable.value === "yes"),
+    row("notes", "Notes", notes, () => notes.value.trim(), "(replaces each room's notes)")
+  ];
+  const names = list.map((o) => o.name);
+  const result = await formDialog({
+    title: `Change ${list.length} ${list.length === 1 ? "room" : "rooms"}`,
+    wide: true,
+    intro: h("p", { class: "muted", text: `Tick each thing to change; it is set the same on every chosen room (${names.slice(0, 10).join(", ")}${names.length > 10 ? ", …" : ""}). Names and sizes stay as they are. If any room can't take the change (a room assigned to a company can't become a shared type or unavailable), none does.` }),
+    fields: [{ node: h("div", { class: "full-row bulk-fields" }, nodes) }],
+    submitLabel: "Change",
+    onSubmit: async () => {
+      const patch = {};
+      for (const r of rows) if (r.change.checked) patch[r.key] = r.read();
+      if (!Object.keys(patch).length) throw new Error("Tick at least one thing to change.");
+      return api("/api/offices/bulk", { method: "POST", body: { ids: list.map((o) => o.id), patch } });
+    }
+  });
+  if (result) toast(`${result.updated} ${result.updated === 1 ? "room" : "rooms"} changed.`);
+  return result;
+}
+
+async function deleteRooms(list) {
+  const names = list.map((o) => o.name);
+  if (!(await confirmDialog(`Delete ${list.length} ${list.length === 1 ? "room" : "rooms"} (${names.slice(0, 12).join(", ")}${names.length > 12 ? ", …" : ""}) and their history? A room assigned to a company now or later has to be ended first; if any is, none is deleted.`, { danger: true, confirmLabel: "Delete" }))) return false;
+  try {
+    const r = await api("/api/offices/bulk-delete", { method: "POST", body: { ids: list.map((o) => o.id) } });
+    toast(`Deleted ${r.deleted} ${r.deleted === 1 ? "room" : "rooms"}.`);
+    return true;
+  } catch (error) {
+    toast(error.message, "error");
+    return false;
+  }
 }
 
 async function loadFloors() {
@@ -139,12 +239,16 @@ async function loadFloors() {
     h("div", { class: "inline-label" }, h("span", { class: "muted small-text", text: "Color by" }), colorSwitch),
     h("span", { class: "spacer" }),
     editor ? [
+      h("button", { type: "button", class: facilitiesView.choosing ? "primary" : "secondary", text: facilitiesView.choosing ? "Done selecting" : "Select rooms",
+        title: "Choose several rooms to change them together", onclick: () => setChoosing(!facilitiesView.choosing) }),
       draw,
       h("button", { type: "button", class: "secondary", text: floor.planRef ? "Replace plan" : "Upload plan", onclick: () => uploadPlan(floor) }),
       h("button", { type: "button", class: "secondary", text: "Edit floor", onclick: () => editFloor(floor) }),
       h("button", { type: "button", class: "secondary", text: "Add floor", onclick: () => addFloor(floor.siteId) })
     ] : null);
-  body.replaceChildren(toolbar, facilitiesView.drawing ? planTools() : "", h("div", { class: "floor-layout" }, planPane(floor, data.offices), floorSide(floor, data.offices)));
+  const bar = h("div", { id: "floor-actions", class: "bulk-bar", hidden: true });
+  body.replaceChildren(toolbar, facilitiesView.drawing ? planTools() : "", bar, h("div", { class: "floor-layout" }, planPane(floor, data.offices), floorSide(floor, data.offices)));
+  if (facilitiesView.choosing) showChoice();
 }
 
 /** In drawing mode: the tools, and what to do with the chosen one. */
@@ -363,7 +467,7 @@ window.addEventListener("blur", () => {
 
 function drawOffice(plan, o) {
   const who = o.current?.companyName || o.next?.companyName || null;
-  const shape = svgEl("polygon", { class: `plan-shape status-${o.status}${facilitiesView.selected === o.id ? " is-selected" : ""}`, points: pointsAttr(o.points), "data-id": String(o.id) });
+  const shape = svgEl("polygon", { class: `plan-shape status-${o.status}${facilitiesView.selected === o.id ? " is-selected" : ""}${facilitiesView.picked.has(o.id) ? " is-chosen" : ""}`, points: pointsAttr(o.points), "data-id": String(o.id) });
   const color = roomColor(o);
   if (color) shape.style.setProperty("--office", color);
   const title = svgEl("title");
@@ -373,8 +477,10 @@ function drawOffice(plan, o) {
     shape.setAttribute("tabindex", "0");
     shape.setAttribute("role", "button");
     shape.setAttribute("aria-label", `${o.roomType?.name || "Room"} ${o.name}, ${classificationText(o)}, ${OFFICE_STATUS[o.status].label}${who ? `, ${who}` : ""}`);
-    shape.addEventListener("click", () => openOffice(o.id, loadFloors));
-    shape.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openOffice(o.id, loadFloors); } });
+    // In Select rooms mode a click chooses the room; otherwise it opens it.
+    const act = () => (facilitiesView.choosing ? toggleRoom(o) : openOffice(o.id, loadFloors));
+    shape.addEventListener("click", act);
+    shape.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); } });
   }
   const label = h("div", { class: "plan-label", "aria-hidden": "true" }, h("span", { class: "plan-label-name", text: o.name }), who ? h("span", { class: "plan-label-who", text: who }) : null);
   plan.shapes.append(shape);
@@ -754,7 +860,8 @@ function floorSide(floor, offices) {
     if (color) el.style.setProperty("--office", color);
     return el;
   };
-  const row = (o) => h("div", { class: "floor-office-row", role: "button", tabindex: "0", onclick: () => openOffice(o.id, loadFloors), onkeydown: (e) => { if (e.key === "Enter") openOffice(o.id, loadFloors); } },
+  const act = (o) => (facilitiesView.choosing ? toggleRoom(o) : openOffice(o.id, loadFloors));
+  const row = (o) => h("div", { class: `floor-office-row${facilitiesView.picked.has(o.id) ? " is-chosen" : ""}`, dataset: { roomId: String(o.id) }, role: "button", tabindex: "0", onclick: () => act(o), onkeydown: (e) => { if (e.key === "Enter") act(o); } },
     swatchFor(o),
     h("span", { class: "floor-office-main" }, h("strong", { text: o.name }), h("span", { class: "muted small-text", text: [o.roomType?.name, officeHolder(o) || OFFICE_STATUS[o.status].label].filter(Boolean).join(" · ") })),
     !o.points && facilitiesView.drawing && editor
@@ -1099,6 +1206,7 @@ async function removeAssignment(a) {
 // --- the offices table -----------------------------------------------------------------------------
 
 function showOffices() {
+  facilitiesView.picked.clear();
   loadOffices();
 }
 
@@ -1123,9 +1231,16 @@ async function loadOffices() {
   if (q) offices = offices.filter((o) => [o.name, o.floorName, o.siteName, o.roomType?.name, o.classification?.name, o.current?.companyName, o.next?.companyName].some((s) => String(s || "").toLowerCase().includes(q)));
   $("offices-add").hidden = !canEditFacilities();
   const table = $("offices-table");
-  table.tHead.replaceChildren(h("tr", {}, ["Room", "Floor", "Type", "Classification", "Size", "Status", "Company", "Rate", "Monthly"].map((t) => h("th", { text: t }))));
+  const picking = canEditFacilities();
+  const all = h("input", { type: "checkbox", "aria-label": "Choose every room listed" });
+  const boxes = [];
+  table.tHead.replaceChildren(h("tr", {}, picking ? h("th", { class: "pick-cell" }, all) : null, ["Room", "Floor", "Type", "Classification", "Size", "Status", "Company", "Rate", "Monthly"].map((t) => h("th", { text: t }))));
+  const bar = $("offices-actions");
+  const showBar = () => roomActions(bar, loadOffices);
   table.tBodies[0].replaceChildren(...(offices.length ? offices.map((o) => {
-    const row = h("tr", { class: "clickable" },
+    const box = picking ? h("input", { type: "checkbox", checked: facilitiesView.picked.has(o.id), "aria-label": `Choose room ${o.name}` }) : null;
+    const row = h("tr", { class: `clickable${facilitiesView.picked.has(o.id) ? " is-picked" : ""}` },
+      picking ? h("td", { class: "pick-cell", onclick: (e) => e.stopPropagation() }, box) : null,
       h("td", {}, h("strong", { text: o.name })),
       h("td", { text: officeWhere(o) }),
       h("td", {}, o.roomType ? colorTag(o.roomType.name, o.roomType.color) : h("span", { class: "muted", text: "—" })),
@@ -1136,15 +1251,30 @@ async function loadOffices() {
       h("td", { class: "num", title: o.rateSource ? `From ${RATE_SOURCES[o.rateSource]}` : null, text: o.effectiveRate === null ? "—" : fmtRate(o.effectiveRate) }),
       h("td", { class: `num${o.status === "occupied" ? "" : " muted"}`, title: o.status === "occupied" ? null : "Asking", text: fmtMoney(o.monthly) }));
     row.addEventListener("click", () => openOffice(o.id, loadOffices));
+    if (box) {
+      box.addEventListener("change", () => {
+        if (box.checked) facilitiesView.picked.set(o.id, o);
+        else facilitiesView.picked.delete(o.id);
+        row.classList.toggle("is-picked", box.checked);
+        all.checked = boxes.every((b) => b.checked);
+        showBar();
+      });
+      boxes.push(box);
+    }
     return row;
-  }) : [emptyRow(9, q || $("offices-status").value || typePick.value ? "No rooms match." : "No rooms yet. Add floors and draw their rooms under Floor plans.")]));
+  }) : [emptyRow(picking ? 10 : 9, q || $("offices-status").value || typePick.value ? "No rooms match." : "No rooms yet. Add floors and draw their rooms under Floor plans.")]));
   const occupied = offices.filter((o) => o.status === "occupied");
   const sqft = (list) => list.reduce((n, o) => n + (o.sqft || 0), 0);
   table.tFoot.replaceChildren(offices.length ? h("tr", {},
-    h("td", { colspan: 4, text: `${offices.length} ${offices.length === 1 ? "room" : "rooms"}` }),
+    h("td", { colspan: picking ? 5 : 4, text: `${offices.length} ${offices.length === 1 ? "room" : "rooms"}` }),
     h("td", { class: "num", text: Number(sqft(offices)).toLocaleString("en-US") }),
     h("td", { colspan: 3, class: "muted small-text", text: `${occupied.length} occupied, ${Number(sqft(occupied)).toLocaleString("en-US")} sq ft let` }),
     h("td", { class: "num" }, h("strong", { text: fmtMoney(occupied.reduce((n, o) => n + (o.monthly || 0), 0)) }))) : "");
+  all.checked = boxes.length > 0 && boxes.every((b) => b.checked);
+  all.addEventListener("change", () => {
+    for (const b of boxes) if (b.checked !== all.checked) { b.checked = all.checked; b.dispatchEvent(new Event("change")); }
+  });
+  showBar();
 }
 
 $("offices-search").addEventListener("input", debounce(loadOffices));

@@ -589,6 +589,52 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return office;
   }
 
+  // --- several rooms at once ---------------------------------------------------------------------
+
+  // What may be set on several rooms together (names, sizes and places stay one at a time).
+  const BULK_KEYS = ["roomTypeId", "classId", "rate", "unavailable", "notes"];
+
+  /** The ids of several rooms: distinct positive whole numbers, at most 500. */
+  function roomIds(list) {
+    const ids = [...new Set((Array.isArray(list) ? list : []).map(Number))];
+    if (!ids.length || ids.some((id) => !Number.isInteger(id) || id <= 0)) throw fail(400, "Choose at least one room.");
+    if (ids.length > 500) throw fail(400, "At most 500 rooms at a time.");
+    return ids;
+  }
+
+  /** Runs fn for each room in one transaction; the first that fails undoes them all, naming its room. */
+  function eachRoom(ids, scope, fn) {
+    const done = [];
+    db.transaction(() => {
+      for (const id of ids) {
+        try {
+          done.push(fn(id));
+        } catch (error) {
+          const room = getOffice(id, { scope });
+          // Name the room (and its floor), once.
+          if (room && error.status) error.message = error.message.startsWith(`${room.name} `) ? `${room.name} (${room.floorName})${error.message.slice(room.name.length)}` : `${room.name} (${room.floorName}): ${error.message}`;
+          throw error;
+        }
+      }
+    });
+    return done;
+  }
+
+  /** Sets the same things on several rooms: { roomTypeId, classId, rate, unavailable, notes }, all or none. */
+  function updateMany(list, patch = {}, { scope = null } = {}) {
+    const ids = roomIds(list);
+    const unknown = Object.keys(patch || {}).filter((k) => !BULK_KEYS.includes(k));
+    if (unknown.length) throw fail(400, `These can't be changed on several rooms at once: ${unknown.join(", ")}.`);
+    const input = Object.fromEntries(BULK_KEYS.filter((k) => patch[k] !== undefined).map((k) => [k, patch[k]]));
+    if (!Object.keys(input).length) throw fail(400, "Choose what to change.");
+    return eachRoom(ids, scope, (id) => updateOffice(id, input, { scope }));
+  }
+
+  /** Deletes several rooms (with their history), all or none: none may be assigned now or later. */
+  function removeMany(list, { scope = null } = {}) {
+    return eachRoom(roomIds(list), scope, (id) => removeOffice(id, { scope }));
+  }
+
   // --- assigning --------------------------------------------------------------------------------
 
   /** Refuses dates that overlap another of the office's assignments. */
@@ -829,7 +875,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
   return {
     todayAt, rates, siteRate, companyRate, setSiteRate, setCompanyRate,
     listFloors, getFloor, createFloor, updateFloor, removeFloor, setPlan, clearPlan, setScale, planImage,
-    listOffices, getOffice, createOffice, updateOffice, removeOffice,
+    listOffices, getOffice, createOffice, updateOffice, removeOffice, updateMany, removeMany,
     getAssignment, assign, assignMany, updateAssignment, removeAssignment,
     forCompany, summary, heldBy,
     roomKinds, createRoomType, updateRoomType, removeRoomType, createRoomClass, updateRoomClass, removeRoomClass, setUnclassifiedColor

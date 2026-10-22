@@ -146,6 +146,20 @@ function createFacilityRoutes({ access, facilities, directory, sites, auditFrom 
     res.json({ ok: true, office });
   });
 
+  /** Changes several rooms at once: { ids, patch: { roomTypeId, classId, rate, unavailable, notes } }, all or none. */
+  router.post("/api/offices/bulk", editFacilities, (req, res) => {
+    const rooms = facilities.updateMany(req.body?.ids, req.body?.patch || {}, scoped(req));
+    const changed = Object.keys(req.body?.patch || {}).map((k) => (k === "rate" ? `rate ${money(rooms[0].rate)}` : k));
+    auditFrom(req, "office.bulk_update", `${rooms.length} rooms`, `${rooms.map((o) => o.name).join(", ").slice(0, 600)}: ${changed.join(", ")}`);
+    res.json({ ok: true, updated: rooms.length });
+  });
+
+  router.post("/api/offices/bulk-delete", editFacilities, (req, res) => {
+    const rooms = facilities.removeMany(req.body?.ids, scoped(req));
+    auditFrom(req, "office.remove", `${rooms.length} rooms`, rooms.map((o) => `${o.floorName}: ${o.name}`).join(", ").slice(0, 600));
+    res.json({ ok: true, deleted: rooms.length });
+  });
+
   router.delete("/api/offices/:id", editFacilities, (req, res) => {
     const office = facilities.removeOffice(idOf(req), scoped(req));
     auditFrom(req, "office.remove", `${office.floorName}: ${office.name}`);

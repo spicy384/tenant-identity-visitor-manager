@@ -221,6 +221,26 @@ async function main() {
   check("kinds: a type stays assignable while one of its rooms is assigned", (await manager.put(`/api/facilities/room-types/${typeId("Storage")}`, { assignable: false })).status === 409);
   check("kinds: nor can such a room become a shared type", (await manager.put(`/api/offices/${storeroom.id}`, { roomTypeId: typeId("IT Room") })).status === 409);
   check("kinds: shared rooms aren't offered as free", !(await manager.get(`/api/offices?site=${harbour.id}&freeFrom=2030-01-01`)).data.offices.some((o) => o.name === "Boardroom"));
+  // Several rooms at once.
+  const spare = [];
+  for (const name of ["S1", "S2"]) spare.push((await manager.post("/api/offices", { floorId: level1.id, name, sqft: 100 })).data.office);
+  const bulkIds = [boardroom.id, ...spare.map((o) => o.id)];
+  check("bulk: read-only roles can't", (await lee.post("/api/offices/bulk", { ids: bulkIds, patch: { classId: classId("SCIF") } })).status === 403);
+  check("bulk: only some things change together", (await manager.post("/api/offices/bulk", { ids: bulkIds, patch: { name: "Same" } })).status === 400
+    && (await manager.post("/api/offices/bulk", { ids: bulkIds, patch: {} })).status === 400);
+  r = await manager.post("/api/offices/bulk", { ids: bulkIds, patch: { classId: classId("SCIF"), rate: 4.5, notes: "Secure wing" } });
+  check("bulk: classification, rate and notes set on every room", r.status === 200 && r.data.updated === 3
+    && (await manager.get(`/api/offices/${spare[1].id}`)).data.office.classification.name === "SCIF"
+    && (await manager.get(`/api/offices/${spare[0].id}`)).data.office.rate === 4.5);
+  r = await manager.post("/api/offices/bulk", { ids: [spare[0].id, storeroom.id], patch: { roomTypeId: typeId("IT Room") } });
+  check("bulk: all or none, naming the room that can't", r.status === 409 && /^Store 1/.test(r.data.error)
+    && (await manager.get(`/api/offices/${spare[0].id}`)).data.office.roomType.name === "Office", JSON.stringify(r.data));
+  r = await manager.post("/api/offices/bulk", { ids: spare.map((o) => o.id), patch: { roomTypeId: typeId("IT Room"), classId: null, unavailable: true } });
+  check("bulk: type made shared, unclassified, unavailable", r.status === 200 && (await manager.get(`/api/offices/${spare[0].id}`)).data.office.status === "unavailable");
+  check("bulk delete: refused while one is assigned", (await manager.post("/api/offices/bulk-delete", { ids: [spare[0].id, storeroom.id] })).status === 409
+    && (await manager.get(`/api/offices/${spare[0].id}`)).status === 200);
+  check("bulk delete: deleted together", (await manager.post("/api/offices/bulk-delete", { ids: spare.map((o) => o.id) })).data.deleted === 2
+    && (await manager.get(`/api/offices/${spare[1].id}`)).status === 404);
   for (const a of (await manager.get(`/api/offices/${storeroom.id}`)).data.office.assignments) await manager.del(`/api/office-assignments/${a.id}`);
   await manager.del(`/api/offices/${storeroom.id}`);
   await manager.del(`/api/offices/${boardroom.id}`);

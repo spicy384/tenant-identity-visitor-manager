@@ -717,3 +717,6 @@ polyline.plan-draft { fill: none; }
 .color-tag { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .color-dot { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0, 0, 0, 0.2); flex: none; }
 input[type="color"] { width: 64px; min-height: 36px; padding: 2px; cursor: pointer; }
+.plan-shape.is-chosen { stroke: var(--primary); stroke-width: 4; fill: color-mix(in srgb, var(--primary) 35%, transparent); }
+.floor-office-row.is-chosen { background: var(--primary-soft); box-shadow: inset 3px 0 0 var(--primary); }
+#floor-actions { margin-bottom: 12px; }
