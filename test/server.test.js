@@ -200,7 +200,7 @@ async function main() {
   check("users: a viewer is added", (await admin.post("/api/users", { username: "vic", password: pw.viewer, role: "viewer" })).status === 200);
   r = await admin.post("/api/users", { username: "rivers", password: pw.riverManager, role: "manager", sites: [riverside.id] });
   check("users: a manager limited to Riverside is added", r.status === 200 && JSON.stringify(r.data.user.sites) === JSON.stringify([riverside.id]));
-  check("users: a device role can't be given to an account", (await admin.post("/api/users", { username: "kiosky", password: password(), role: "kiosk" })).data.user.role === "viewer");
+  check("users: a device role can't be given to an account", (await admin.post("/api/users", { username: "kiosky", password: password(), role: "kiosk" })).status === 400);
   check("users: a site that doesn't exist is refused", (await admin.post("/api/users", { username: "nowhere", password: password(), role: "viewer", sites: [9999] })).status === 400);
 
   const manager = await signIn("manny", pw.manager);
@@ -240,7 +240,7 @@ async function main() {
   r = await manager.put(`/api/people/${jane.id}`, { jobTitle: "Managing Director", custom: { badge_number: "B-78" } });
   check("roles: a manager changes a person", r.status === 200 && r.data.person.jobTitle === "Managing Director" && r.data.person.custom.badge_number === "B-78");
   check("roles: only administrators delete", (await manager.del(`/api/people/${jane.id}`)).status === 403);
-  check("roles: settings are for administrators", (await manager.get("/api/fields")).status === 403 && (await manager.post("/api/sites", { name: "Nope" })).status === 403);
+  check("roles: settings are for administrators (managers only add custom fields)", (await manager.get("/api/field-access")).status === 403 && (await manager.post("/api/sites", { name: "Nope" })).status === 403 && (await manager.get("/api/fields")).status === 200);
 
   // --- site limits --------------------------------------------------------------------------------------------
   r = await riverMgr.get("/api/companies");

@@ -19,7 +19,7 @@
         </svg>
       </span>
       <div class="brand-text">
-        <h1>Identity and Visitor Manager</h1>
+        <h1 id="brand-name">Identity and Visitor Manager</h1>
         <p class="brand-sub" id="brand-sub">Tenant directory</p>
       </div>
     </a>
@@ -268,11 +268,12 @@
       <div id="rates-body" class="stack"></div>
     </section>
 
-    <!-- Settings (administrators) -->
+    <!-- Settings (administrators; roles that manage custom fields see Fields only) -->
     <section id="view-settings" class="view" data-title="Settings" hidden>
       <div class="settings-layout">
         <nav class="settings-nav" id="settings-tabs" aria-label="Settings">
           <div class="settings-group"><span class="settings-group-label">Building</span>
+            <button type="button" data-tab="general">General</button>
             <button type="button" data-tab="sites" class="is-active">Sites</button>
             <button type="button" data-tab="kiosks">Kiosks</button>
             <button type="button" data-tab="visits">Visits</button>

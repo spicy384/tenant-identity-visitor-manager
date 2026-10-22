@@ -197,6 +197,7 @@ async function checkSession() {
     return;
   }
   entraInfo = me.entra || { enabled: false };
+  applyBranding(me.branding);
   if (me.setupRequired) return showAuth("", "setup");
   if (!me.authenticated) return showAuth(entraError || "");
   await signedIn(me.user, me.csrfToken);

@@ -12,7 +12,7 @@ async function renderAccount() {
     h("h3", { text: me.displayName || me.username }),
     h("dl", { class: "facts inline-facts" },
       h("dt", { text: "Username" }), h("dd", { text: me.username }),
-      h("dt", { text: "Role" }), h("dd", { text: me.roleName || me.role }),
+      h("dt", { text: (me.roles || []).length > 1 ? "Roles" : "Role" }), h("dd", { text: me.roleName || me.role }),
       multiSite() || me.sites ? [h("dt", { text: "Sites" }), h("dd", { text: me.sites ? state.config.sites.map((x) => x.name).join(", ") : "Every site" })] : null,
       h("dt", { text: "Signs in with" }), h("dd", { text: me.provider === "entra" ? "Microsoft Entra ID" : "Password" }))),
     h("div", { class: "panel" },

@@ -7,7 +7,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { createChecker } = require("./helpers/assert");
-const { createEntra, roleFromClaims } = require("../entra");
+const { createEntra, roleFromClaims, rolesFromClaims } = require("../entra");
 
 const { check, report } = createChecker("Entra ID: OpenID Connect flow and token checks");
 
@@ -89,6 +89,7 @@ async function expectFail(promise, pattern) {
 (async () => {
   check("roles: highest wins", roleFromClaims(["Viewer", "Admin"], ROLES) === "admin" && roleFromClaims(["Viewer", "Manager"], ROLES) === "manager");
   check("roles: matched by id or name, ignoring case and spacing", roleFromClaims(["FrontDesk"], ROLES) === "frontdesk" && roleFromClaims(["front-desk"], ROLES) === "frontdesk" && roleFromClaims(["Security Team"], ROLES) === "security-team");
+  check("roles: every one matching, highest first", rolesFromClaims(["Viewer", "FrontDesk", "Manager", "Other"], ROLES).join() === "manager,frontdesk,viewer" && rolesFromClaims(undefined, ROLES).length === 0);
   check("roles: none matching", roleFromClaims(["Other"], ROLES) === null && roleFromClaims(undefined, ROLES) === null && roleFromClaims(["Staff"], ROLES) === null);
 
   check("not ready until configured", !entra.isReady() && entra.publicConfig().enabled === false);
@@ -117,7 +118,7 @@ async function expectFail(promise, pattern) {
   // --- complete ----------------------------------------------------------------------
   nextToken = makeToken(claimsFor(start));
   const id = await entra.complete({ state: start.state, code: "the-code", cookieState: start.state });
-  check("complete: identity from a valid token", id.oid === "oid-123" && id.username === "jane@contoso.com" && id.name === "Jane Doe" && id.role === "manager");
+  check("complete: identity from a valid token", id.oid === "oid-123" && id.username === "jane@contoso.com" && id.name === "Jane Doe" && id.role === "manager" && id.roles.join() === "manager");
   check("complete: code exchanged with the PKCE verifier and secret", lastTokenRequest.get("code") === "the-code" && lastTokenRequest.get("code_verifier").length >= 43 && lastTokenRequest.get("client_secret") === "s3cret" && lastTokenRequest.get("redirect_uri") === redirectUri);
   check("complete: state is single use", await expectFail(entra.complete({ state: start.state, code: "x", cookieState: start.state }), /expired or was started in another browser/));
 

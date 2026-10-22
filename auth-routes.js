@@ -55,7 +55,7 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  * sites: { exists(id) } to check the sites an account is limited to.
  * onSetup({ siteName }): runs once, when the first administrator is created.
  */
-function createAuth({ store, roles, sites = { exists: () => true }, audit = () => {}, entra = null, appUrl = "", onSetup = () => {} } = {}) {
+function createAuth({ store, roles, sites = { exists: () => true }, audit = () => {}, entra = null, appUrl = "", onSetup = () => {}, branding = () => null } = {}) {
   /** Records who did what; never throws, so an audit problem cannot block sign-in. */
   function log(req, action, target, detail, username) {
     try {
@@ -277,6 +277,26 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     }
   }
 
+  // --- roles ---------------------------------------------------------------
+  //
+  // An account has one or more roles (user.roles; accounts made before this have only
+  // user.role). user.role is kept as the highest of them, so older code and backups still
+  // read. Administrator covers everything, so it is never combined with another role.
+
+  const rolesOf = (user) => (Array.isArray(user?.roles) && user.roles.length ? user.roles : user?.role ? [user.role] : []);
+  const isAdminUser = (user) => rolesOf(user).includes("admin");
+
+  /** Checks a list of role ids and puts it in order: { role (the highest), roles }. Throws a message for the form. */
+  function cleanRoles(list) {
+    const ids = [...new Set((Array.isArray(list) ? list : [list]).filter(Boolean).map(String))];
+    if (!ids.length) throw new Error("Choose at least one role.");
+    if (ids.some((id) => !roles.isAssignable(id))) throw new Error("Choose roles listed under Settings > Roles.");
+    const ordered = ids.includes("admin") ? ["admin"] : ids.sort((a, b) => (roles.getRole(a)?.position ?? 999) - (roles.getRole(b)?.position ?? 999));
+    return { role: ordered[0], roles: ordered };
+  }
+
+  const roleNames = (user) => rolesOf(user).map((id) => roles.getRole(id)?.name || id).join(", ");
+
   // --- identity resolution -------------------------------------------------
 
   function publicUser(user) {
@@ -287,10 +307,11 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       email: user.email || null,
       provider: user.provider === "entra" ? "entra" : "local",
       entraLinked: Boolean(user.entraOid),
-      role: user.role,
-      roleName: roles.getRole(user.role)?.name || user.role,
+      role: rolesOf(user)[0] || null,
+      roles: rolesOf(user),
+      roleName: roleNames(user),
       // null: every site. An administrator always has every site, whatever is stored.
-      sites: user.role !== "admin" && Array.isArray(user.sites) ? user.sites : null,
+      sites: !isAdminUser(user) && Array.isArray(user.sites) ? user.sites : null,
       mfaEnrolled: Boolean(user.totpSecret && user.mfaEnrolled),
       passkeys: (user.passkeys || []).length,
       createdAt: user.createdAt,
@@ -409,7 +430,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
   }
 
   function requireAdmin(req, res, next) {
-    if (req.user?.role !== "admin") {
+    if (!isAdminUser(req.user)) {
       return res.status(403).json({ error: "Administrator access required." });
     }
     return next();
@@ -432,18 +453,20 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
   }
 
   router.get("/api/auth/me", (req, res) => {
+    // The app's name is shown on the sign-in page too, so it goes out before sign-in.
     if (!hasUsers()) {
-      return res.json({ authenticated: false, setupRequired: true, entra: { enabled: false } });
+      return res.json({ authenticated: false, setupRequired: true, entra: { enabled: false }, branding: branding() });
     }
 
     const identity = resolveIdentity(req);
     if (!identity) {
-      return res.json({ authenticated: false, setupRequired: false, entra: entraSignIn() });
+      return res.json({ authenticated: false, setupRequired: false, entra: entraSignIn(), branding: branding() });
     }
 
     return res.json({
       authenticated: true,
       setupRequired: false,
+      branding: branding(),
       entra: entraSignIn(),
       user: publicUser(identity.user),
       csrfToken: identity.session ? identity.session.csrfToken : null,
@@ -669,10 +692,12 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       user = users.find((u) => u.provider === "entra" && !u.entraOid && u.username.toLowerCase() === identity.username);
     }
     const patch = { entraOid: identity.oid, displayName: identity.name || null, email: identity.email || null, lastLoginAt: Date.now() };
-    if (identity.role) patch.role = identity.role;
+    // App roles in the sign-in replace the stored ones: every one that matches.
+    const claimed = (identity.roles && identity.roles.length ? identity.roles : identity.role ? [identity.role] : []).filter((id) => roles.isAssignable(id));
+    if (claimed.length) Object.assign(patch, cleanRoles(claimed));
     if (user) return { user: updateUser(user.id, patch) };
 
-    const role = identity.role || (cfg.defaultRole !== "none" ? cfg.defaultRole : null);
+    const role = patch.role || (cfg.defaultRole !== "none" ? cfg.defaultRole : null);
     if (!role) return { refused: `${identity.username || "This account"} has not been given access. Ask an administrator to add it under Settings > Users.` };
     if (!identity.username) return { refused: "Microsoft did not say which account signed in." };
     if (users.some((u) => u.username.toLowerCase() === identity.username)) {
@@ -684,6 +709,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       provider: "entra",
       passwordHash: null,
       role,
+      roles: [role],
       createdAt: Date.now(),
       failedAttempts: 0,
       lockedUntil: null,
@@ -715,7 +741,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       log(req, "auth.entra_refused", identity.username || identity.oid, result.refused, null);
       return entraFail(res, result.refused);
     }
-    if (result.created) log(req, "user.add", result.user.username, `role ${result.user.role}, created at first Microsoft sign-in`, result.user.username);
+    if (result.created) log(req, "user.add", result.user.username, `roles ${rolesOf(result.user).join(", ")}, created at first Microsoft sign-in`, result.user.username);
     log(req, "auth.login", result.user.username, "Microsoft Entra ID", result.user.username);
     const session = createSession(result.user.id, req);
     res.setHeader("Set-Cookie", [entraStateCookie(res, "", 0), sessionCookieValue(session.id)]);
@@ -1029,13 +1055,16 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
   router.post("/api/users", requireAuth, requireAdmin, (req, res) => {
     const username = String(req.body?.username || "").trim();
     const password = String(req.body?.password || "");
-    const role = roles.isAssignable(req.body?.role) ? req.body.role : "viewer";
+    let given;
     let siteLimit;
     try {
-      siteLimit = cleanSites(req.body?.sites, role);
+      // roles: a list; role: one (as before); neither: Viewer.
+      given = cleanRoles(req.body?.roles ?? req.body?.role ?? "viewer");
+      siteLimit = cleanSites(req.body?.sites, given.role);
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }
+    const { role } = given;
 
     // An Entra account is added by its sign-in name (UPN) and linked at first sign-in.
     if (req.body?.provider === "entra") {
@@ -1046,9 +1075,9 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       if (findUser(upn)) {
         return res.status(409).json({ error: "That username is already taken." });
       }
-      const user = { id: auth.randomToken(8), username: upn, provider: "entra", passwordHash: null, entraOid: null, role, sites: siteLimit, createdAt: Date.now(), lastLoginAt: null, failedAttempts: 0, lockedUntil: null };
+      const user = { id: auth.randomToken(8), username: upn, provider: "entra", passwordHash: null, entraOid: null, role, roles: given.roles, sites: siteLimit, createdAt: Date.now(), lastLoginAt: null, failedAttempts: 0, lockedUntil: null };
       saveUsers([...loadUsers(), user]);
-      log(req, "user.add", upn, `role ${role}, Microsoft Entra ID`);
+      log(req, "user.add", upn, `roles ${given.roles.join(", ")}, Microsoft Entra ID`);
       return res.json({ ok: true, user: publicUser(user) });
     }
 
@@ -1068,6 +1097,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       username,
       passwordHash: auth.hashPassword(password),
       role,
+      roles: given.roles,
       sites: siteLimit,
       totpSecret: null,
       mfaEnrolled: false,
@@ -1081,7 +1111,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
 
     users.push(user);
     saveUsers(users);
-    log(req, "user.add", username, `role ${role}`);
+    log(req, "user.add", username, `roles ${given.roles.join(", ")}`);
     return res.json({ ok: true, user: publicUser(user) });
   });
 
@@ -1096,20 +1126,23 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     if (target.id === req.user.id) {
       return res.status(400).json({ error: "You cannot delete your own account." });
     }
-    if (target.role === "admin" && users.filter((u) => u.role === "admin").length === 1) {
+    if (isAdminUser(target) && users.filter(isAdminUser).length === 1) {
       return res.status(400).json({ error: "Cannot remove the last administrator." });
     }
 
     saveUsers(users.filter((u) => u.id !== id));
     destroySessionsForUser(id);
-    log(req, "user.remove", target.username, `was ${target.role}`);
+    log(req, "user.remove", target.username, `had ${rolesOf(target).join(", ")}`);
     return res.json({ ok: true });
   });
 
+  /** Sets an account's roles: { roles: [ids] }, or { role } for one. */
   router.post("/api/users/:id/role", requireAuth, requireAdmin, (req, res) => {
-    const role = String(req.body?.role || "");
-    if (!roles.isAssignable(role)) {
-      return res.status(400).json({ error: "Choose one of the roles listed under Settings > Roles." });
+    let given;
+    try {
+      given = cleanRoles(req.body?.roles ?? req.body?.role);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
     }
 
     const users = loadUsers();
@@ -1120,13 +1153,14 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     if (target.id === req.user.id) {
       return res.status(400).json({ error: "You cannot change your own role." });
     }
-    if (target.role === "admin" && role !== "admin" && users.filter((u) => u.role === "admin").length === 1) {
+    if (isAdminUser(target) && given.role !== "admin" && users.filter(isAdminUser).length === 1) {
       return res.status(400).json({ error: "Cannot demote the last administrator." });
     }
 
-    updateUser(target.id, { role });
-    log(req, "user.role", target.username, `${target.role} to ${role}`);
-    return res.json({ ok: true, user: publicUser({ ...target, role }) });
+    // An administrator has every site.
+    const updated = updateUser(target.id, { ...given, ...(given.role === "admin" ? { sites: null } : {}) });
+    log(req, "user.role", target.username, `${rolesOf(target).join(", ")} to ${given.roles.join(", ")}`);
+    return res.json({ ok: true, user: publicUser(updated) });
   });
 
   /**
@@ -1149,12 +1183,12 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     if (!target) {
       return res.status(404).json({ error: "User not found." });
     }
-    if (target.role === "admin") {
+    if (isAdminUser(target)) {
       return res.status(400).json({ error: "Administrators always see every site." });
     }
     let siteLimit;
     try {
-      siteLimit = cleanSites(req.body?.sites, target.role);
+      siteLimit = cleanSites(req.body?.sites, rolesOf(target)[0]);
     } catch (error) {
       return res.status(400).json({ error: error.message });
     }
@@ -1207,6 +1241,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     findUser,
     findUserById,
     publicUser,
+    rolesOf,
     trustProxyAuth,
     proxyUserHeader,
     cookieSecure,

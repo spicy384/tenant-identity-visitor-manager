@@ -27,8 +27,9 @@ const ROLE_KINDS = { user: "Staff accounts", kiosk: "Kiosk devices", api: "API c
 const DEFAULT_ROLES = [
   // clearances: sees clearance level names (the rest see badge template images instead).
   // facilities: floors, offices and who has them; Administrator and Manager by default, and any custom role given it.
+  // fields: adds and changes custom fields for the records it can change (Manager by default; deleting stays with administrators).
   { id: "admin", name: "Administrator", kind: "user", directory: "edit", visitors: "edit", badges: "manage", clearances: true, facilities: "edit", position: 0 },
-  { id: "manager", name: "Manager", kind: "user", directory: "edit", visitors: "edit", badges: "edit", clearances: true, facilities: "edit", position: 10 },
+  { id: "manager", name: "Manager", kind: "user", directory: "edit", visitors: "edit", badges: "edit", clearances: true, facilities: "edit", fields: true, position: 10 },
   { id: "frontdesk", name: "Front desk", kind: "user", directory: "read", visitors: "edit", badges: "edit", position: 20 },
   // The only role that validates and sets clearances, and sees the validation queue.
   // Security also keeps the badge stock: only it (and administrators) add, change and remove badges.
@@ -60,6 +61,10 @@ function fail(status, message) {
 }
 
 const rank = (level) => ACCESS_LEVELS.indexOf(level);
+// Area levels from least to most (badges have "manage" above "edit").
+const AREA_RANK = ["none", "read", "edit", "manage"];
+const highestArea = (levels) => levels.reduce((best, l) => (AREA_RANK.indexOf(l) > AREA_RANK.indexOf(best) ? l : best), "none");
+const highestLevel = (levels) => levels.reduce((best, l) => (rank(l) > rank(best) ? l : best), "hidden");
 const lower = (a, b) => (rank(a) <= rank(b) ? a : b);
 const customKey = (id) => `custom:${id}`;
 
@@ -71,7 +76,8 @@ function createAccess({ db, fields }) {
   function roleRow(r) {
     return r && { id: r.id, name: r.name, kind: r.kind, builtIn: Boolean(r.built_in), directory: r.directory, visitors: r.visitors, badges: r.badges || "none",
       clearances: r.id === "admin" || r.id === "security" || (r.kind === "user" && Boolean(r.clearances)),
-      facilities: r.id === "admin" ? "edit" : r.kind === "user" ? r.facilities || "none" : "none", position: r.position };
+      facilities: r.id === "admin" ? "edit" : r.kind === "user" ? r.facilities || "none" : "none",
+      fields: r.id === "admin" || (r.kind === "user" && Boolean(r.fields)), position: r.position };
   }
 
   function listRoles({ kind = null } = {}) {
@@ -116,8 +122,8 @@ function createAccess({ db, fields }) {
     db.transaction(() => {
       for (const r of DEFAULT_ROLES) {
         if (getRole(r.id)) continue;
-        raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, clearances, facilities, position, created_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)")
-          .run(r.id, r.name, r.kind, r.directory, r.visitors, r.badges, r.clearances ? 1 : 0, r.facilities || "none", r.position, now);
+        raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, clearances, facilities, fields, position, created_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(r.id, r.name, r.kind, r.directory, r.visitors, r.badges, r.clearances ? 1 : 0, r.facilities || "none", r.fields ? 1 : 0, r.position, now);
         if (r.id === "admin") continue;
         for (const entity of ENTITIES) {
           for (const f of builtIn(entity)) putPolicy.run(r.id, entity, f.key, builtInDefault(r, entity, f.key));
@@ -157,6 +163,14 @@ function createAccess({ db, fields }) {
     });
   }
 
+  // And adding custom fields: once, Manager gets it.
+  if (!db.getSetting("roles.fields_seeded")) {
+    db.transaction(() => {
+      for (const r of DEFAULT_ROLES) if (r.fields) raw.prepare("UPDATE roles SET fields = 1 WHERE id = ? AND built_in = 1").run(r.id);
+      db.setSetting("roles.fields_seeded", "1");
+    });
+  }
+
   function roleId(name) {
     const base = String(name).normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30) || "role";
     let id = base;
@@ -170,7 +184,7 @@ function createAccess({ db, fields }) {
   }
 
   /** A new account role; its grid column starts as a copy of `copyFrom` (default: Viewer). */
-  function createRole({ name, directory = "read", visitors = "none", badges = "none", clearances = false, facilities = "none", copyFrom = "viewer" }) {
+  function createRole({ name, directory = "read", visitors = "none", badges = "none", clearances = false, facilities = "none", fields: managesFields = false, copyFrom = "viewer" }) {
     const clean = String(name || "").trim().slice(0, 40);
     if (!clean) throw fail(400, "Give the role a name.");
     if (raw.prepare("SELECT 1 FROM roles WHERE name = ?").get(clean)) throw fail(409, "A role with that name already exists.");
@@ -182,7 +196,7 @@ function createAccess({ db, fields }) {
     if (!source || source.kind !== "user") throw fail(400, "Copy the field access of a staff role.");
     const id = roleId(clean);
     db.transaction(() => {
-      raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, clearances, facilities, position, created_at) VALUES (?, ?, 'user', 0, ?, ?, ?, ?, ?, 50, ?)").run(id, clean, directory, visitors, badges, clearances === true ? 1 : 0, facilities, Date.now());
+      raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, clearances, facilities, fields, position, created_at) VALUES (?, ?, 'user', 0, ?, ?, ?, ?, ?, ?, 50, ?)").run(id, clean, directory, visitors, badges, clearances === true ? 1 : 0, facilities, managesFields === true ? 1 : 0, Date.now());
       if (source.id === "admin") {
         // Administrators have no stored column: everything is editable.
         for (const entity of ENTITIES) {
@@ -201,7 +215,7 @@ function createAccess({ db, fields }) {
     if (!role) throw fail(404, "No such role.");
     if (role.id === "admin") throw fail(400, "The Administrator role always has full access.");
     if (role.kind === "api" && !role.builtIn) throw fail(400, "An API client's fields are set under Settings > API clients.");
-    if (role.kind !== "user" && (patch.directory !== undefined || patch.visitors !== undefined || patch.badges !== undefined || patch.clearances !== undefined || patch.facilities !== undefined)) throw fail(400, `What the ${role.name} role reaches is fixed; set which fields it sees in the field access grid.`);
+    if (role.kind !== "user" && (patch.directory !== undefined || patch.visitors !== undefined || patch.badges !== undefined || patch.clearances !== undefined || patch.facilities !== undefined || patch.fields !== undefined)) throw fail(400, `What the ${role.name} role reaches is fixed; set which fields it sees in the field access grid.`);
     if (role.id === "security" && patch.clearances === false) throw fail(400, "The Security role validates clearances, so it always sees clearance levels.");
     const next = { ...role };
     if (patch.name !== undefined) {
@@ -217,7 +231,8 @@ function createAccess({ db, fields }) {
     if (patch.badges !== undefined) next.badges = checkArea(patch.badges, "Badge access", BADGE_LEVELS);
     if (patch.clearances !== undefined) next.clearances = patch.clearances === true;
     if (patch.facilities !== undefined) next.facilities = checkArea(patch.facilities, "Facilities access");
-    raw.prepare("UPDATE roles SET name = ?, directory = ?, visitors = ?, badges = ?, clearances = ?, facilities = ? WHERE id = ?").run(next.name, next.directory, next.visitors, next.badges, next.clearances ? 1 : 0, next.facilities, id);
+    if (patch.fields !== undefined) next.fields = patch.fields === true;
+    raw.prepare("UPDATE roles SET name = ?, directory = ?, visitors = ?, badges = ?, clearances = ?, facilities = ?, fields = ? WHERE id = ?").run(next.name, next.directory, next.visitors, next.badges, next.clearances ? 1 : 0, next.facilities, next.fields ? 1 : 0, id);
     return getRole(id);
   }
 
@@ -285,13 +300,13 @@ function createAccess({ db, fields }) {
     return setPolicies(changes);
   }
 
-  /** Removes a custom role; `inUse` is how many accounts hold it (they must be moved first). */
+  /** Removes a custom role; `inUse` is how many accounts have it as their only role (they must be given another first). */
   function deleteRole(id, inUse = 0) {
     const role = getRole(id);
     if (!role) throw fail(404, "No such role.");
     if (role.builtIn) throw fail(400, "Built-in roles can't be removed.");
     if (role.kind === "api") throw fail(400, "Remove the API client instead, under Settings > API clients.");
-    if (inUse) throw fail(409, `${inUse} account${inUse === 1 ? " has" : "s have"} this role; give ${inUse === 1 ? "it" : "them"} another role first.`);
+    if (inUse) throw fail(409, `${inUse} account${inUse === 1 ? " has" : "s have"} only this role; give ${inUse === 1 ? "it" : "them"} another role first.`);
     raw.prepare("DELETE FROM roles WHERE id = ?").run(id);
     return role;
   }
@@ -396,22 +411,30 @@ function createAccess({ db, fields }) {
   // --- the caller ------------------------------------------------------------------------
 
   /**
-   * What a request may do, from its account (or, later, its kiosk or API client).
+   * What a request may do, from its account (or its kiosk or API client). An account may have
+   * several roles (principal.roles): it gets the most any of them gives, area by area and field
+   * by field, each role's own limits applied within that role first. role is the highest of
+   * them (by the order under Settings > Roles), for showing.
    * sites: null for every site, else the Set of site ids it is limited to.
    */
   function contextFor(principal) {
-    const role = getRole(principal?.role);
-    const isAdmin = role?.id === "admin";
+    const ids = Array.isArray(principal?.roles) && principal.roles.length ? principal.roles : [principal?.role];
+    const roles = [...new Set(ids)].map((id) => getRole(id)).filter(Boolean).sort((a, b) => a.position - b.position);
+    const role = roles[0] || null;
+    const isAdmin = roles.some((r) => r.id === "admin");
     const limited = !isAdmin && Array.isArray(principal?.sites);
     return {
       role,
+      roles,
       isAdmin,
-      directory: role ? role.directory : "none",
-      visitors: role ? role.visitors : "none",
-      badges: role ? role.badges : "none",
+      directory: highestArea(roles.map((r) => r.directory)),
+      visitors: highestArea(roles.map((r) => r.visitors)),
+      badges: highestArea(roles.map((r) => r.badges)),
       // Sees clearance level names; everyone else sees badge template images instead.
-      clearances: Boolean(role?.clearances),
-      facilities: role ? role.facilities : "none",
+      clearances: roles.some((r) => r.clearances),
+      facilities: highestArea(roles.map((r) => r.facilities)),
+      // Adds and changes custom fields (for the records it can change).
+      fields: roles.some((r) => r.fields),
       sites: limited ? new Set(principal.sites.map(Number)) : null,
       // Read when used, so a context never answers from a grid that has since changed.
       get stored() {
@@ -424,8 +447,8 @@ function createAccess({ db, fields }) {
   const canEditDirectory = (ctx) => ctx.directory === "edit";
   const canReadVisitors = (ctx) => ctx.visitors === "read" || ctx.visitors === "edit";
   const canEditVisitors = (ctx) => ctx.visitors === "edit";
-  /** The Security role: validates clearances and sees the validation queue. */
-  const isSecurity = (ctx) => ctx.role?.id === "security";
+  /** Has the Security role (among others, perhaps): validates clearances and sees the validation queue. */
+  const isSecurity = (ctx) => (ctx.roles || []).some((r) => r.id === "security");
   /** Sees clearance level names (Settings > Roles); everyone else sees badge template images. */
   const canSeeClearances = (ctx) => Boolean(ctx.clearances);
   const canReadBadges = (ctx) => ["read", "edit", "manage"].includes(ctx.badges);
@@ -437,12 +460,21 @@ function createAccess({ db, fields }) {
   const canReadFacilities = (ctx) => ctx.facilities === "read" || ctx.facilities === "edit";
   /** Draws floors and offices, assigns them and sets rates. */
   const canEditFacilities = (ctx) => ctx.facilities === "edit";
+  /**
+   * The record types whose custom fields the caller may add and change: administrators every
+   * one; a role with "manages custom fields" those that role itself can change (badges take the
+   * manage level), whatever other roles the account has.
+   * Deleting a field, and the field access grid, stay with administrators.
+   */
+  // Each role on its own: a role that manages fields does so for what that role can change.
+  const fieldEntitiesFor = (ctx) => ENTITIES.filter((e) => ctx.isAdmin || (ctx.roles || []).some((r) => r.fields && editsArea(r[areaOf(e)], e)));
+  const canManageFields = (ctx) => fieldEntitiesFor(ctx).length > 0;
 
   /** Fields of `entity` the caller can see (for `recordId`'s own fields too), each with its level. */
   function fieldsFor(ctx, entity, { recordId = null } = {}) {
     const stored = ctx.stored;
     return allFields(entity, { recordId })
-      .map((f) => ({ ...f, access: levelFor(ctx.role, entity, f, stored) }))
+      .map((f) => ({ ...f, access: highestLevel((ctx.roles || []).map((r) => levelFor(r, entity, f, stored))) }))
       .filter((f) => f.access !== "hidden");
   }
 
@@ -554,6 +586,8 @@ function createAccess({ db, fields }) {
     canManageBadges,
     canReadFacilities,
     canEditFacilities,
+    fieldEntitiesFor,
+    canManageFields,
     fieldsFor,
     siteVisible,
     project,

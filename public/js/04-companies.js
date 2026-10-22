@@ -107,7 +107,7 @@ async function showCompanyDetail(id) {
     h("div", { class: "panel-head" },
       h("div", {}, h("h2", { text: company.name }), company.active ? null : h("span", { class: "badge muted", text: "Inactive" })),
       h("div", { class: "btn-row" },
-        isAdmin() ? h("button", { type: "button", class: "link-btn", text: "Add a field to this company", onclick: () => addRecordField("company", company.id, company.name, () => showCompanyDetail(id)) }) : null,
+        canManageFields("company") ? h("button", { type: "button", class: "link-btn", text: "Add a field to this company", onclick: () => addRecordField("company", company.id, company.name, () => showCompanyDetail(id)) }) : null,
         canEditDirectory() ? h("button", { type: "button", class: "secondary small", text: "Edit", onclick: () => editCompany(company, fields) }) : null,
         isAdmin() ? h("button", { type: "button", class: "secondary small", text: "Delete", onclick: () => deleteCompany(company) }) : null)),
     recordFacts(fields, company, ["name", "active"]));
@@ -197,7 +197,7 @@ async function openPerson(id, onChange = () => {}) {
     badgeSection("person", person.id));
   const actions = [];
   if (isAdmin()) actions.push({ label: "Delete", kind: "danger", value: "delete" });
-  if (isAdmin()) actions.push({ label: "Add a field to this person", value: "field" });
+  if (canManageFields("person")) actions.push({ label: "Add a field to this person", value: "field" });
   if (canEditDirectory()) actions.push({ label: "Edit", value: "edit" });
   actions.push({ label: "Close", kind: "primary", value: null });
   const result = await openDialog({ title: personName(person), body, wide: true, actions, onOpen: (d) => { dlgRef = d; } });

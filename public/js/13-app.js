@@ -55,7 +55,8 @@ const SECTIONS = [
     { view: "clearances", href: "#clearances", label: "Re-checks and expiry", show: seesSecurity },
     { view: "badges", sub: "all", href: "#badges", label: "All badges", show: canReadBadges }
   ] },
-  { id: "settings", label: "Settings", href: "#settings", show: isAdmin, pages: [] }
+  // Roles that manage custom fields (not administrators) see Settings with Fields only.
+  { id: "settings", label: "Settings", href: "#settings", show: () => isAdmin() || canManageFields(), pages: [] }
 ];
 
 const pagesOf = (section) => section.pages.filter((p) => p.show());
@@ -110,7 +111,9 @@ function applyConfig() {
   $("site-picker").hidden = sites.length < 2;
   if (!sites.some((s) => String(s.id) === String(state.site))) state.site = "";
   $("site-current").textContent = siteName(state.site) || allSitesLabel();
-  $("brand-sub").textContent = siteName(state.site) || (sites.length === 1 ? sites[0].name : "Tenant directory");
+  applyBranding(c.branding);
+  // The line under the name: the site chosen; else the text set under Settings > General; else the only site.
+  $("brand-sub").textContent = siteName(state.site) || c.branding?.subtitle || (sites.length === 1 ? sites[0].name : "Tenant directory");
   renderSubnav();
 }
 
@@ -200,7 +203,7 @@ function route() {
     return;
   }
   let view = VIEWS[name] ? name : "home";
-  if (view === "settings" && !isAdmin()) view = "home";
+  if (view === "settings" && !isAdmin() && !canManageFields()) view = "home";
   if ((view === "companies" || view === "people") && !canReadDirectory()) view = "home";
   if (["here", "visitors", "visits", "expected"].includes(view) && !canReadVisitors()) view = "home";
   if (view === "badges" && !canReadBadges()) view = "home";

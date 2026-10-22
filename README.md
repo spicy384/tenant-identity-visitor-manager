@@ -28,7 +28,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   every page, count and module follows it, or "All sites". The choice is kept with the
   account too, so it follows you to another desk.
 - **Settings** has a grouped menu down the side: Building, Directory, Security, Accounts and
-  Records.
+  Records. **General** sets the app's name, shown at the top left, on the sign-in page and in
+  the browser's tab, and the line under it (shown when no single site is chosen; otherwise the
+  line shows the chosen site).
 - **Light or dark.** The moon/sun button in the header switches at once; Account > Appearance
   also offers "Match this device" (the default). The choice is kept with the account, so it
   follows you, and applied before the page draws.
@@ -51,7 +53,12 @@ The design and decisions are in [PLAN.md](PLAN.md).
   delete them (administrators). Each is all or nothing, and audited.
 - **Custom fields** for companies and people: text, long text, number, date, yes/no, choice
   list, email, phone, web address. A field is either on every record (and can be required) or
-  added to one record only, and can later be made a field for every record.
+  added to one record only, and can later be made a field for every record. Administrators
+  manage them, and so does any role with **Manages custom fields** (Settings > Roles; Manager to
+  start with): it adds fields and changes their names, choices and whether they're required, for
+  the records that role can change (not badges, unless it manages badges). Deleting a field (and
+  every value in it) and the field access grid stay with administrators; such a role sees
+  Settings with the Fields page only.
 - **Field access.** A grid of roles × fields, each cell hidden, read only or can change. The
   server leaves hidden fields out of every response, CSV export and search: searching for a
   value in a field you can't see finds nothing.
@@ -65,7 +72,15 @@ The design and decisions are in [PLAN.md](PLAN.md).
   The key is kept outside the data directory.
 - **Sign-in** carried over from Equipment Checkout: local accounts with password, authenticator
   code and passkeys, plus Microsoft Entra ID. App roles in Entra match role names (`Manager`,
-  `FrontDesk`, ...).
+  `FrontDesk`, ...); every one that matches is given.
+- **Several roles on one account.** Under Settings > Users, tick any number of roles for an
+  account. It can do whatever any of them can: the highest level of each area (directory,
+  visitors, badges, facilities), and every field that any of its roles sees in the field access
+  grid, each role's own limits applied first (a role that doesn't see clearance levels still
+  adds nothing about clearances). With Security among its roles it validates clearances.
+  Administrator covers everything, so it is never combined. Site limits stay with the account.
+  Removing a role takes it from the accounts that have others too, and is refused while it is
+  someone's only role.
 - **Entra with a certificate instead of a client secret.** Under Settings > Microsoft Entra ID,
   choose how the app proves who it is to Microsoft:
   - **Make a certificate** creates a key and a self-signed certificate (1, 2 or 3 years). The
@@ -544,7 +559,7 @@ is imported. Columns for fields the importer can't change are skipped and listed
 npm test
 ```
 
-Fourteen suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
+Fifteen suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
 field access and site limits (the most important), visitors (name matching, end of day across
 time zones and daylight-saving changes, retention, merging), Entra sign-in against a fake
 Microsoft, the HTTP API end to end, the kiosk and visitor routes end to end, the API for other
@@ -553,7 +568,7 @@ sees the queue, and that the SSN digits never reach the database, the audit trai
 log, and are wiped on time), and badge images (that roles without clearance levels never
 receive a level name, pick levels by image, and are shown the right badge), importing from Access and CSV (against a small Access
 database in test/fixtures, made by make-access-fixture.ps1), merging and bulk changes (custom badge fields too), and facilities
-(floors and plans, offices, overlapping dates refused, which rate wins, who may see and change them). Equipment Checkout's own tests run its directory mode against this app.
+(floors and plans, offices, overlapping dates refused, which rate wins, who may see and change them), and accounts with several roles. Equipment Checkout's own tests run its directory mode against this app.
 
 ## Not yet tried
 

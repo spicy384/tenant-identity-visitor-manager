@@ -193,8 +193,16 @@ const prefs = createPrefs({ db, access });
 const events = createEvents({ db });
 const store = { read: db.readDoc, write: db.writeDoc };
 const entra = createEntra({ store, roles: () => access.listRoles({ kind: "user" }) });
+// The name in the header, on the sign-in page and in the browser's tab, and the line under it
+// (shown when no one site is chosen). Settings > General.
+const DEFAULT_APP_NAME = "Identity and Visitor Manager";
+function branding() {
+  return { name: db.getSetting("branding.name") || DEFAULT_APP_NAME, subtitle: db.getSetting("branding.subtitle") || "" };
+}
+
 const authGuard = createAuth({
   store,
+  branding,
   roles: access,
   sites: { exists: (id) => Boolean(sites.get(id)) },
   audit: (entry) => db.audit(entry),
@@ -296,7 +304,8 @@ app.get("/api/config", (req, res) => {
   const ctx = req.ctx;
   res.json({
     version: pkg.version,
-    access: { role: ctx.role?.id || null, roleName: ctx.role?.name || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), facilities: ctx.facilities, sitesLimited: Boolean(ctx.sites) },
+    access: { role: ctx.role?.id || null, roles: ctx.roles.map((r) => r.id), roleName: ctx.roles.map((r) => r.name).join(", ") || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), facilities: ctx.facilities, fieldEntities: access.fieldEntitiesFor(ctx), sitesLimited: Boolean(ctx.sites) },
+    branding: branding(),
     visits: access.canReadVisitors(ctx) ? { here: visitors.hereNow(ctx.sites), review: visitors.reviewCount(ctx.sites), expected: events.expectedCount(ctx.sites), badgesLeft: access.canReadBadges(ctx) ? badges.leftCount(ctx.sites) : 0, tempOverdue: access.canReadBadges(ctx) ? badges.overdueCount(ctx.sites) : 0 } : null,
     // Level names only for roles that see them; the rest see badge template images.
     clearanceLevels: access.canSeeClearances(ctx) ? clearance.levels().map((l) => ({ id: l.id, name: l.name, rank: l.rank })) : [],
@@ -910,16 +919,41 @@ function fieldOut(d) {
   return { ...d, recordName };
 }
 
-app.get("/api/fields", admin, (req, res) => {
+// Custom fields: administrators, and roles that manage custom fields (Settings > Roles) for the
+// records they can change. Deleting a field (and every value in it) stays with administrators.
+const fieldManager = (req, res, next) => (access.canManageFields(req.ctx) ? next() : res.status(403).json({ error: "This account can't add custom fields." }));
+
+/** Refuses a field for a kind of record the caller doesn't manage fields for. */
+function checkFieldEntity(req, entity) {
+  if (!access.fieldEntitiesFor(req.ctx).includes(entity)) {
+    throw fail(403, `This account can't add or change ${({ company: "company", person: "people", visitor: "visitor", badge: "badge" })[entity] || "those"} fields.`);
+  }
+}
+
+/** A field for one record: only for a record the caller can see. */
+function checkFieldRecord(req, entity, recordId) {
+  if (req.ctx.isAdmin) return;
+  const sitesLimit = { sites: req.ctx.sites };
+  const rec = entity === "company" ? directory.getCompany(recordId, sitesLimit) : entity === "person" ? directory.getPerson(recordId, sitesLimit) : entity === "visitor" ? visitors.get(recordId, sitesLimit) : badges.get(recordId, sitesLimit);
+  if (!rec) throw fail(404, "No such record, or not at your sites.");
+}
+
+app.get("/api/fields", fieldManager, (req, res) => {
+  const mine = new Set(access.fieldEntitiesFor(req.ctx));
   res.json({
-    fields: Object.fromEntries(ENTITIES.map((e) => [e, fields.list(e, { allRecords: true }).map(fieldOut)])),
+    // Every kind of record is listed; those the caller doesn't manage are empty.
+    fields: Object.fromEntries(ENTITIES.map((e) => [e, mine.has(e) ? fields.list(e, { allRecords: true }).map(fieldOut) : []])),
+    entities: [...mine],
+    canDelete: req.ctx.isAdmin,
     types: FIELD_TYPES.map((t) => ({ value: t, label: FIELD_TYPE_LABELS[t] })),
     visibility: NEW_FIELD_VISIBILITY
   });
 });
 
-app.post("/api/fields", admin, (req, res) => {
+app.post("/api/fields", fieldManager, (req, res) => {
   const body = req.body || {};
+  checkFieldEntity(req, body.entity);
+  if (body.recordId) checkFieldRecord(req, body.entity, positiveInt(body.recordId));
   let def;
   db.transaction(() => {
     def = fields.create({ entity: body.entity, label: body.label, type: body.type, choices: body.choices, required: body.required, recordId: body.recordId ? positiveInt(body.recordId) : null });
@@ -929,8 +963,11 @@ app.post("/api/fields", admin, (req, res) => {
   res.json({ ok: true, field: fieldOut(def) });
 });
 
-app.put("/api/fields/:id", admin, (req, res) => {
+app.put("/api/fields/:id", fieldManager, (req, res) => {
   const before = fields.get(positiveInt(req.params.id));
+  if (!before) throw fail(404, "No such field.");
+  checkFieldEntity(req, before.entity);
+  if (before.recordId !== null) checkFieldRecord(req, before.entity, before.recordId);
   const def = fields.update(positiveInt(req.params.id), req.body || {});
   auditFrom(req, "field.update", `${def.entity}.${def.key}`, before && before.recordId !== null && def.recordId === null ? "made database-wide" : changedKeys(req.body));
   res.json({ ok: true, field: fieldOut(def) });
@@ -950,7 +987,7 @@ app.delete("/api/fields/:id", admin, (req, res) => {
 
 function rolesOut() {
   const users = authGuard.loadUsers();
-  return access.listRoles().map((r) => ({ ...r, accounts: users.filter((u) => u.role === r.id).length }));
+  return access.listRoles().map((r) => ({ ...r, accounts: users.filter((u) => authGuard.rolesOf(u).includes(r.id)).length }));
 }
 
 app.get("/api/roles", admin, (req, res) => {
@@ -959,20 +996,28 @@ app.get("/api/roles", admin, (req, res) => {
 
 app.post("/api/roles", admin, (req, res) => {
   const role = access.createRole(req.body || {});
-  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}${role.clearances ? ", sees clearance levels" : ""}; fields copied from ${req.body?.copyFrom || "viewer"}`);
+  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}${role.clearances ? ", sees clearance levels" : ""}${role.fields ? ", manages custom fields" : ""}; fields copied from ${req.body?.copyFrom || "viewer"}`);
   res.json({ ok: true, role });
 });
 
 app.put("/api/roles/:id", admin, (req, res) => {
   const role = access.updateRole(String(req.params.id), req.body || {});
-  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}${role.clearances ? ", sees clearance levels" : ""}`);
+  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}${role.clearances ? ", sees clearance levels" : ""}${role.fields ? ", manages custom fields" : ""}`);
   res.json({ ok: true, role });
 });
 
 app.delete("/api/roles/:id", admin, (req, res) => {
   const id = String(req.params.id);
-  const role = access.deleteRole(id, authGuard.loadUsers().filter((u) => u.role === id).length);
-  auditFrom(req, "role.remove", role.name);
+  const users = authGuard.loadUsers();
+  // Refused while it is someone's only role; accounts with other roles just lose it.
+  const role = access.deleteRole(id, users.filter((u) => authGuard.rolesOf(u).length === 1 && authGuard.rolesOf(u)[0] === id).length);
+  const losing = users.filter((u) => authGuard.rolesOf(u).includes(id));
+  for (const u of losing) {
+    u.roles = authGuard.rolesOf(u).filter((r) => r !== id);
+    u.role = u.roles[0];
+  }
+  if (losing.length) store.write("users", users);
+  auditFrom(req, "role.remove", role.name, losing.length ? `taken from ${losing.map((u) => u.username).join(", ")}` : null);
   res.json({ ok: true });
 });
 
@@ -1060,6 +1105,24 @@ app.get("/api/backup", admin, (req, res) => {
     fs.rm(tmp, { force: true }, () => {});
     if (error && !res.headersSent) res.status(500).json({ error: "The backup could not be sent." });
   });
+});
+
+// --- the name in the header (administrators) ------------------------------------------------------
+
+app.get("/api/branding", admin, (req, res) => {
+  res.json({ ...branding(), defaultName: DEFAULT_APP_NAME });
+});
+
+app.put("/api/branding", admin, (req, res) => {
+  const name = String(req.body?.name ?? "").replace(/\s+/g, " ").trim();
+  const subtitle = String(req.body?.subtitle ?? "").replace(/\s+/g, " ").trim();
+  if (name.length > 60) throw fail(400, "Keep the name to 60 characters.");
+  if (subtitle.length > 80) throw fail(400, "Keep the line under it to 80 characters.");
+  // Empty: back to the default.
+  db.setSetting("branding.name", name && name !== DEFAULT_APP_NAME ? name : null);
+  db.setSetting("branding.subtitle", subtitle || null);
+  auditFrom(req, "branding.update", branding().name, subtitle ? `subtitle "${subtitle}"` : "no subtitle");
+  res.json({ ok: true, ...branding() });
 });
 
 // --- Microsoft Entra ID and the audit log (administrators) -------------------------------------------

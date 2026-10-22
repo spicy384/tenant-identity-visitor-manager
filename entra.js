@@ -51,19 +51,18 @@ function fromB64url(s) {
 const squash = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /**
- * Maps app-role claim values to one of `appRoles` (this app's account roles, highest
- * first): a claim matches a role by its id or its name, ignoring case, spaces and
- * punctuation, so "Admin", "FrontDesk" and "front-desk" all work. The highest wins;
- * null when none match.
+ * Maps app-role claim values to `appRoles` (this app's account roles, highest first): a
+ * claim matches a role by its id or its name, ignoring case, spaces and punctuation, so
+ * "Admin", "FrontDesk" and "front-desk" all work. Every role that matches, highest first.
  */
-function roleFromClaims(claims, appRoles = [{ id: "admin", name: "Administrator" }]) {
-  if (!Array.isArray(claims)) return null;
+function rolesFromClaims(claims, appRoles = [{ id: "admin", name: "Administrator" }]) {
+  if (!Array.isArray(claims)) return [];
   const wanted = new Set(claims.map(squash));
-  for (const role of appRoles) {
-    if (wanted.has(squash(role.id)) || wanted.has(squash(role.name))) return role.id;
-  }
-  return null;
+  return appRoles.filter((role) => wanted.has(squash(role.id)) || wanted.has(squash(role.name))).map((role) => role.id);
 }
+
+/** The highest role the claims match, or null. */
+const roleFromClaims = (claims, appRoles) => rolesFromClaims(claims, appRoles)[0] || null;
 
 /**
  * store: { read(name, fallback), write(name, value) } over the database's documents.
@@ -458,7 +457,8 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
       username: String(claims.preferred_username || claims.email || claims.upn || "").toLowerCase(),
       name: claims.name || null,
       email: claims.email || (String(claims.preferred_username || "").includes("@") ? claims.preferred_username : null),
-      role: roleFromClaims(claims.roles, roles())
+      role: roleFromClaims(claims.roles, roles()),
+      roles: rolesFromClaims(claims.roles, roles())
     };
   }
 
@@ -469,4 +469,4 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
   };
 }
 
-module.exports = { createEntra, roleFromClaims, GUID_RE };
+module.exports = { createEntra, roleFromClaims, rolesFromClaims, GUID_RE };

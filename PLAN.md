@@ -482,6 +482,33 @@ dropped: it has an open high-severity advisory with no fix. Tested against a fak
 that checks assertions as Entra does, with PFX fixtures from OpenSSL (modern, 3DES, RC2) and
 Windows (test/fixtures/entra).
 
+## Several roles on one account (2026-10-22)
+
+Asked for by the user. Accounts keep user.role (the highest of their roles, so older code and
+backups still read) and gain user.roles. access.contextFor() takes every role: ctx.roles; each
+area is the highest any role has (badges' manage counts above edit); clearances if any role sees
+them; each field the highest level levelFor() gives any role, so each role's own caps (area,
+clearances) apply within it before they are combined; isSecurity and isAdmin if any role is.
+Administrator is never combined (ticking it stands alone). Accounts are counted under every role
+they have; deleting a role is refused while it is someone's only role and otherwise taken from
+the accounts that have it. Entra: every matching app role is given (rolesFromClaims). The
+dashboard starts with each role's modules in turn. Settings > Users ticks roles. An account
+given a role that doesn't exist (POST /api/users) is now refused, not made a Viewer.
+
+## The app's name, and managers adding custom fields (2026-10-22)
+
+Asked for by the user: setting the text at the top left, and letting managers create custom
+fields. Decided with the user: a name and a line under it (the chosen site still shows there
+when one is chosen); a per-role "Manages custom fields" switch, on for Manager; such roles add
+and change fields, but don't delete them or set field access. Built: settings branding.name and
+branding.subtitle (GET/PUT /api/branding, administrators), sent with /api/auth/me (so the
+sign-in page has it) and /api/config; Settings > General. roles.fields (seeded once for
+Manager); access.fieldEntitiesFor(): each role with the switch, for the records that role
+itself can change (badges at manage); /api/fields GET/POST/PUT for those, a field for one
+record only for a record at the caller's sites; DELETE and /api/field-access stay with
+administrators. Such roles see Settings with the Fields tab only, and "Add a field to this
+company/person".
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

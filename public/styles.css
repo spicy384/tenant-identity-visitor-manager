@@ -707,3 +707,8 @@ polyline.plan-draft { fill: none; }
 .occupancy-bar { height: 8px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
 .occupancy-bar span { display: block; height: 100%; background: var(--office-occupied); }
 .thumbprint { word-break: break-all; font-size: 0.78rem; }
+.role-ticks { display: grid; gap: 6px; margin: 6px 0; }
+.role-ticks .check-row { flex-direction: row; flex-wrap: nowrap; align-items: flex-start; gap: 10px; font-weight: 400; }
+.role-ticks .check-row input { flex: none; margin-top: 2px; }
+.role-ticks .check-row > span { flex: 1; min-width: 0; }
+.role-list { text-align: left; }

@@ -70,10 +70,16 @@ async function reloadConfig() {
 }
 
 async function renderSettings() {
-  for (const b of $("settings-tabs").querySelectorAll("button[data-tab]")) b.classList.toggle("is-active", b.dataset.tab === settingsTab);
+  // Roles that manage custom fields, but aren't administrators, have the Fields page only.
+  if (!isAdmin()) settingsTab = "fields";
+  for (const b of $("settings-tabs").querySelectorAll("button[data-tab]")) {
+    b.classList.toggle("is-active", b.dataset.tab === settingsTab);
+    b.hidden = !isAdmin() && b.dataset.tab !== "fields";
+  }
+  for (const g of $("settings-tabs").querySelectorAll(".settings-group")) g.hidden = ![...g.querySelectorAll("button[data-tab]")].some((b) => !b.hidden);
   const body = clear($("settings-body"));
   try {
-    const render = { sites: settingsSites, fields: settingsFields, access: settingsAccess, visits: settingsVisits, kiosks: settingsKiosks, badges: settingsBadges, api: settingsApiClients, roles: settingsRoles, users: settingsUsers, entra: settingsEntra, data: settingsData, audit: settingsAudit }[settingsTab] || settingsSites;
+    const render = { general: settingsGeneral, sites: settingsSites, fields: settingsFields, access: settingsAccess, visits: settingsVisits, kiosks: settingsKiosks, badges: settingsBadges, api: settingsApiClients, roles: settingsRoles, users: settingsUsers, entra: settingsEntra, data: settingsData, audit: settingsAudit }[settingsTab] || settingsSites;
     await render(body);
   } catch (error) {
     body.append(h("p", { class: "message error", text: error.message }));
@@ -85,6 +91,26 @@ $("settings-tabs").addEventListener("click", (e) => {
   if (!b) return;
   location.hash = `#settings/${b.dataset.tab}`;
 });
+
+// --- general: the name in the header ----------------------------------------------------------
+
+async function settingsGeneral(body) {
+  const current = await api("/api/branding");
+  const { form } = settingsForm({
+    title: "Name",
+    intro: "What the header (top left), the sign-in page and the browser's tab call this app.",
+    fields: [
+      { name: "name", label: "Name", value: current.name === current.defaultName ? "" : current.name, placeholder: current.defaultName, hint: `Up to 60 characters. Empty for "${current.defaultName}".` },
+      { name: "subtitle", label: "Line under the name", value: current.subtitle, placeholder: "Tenant directory", hint: "Shown when no single site is chosen; with a site chosen, the line shows that site. Up to 80 characters; empty for the only site's name, or \"Tenant directory\"." }
+    ],
+    onSave: async (v) => {
+      await api("/api/branding", { method: "PUT", body: v });
+      await reloadConfig();
+      return "Saved.";
+    }
+  });
+  body.append(form);
+}
 
 // --- sites ------------------------------------------------------------------------------
 
@@ -205,11 +231,12 @@ const ENTITY_ONE = { company: "company", person: "person", visitor: "visitor", b
 const ENTITY_EVERY = { company: "Every company", person: "Everyone", visitor: "Every visitor", badge: "Every badge" };
 
 async function settingsFields(body) {
-  const { fields, types, visibility } = await api("/api/fields");
+  const { fields, types, visibility, entities, canDelete } = await api("/api/fields");
   const typeLabel = Object.fromEntries(types.map((t) => [t.value, t.label]));
   body.append(h("div", { class: "panel" },
-    h("p", { class: "muted", text: "Custom fields add to the built-in ones. A field for every record can be required and is searched and exported; a field added from a single record shows on that record only, until you make it a field for every record. Set who sees each field under Field access." })));
-  for (const entity of ["company", "person", "visitor", "badge"]) {
+    h("p", { class: "muted", text: `Custom fields add to the built-in ones. A field for every record can be required and is searched and exported; a field added from a single record shows on that record only, until you make it a field for every record. ${isAdmin() ? "Set who sees each field under Field access." : "Who sees each field is set by an administrator under Field access; deleting a field is up to an administrator too."}` })));
+  // Only the kinds of record this account manages fields for (administrators: all).
+  for (const entity of ["company", "person", "visitor", "badge"].filter((e) => entities.includes(e))) {
     const list = fields[entity];
     body.append(h("div", { class: "panel" },
       h("div", { class: "panel-head" }, h("h3", { text: ENTITY_TITLES[entity] }), h("button", { type: "button", class: "primary small", text: "Add field", onclick: () => editField(entity, null, types, visibility) })),
@@ -224,7 +251,7 @@ async function settingsFields(body) {
             h("td", {}, h("div", { class: "btn-row" },
               f.recordId !== null ? h("button", { type: "button", class: "link-btn", text: "Use for every record", onclick: () => promoteField(f) }) : null,
               h("button", { type: "button", class: "link-btn", text: "Edit", onclick: () => editField(entity, f, types, visibility) }),
-              h("button", { type: "button", class: "link-btn danger-text", text: "Delete", onclick: () => deleteField(f) }))))))))
+              canDelete ? h("button", { type: "button", class: "link-btn danger-text", text: "Delete", onclick: () => deleteField(f) }) : null)))))))
         : h("p", { class: "muted", text: "No custom fields yet." })));
   }
 }
@@ -286,7 +313,7 @@ async function settingsRoles(body) {
     h("div", { class: "panel-head" }, h("h3", { text: "Roles" }), h("button", { type: "button", class: "primary small", text: "Add role", onclick: () => editRole(null, staff) })),
     h("p", { class: "muted", text: "A role sets how far an account reaches: whether it can see or change the directory (companies and people), visitors (visitors, visits, checking in and out), badges, and facilities (floors, offices and rates). Which fields each role sees is set under Field access; clearance details only ever reach roles that see clearance levels, and the rest see badge images instead. Administrators can do everything. The kiosk only ever shows names; Equipment Checkout's fields are set under Field access." }),
     h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-      h("thead", {}, h("tr", {}, ["Role", "For", "Directory", "Visitors", "Badges", "Facilities", "Clearance levels", "Accounts", ""].map((t) => h("th", { text: t })))),
+      h("thead", {}, h("tr", {}, ["Role", "For", "Directory", "Visitors", "Badges", "Facilities", "Clearance levels", "Custom fields", "Accounts", ""].map((t) => h("th", { text: t })))),
       h("tbody", {}, roles.map((r) => h("tr", {},
         h("td", {}, h("strong", { text: r.name }), r.builtIn ? h("span", { class: "badge muted", text: "Built in" }) : null),
         h("td", { class: "small-text", text: r.kind === "api" && r.builtIn ? "Template for new API clients" : KIND_LABELS[r.kind] }),
@@ -295,6 +322,7 @@ async function settingsRoles(body) {
         h("td", { class: "small-text", text: r.kind === "user" ? BADGE_LABELS[r.badges] : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.facilities] : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? (r.clearances ? "Sees them" : "Badge images") : "—" }),
+        h("td", { class: "small-text", text: r.kind === "user" ? (r.id === "admin" ? "Adds, changes, deletes" : r.fields ? "Adds and changes" : "—") : "—" }),
         h("td", { text: r.kind === "user" ? String(r.accounts) : "—" }),
         h("td", {}, r.id === "admin" || r.kind !== "user" ? (r.kind === "api" && !r.builtIn ? h("a", { href: "#settings/api", class: "small-text", text: "Set under API clients" }) : null) : h("div", { class: "btn-row" },
           h("button", { type: "button", class: "link-btn", text: "Edit", onclick: () => editRole(r, staff) }),
@@ -311,13 +339,15 @@ async function editRole(role, staff) {
       { name: "visitors", label: "Visitors and visits", type: "select", value: role?.visitors || "none", options: levels, half: true },
       { name: "badges", label: "Badges", type: "select", value: role?.badges || "none", options: Object.entries(BADGE_LABELS).map(([value, label]) => ({ value, label })), half: true, hint: "Read to look; issue and return to give badges out and take them back; manage also adds, changes and removes badges (Security)." },
       { name: "facilities", label: "Facilities", type: "select", value: role?.facilities || "none", options: levels, half: true, hint: "Floor plans, offices, who has them and what they cost. Read and change also draws offices, assigns them and sets rates." },
+      { name: "fields", label: "Manages custom fields", type: "checkbox", value: Boolean(role?.fields),
+        hint: "Adds custom fields, and changes their names, choices and whether they're required, for the records this role can change (Settings > Fields). Deleting a field and Field access stay with administrators." },
       { name: "clearances", label: "Sees clearance levels", type: "checkbox", value: Boolean(role?.clearances), disabled: role?.id === "security",
         hint: role?.id === "security" ? "Security validates clearances, so it always sees them." : "Level names on people, visitors and badges. Without it the role sees each badge's image instead, and clearance details stay hidden whatever the field access grid says." },
       ...(role ? [] : [{ name: "copyFrom", label: "Start its field access from", type: "select", value: "viewer", options: staff.map((r) => ({ value: r.id, label: r.name })), hint: "You can change any cell afterwards under Field access." }])
     ],
     submitLabel: role ? "Save" : "Add role",
     onSubmit: async (v) => (role
-      ? await api(`/api/roles/${role.id}`, { method: "PUT", body: role.builtIn ? { directory: v.directory, visitors: v.visitors, badges: v.badges, facilities: v.facilities, ...(role.id === "security" ? {} : { clearances: v.clearances }) } : v })
+      ? await api(`/api/roles/${role.id}`, { method: "PUT", body: role.builtIn ? { directory: v.directory, visitors: v.visitors, badges: v.badges, facilities: v.facilities, fields: v.fields, ...(role.id === "security" ? {} : { clearances: v.clearances }) } : v })
       : await api("/api/roles", { method: "POST", body: v })).role
   });
   if (saved) {
@@ -346,22 +376,14 @@ async function settingsUsers(body) {
     h("div", { class: "panel-head" }, h("h3", { text: "Users" }), h("div", { class: "btn-row" },
       h("button", { type: "button", class: "secondary small", text: "Add Microsoft user", onclick: () => addUser("entra", staffRoles) }),
       h("button", { type: "button", class: "primary small", text: "Add local user", onclick: () => addUser("local", staffRoles) }))),
-    h("p", { class: "muted", text: multiSite() ? "Each account has a role (see Roles) and sees every site unless limited to some. A limited account sees only the companies at its sites, and their people who work there." : "Each account has a role; see Roles for what each can do." }),
+    h("p", { class: "muted", text: `Each account has one or more roles (see Roles); with several, it can do whatever any of them can.${multiSite() ? " It sees every site unless limited to some: a limited account sees only the companies at its sites, and their people who work there." : ""}` }),
     h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-      h("thead", {}, h("tr", {}, ["User", "Sign-in", "Role", ...(multiSite() ? ["Sites"] : []), "Last sign-in", ""].map((t) => h("th", { text: t })))),
+      h("thead", {}, h("tr", {}, ["User", "Sign-in", "Roles", ...(multiSite() ? ["Sites"] : []), "Last sign-in", ""].map((t) => h("th", { text: t })))),
       h("tbody", {}, users.map((u) => {
-        const role = h("select", { "aria-label": `Role of ${u.username}`, disabled: u.id === state.me.id }, staffRoles.map((r) => h("option", { value: r.id, text: r.name })));
-        role.value = u.role;
-        role.addEventListener("change", async () => {
-          try {
-            await api(`/api/users/${u.id}/role`, { method: "POST", body: { role: role.value } });
-            toast(`${u.username} is now ${role.selectedOptions[0].text}.`);
-            renderSettings();
-          } catch (error) {
-            role.value = u.role;
-            toast(error.message, "error");
-          }
-        });
+        const names = u.roles.map((id) => staffRoles.find((r) => r.id === id)?.name || id);
+        const role = u.id === state.me.id
+          ? h("span", { class: "small-text", text: names.join(", "), title: "You can't change your own roles" })
+          : h("button", { type: "button", class: "link-btn role-list", text: names.join(", "), title: `Change the roles of ${u.username}`, onclick: () => editUserRoles(u, staffRoles) });
         const actions = h("div", { class: "btn-row" });
         if (u.provider === "local" && u.mfaEnrolled) actions.append(h("button", { type: "button", class: "link-btn", text: "Reset 2FA", onclick: async () => { if (await confirmDialog(`Clear two-factor sign-in for ${u.username}? They will be signed out.`)) { await api(`/api/users/${u.id}/reset-mfa`, { method: "POST", body: {} }); renderSettings(); } } }));
         if (u.provider === "local") actions.append(h("button", { type: "button", class: "link-btn", text: "Set password", onclick: () => formDialog({ title: `New password for ${u.username}`, fields: [{ name: "password", label: "New password (12 characters or more)", type: "password", required: true, autocomplete: "new-password" }], onSubmit: async (v) => { await api(`/api/users/${u.id}/password`, { method: "POST", body: v }); toast("Password set."); return true; } }) }));
@@ -370,7 +392,7 @@ async function settingsUsers(body) {
           h("td", {}, h("strong", { text: u.displayName || u.username }), u.displayName ? h("div", { class: "muted small-text", text: u.username }) : null, u.id === state.me.id ? h("span", { class: "badge", text: "You" }) : null),
           h("td", { class: "small-text" }, u.provider === "entra" ? (u.entraLinked ? "Microsoft" : "Microsoft (not signed in yet)") : ["Password", u.mfaEnrolled ? "+ code" : null, u.passkeys ? `+ ${u.passkeys} passkey${u.passkeys === 1 ? "" : "s"}` : null].filter(Boolean).join(" ")),
           h("td", {}, role),
-          multiSite() ? h("td", { class: "small-text" }, u.role === "admin" ? "Every site" : h("button", { type: "button", class: "link-btn", text: u.sites ? u.sites.map(siteName).join(", ") : "Every site", onclick: () => editUserSites(u) })) : null,
+          multiSite() ? h("td", { class: "small-text" }, u.roles.includes("admin") ? "Every site" : h("button", { type: "button", class: "link-btn", text: u.sites ? u.sites.map(siteName).join(", ") : "Every site", onclick: () => editUserSites(u) })) : null,
           h("td", { class: "small-text", text: u.lastLoginAt ? fmtDateTime(u.lastLoginAt) : "Never" }),
           h("td", {}, actions));
       })))));
@@ -406,9 +428,53 @@ async function editUserSites(user) {
   if (saved) renderSettings();
 }
 
+/**
+ * Ticks for an account's roles: { node, value() }. Administrator can do everything, so ticking
+ * it clears and disables the others.
+ */
+function rolePicker(staffRoles, current = ["viewer"]) {
+  const ticks = staffRoles.map((r) => {
+    const tick = h("input", { type: "checkbox", checked: current.includes(r.id) });
+    return { role: r, tick };
+  });
+  const admin = ticks.find((t) => t.role.id === "admin");
+  const sync = () => {
+    for (const t of ticks) if (t !== admin) t.tick.disabled = Boolean(admin?.tick.checked);
+  };
+  admin?.tick.addEventListener("change", sync);
+  sync();
+  const describe = (r) => [`directory ${AREA_LABELS[r.directory].toLowerCase()}`, `visitors ${AREA_LABELS[r.visitors].toLowerCase()}`, `badges ${BADGE_LABELS[r.badges].toLowerCase()}`, `facilities ${AREA_LABELS[r.facilities].toLowerCase()}`].join(", ");
+  return {
+    node: h("div", { class: "full-row" },
+      h("span", { class: "label", text: "Roles" }),
+      h("div", { class: "role-ticks" }, ticks.map((t) => h("label", { class: "check-row" }, t.tick,
+        h("span", {}, h("strong", { text: t.role.name }), h("span", { class: "muted small-text", text: t.role.id === "admin" ? " everything" : ` ${describe(t.role)}` }))))),
+      h("span", { class: "hint", text: "With several roles the account can do whatever any of them can, and sees any field one of them sees." })),
+    value: () => (admin?.tick.checked ? ["admin"] : ticks.filter((t) => t.tick.checked).map((t) => t.role.id))
+  };
+}
+
+async function editUserRoles(user, staffRoles) {
+  const picker = rolePicker(staffRoles, user.roles);
+  const saved = await formDialog({
+    title: `Roles of ${user.username}`,
+    fields: [{ node: picker.node }],
+    onSubmit: async () => {
+      const roles = picker.value();
+      if (!roles.length) throw new Error("Choose at least one role.");
+      return (await api(`/api/users/${user.id}/role`, { method: "POST", body: { roles } })).user;
+    }
+  });
+  if (saved) {
+    toast(`${saved.username}: ${saved.roleName}.`);
+    renderSettings();
+  }
+}
+
 async function addUser(provider, staffRoles) {
   const picker = multiSite() ? siteLimitPicker(null) : null;
-  const roleField = { name: "role", label: "Role", type: "select", value: "viewer", options: staffRoles.map((r) => ({ value: r.id, label: r.name })) };
+  const roles = rolePicker(staffRoles);
+  const roleField = { node: roles.node };
   const created = await formDialog({
     title: provider === "entra" ? "Add Microsoft user" : "Add local user",
     intro: provider === "entra" ? h("p", { class: "muted", text: "They sign in with \"Sign in with Microsoft\"; the account links to them the first time they do." }) : null,
@@ -421,7 +487,10 @@ async function addUser(provider, staffRoles) {
       ...(picker ? [{ node: picker.node }] : [])
     ],
     submitLabel: "Add user",
-    onSubmit: async (v) => (await api("/api/users", { method: "POST", body: { ...v, provider, sites: picker ? picker.value() : null } })).user
+    onSubmit: async (v) => {
+      if (!roles.value().length) throw new Error("Choose at least one role.");
+      return (await api("/api/users", { method: "POST", body: { ...v, roles: roles.value(), provider, sites: picker ? picker.value() : null } })).user;
+    }
   });
   if (created) {
     toast(`Added ${created.username}.`);
@@ -439,7 +508,7 @@ async function settingsEntra(body) {
       h("li", {}, "In the Entra admin center: App registrations > New registration. Supported account types: this organisational directory only."),
       h("li", {}, "Redirect URI: platform Web, ", h("code", { class: "copy", text: redirectUri }), appUrlSet ? null : h("span", { class: "muted", text: " (taken from the address you are using now; set APP_URL to fix it)" })),
       h("li", {}, "Certificates & secrets: either Certificates > Upload certificate, with the .cer file from Certificates below (recommended: nothing secret leaves this server), or Client secrets > New client secret, copying the value (not the ID) into the form below."),
-      h("li", {}, `Optional: App roles whose value is a role's name without spaces (${roles.map((r) => r.name.replace(/\s+/g, "")).join(", ")}), assigned to users or groups under Enterprise applications. A role in the sign-in overrides the role stored here.`),
+      h("li", {}, `Optional: App roles whose value is a role's name without spaces (${roles.map((r) => r.name.replace(/\s+/g, "")).join(", ")}), assigned to users or groups under Enterprise applications. Roles in the sign-in (every one that matches) replace the roles stored here.`),
       h("li", {}, "Optional: Enterprise applications > this app > Properties > Assignment required = Yes, so only assigned people can sign in at all.")));
   const { form } = settingsForm({
     title: "Microsoft Entra ID sign-in",

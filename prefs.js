@@ -38,7 +38,8 @@ function createPrefs({ db, access }) {
   };
 
   const available = (ctx) => Object.keys(MODULES).filter((id) => MODULES[id](ctx));
-  const defaults = (ctx) => (DEFAULTS[ctx.role?.id] || DEFAULTS.other).filter((id) => MODULES[id](ctx));
+  // With several roles, each role's starting modules in turn (highest role first), without repeats.
+  const defaults = (ctx) => [...new Set((ctx.roles?.length ? ctx.roles : [ctx.role]).flatMap((r) => DEFAULTS[r?.id] || DEFAULTS.other))].filter((id) => MODULES[id](ctx));
   const key = (user) => `prefs.${user.id}`;
 
   /** { site, dashboard (the modules they see, in order), available, defaults }. */

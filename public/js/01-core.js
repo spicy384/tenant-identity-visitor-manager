@@ -64,6 +64,20 @@ const canSeeClearances = () => Boolean(state.config?.access?.clearances);
 const canReadFacilities = () => ["read", "edit"].includes(state.config?.access?.facilities);
 /** Draws floors and offices, assigns them and sets rates. */
 const canEditFacilities = () => state.config?.access?.facilities === "edit";
+/** Adds and changes custom fields: for one kind of record, or (no argument) for any. */
+const canManageFields = (entity = null) => {
+  const mine = state.config?.access?.fieldEntities || [];
+  return entity ? mine.includes(entity) : mine.length > 0;
+};
+
+/** The app's name (header, sign-in page, browser tab) as set under Settings > General. */
+function applyBranding(branding) {
+  if (!branding) return;
+  state.branding = branding;
+  document.title = branding.name;
+  if ($("brand-name")) $("brand-name").textContent = branding.name;
+  if ($("auth-sub")) $("auth-sub").textContent = branding.name;
+}
 const multiSite = () => (state.config?.sites || []).length > 1;
 
 // --- API -----------------------------------------------------------------------

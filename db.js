@@ -459,7 +459,9 @@ const ADDED_COLUMNS = [
   ["floors", "plan_width", "INTEGER"],
   ["floors", "plan_height", "INTEGER"],
   ["floors", "scale_feet", "REAL"],
-  ["floors", "scale_line", "TEXT"]
+  ["floors", "scale_line", "TEXT"],
+  // Roles that add and change custom fields (Settings > Roles).
+  ["roles", "fields", "INTEGER NOT NULL DEFAULT 0"]
 ];
 
 function addColumns(db) {
