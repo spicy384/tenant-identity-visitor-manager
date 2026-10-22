@@ -148,6 +148,33 @@ app.use((req, res, next) => {
 });
 // 4 MB: a CSV import of a large directory, or a logo as a data: URL.
 app.use(express.json({ limit: "4mb" }));
+
+// The staff page and the kiosk page, with their scripts and styles addressed by version
+// (/js/01-core.js?v=0.6.2), so neither a browser nor a proxy in between ever hands out one
+// version's scripts with another's server; and the version each was served by, which the page
+// compares with what the API says (X-App-Version) to reload after an upgrade.
+function versionedPage(file) {
+  return fs.readFileSync(file, "utf8")
+    .replace(/(src|href)="(\/(?:kiosk\/)?(?:js\/)?[\w.-]+\.(?:js|css))"/g, (m, attr, url) => `${attr}="${url}?v=${encodeURIComponent(pkg.version)}"`)
+    .replace("<head>", () => `<head>\n  <meta name="app-version" content="${pkg.version.replace(/[^\w.+-]/g, "")}" />`);
+}
+const INDEX_HTML = versionedPage(path.join(__dirname, "public", "index.html"));
+const KIOSK_HTML = versionedPage(path.join(__dirname, "public", "kiosk", "index.html"));
+const sendPage = (html) => (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.send(html);
+};
+app.get(["/", "/index.html"], sendPage(INDEX_HTML));
+for (const a of [app, kioskApp]) a.get(["/kiosk/", "/kiosk/index.html"], sendPage(KIOSK_HTML));
+const sayVersion = (req, res, next) => {
+  res.setHeader("X-App-Version", pkg.version);
+  next();
+};
+app.use("/api", sayVersion);
+app.use("/kiosk/api", sayVersion);
+kioskApp.use("/kiosk/api", sayVersion);
+// Directory pages (the kiosk at /kiosk/) still come from here; the main page from the route above.
 app.use(express.static(path.join(__dirname, "public"), { index: "index.html" }));
 
 // The kiosk port: the kiosk page (at /kiosk/, where its files expect to be), its icon, and

@@ -204,6 +204,17 @@ async function main() {
   r = await admin.put("/api/branding", { name: "", subtitle: "" });
   check("name: empty goes back to the default", r.data.name === "Identity and Visitor Manager" && r.data.subtitle === "");
 
+  // --- the page knows which version served it ---------------------------------------------------
+  const version = require("../package.json").version;
+  const page = await (await fetch(BASE + "/")).text();
+  check("page: scripts and styles addressed by version, and the version named", page.includes(`src="/js/01-core.js?v=${version}"`) && page.includes(`href="/styles.css?v=${version}"`)
+    && page.includes(`<meta name="app-version" content="${version}" />`));
+  check("page: not kept stale", (await fetch(BASE + "/index.html")).headers.get("cache-control") === "no-cache");
+  check("api: says which version answers", (await fetch(BASE + "/api/auth/me")).headers.get("x-app-version") === version);
+  const kioskPage = await (await fetch(BASE + "/kiosk/")).text();
+  check("kiosk: its page too, and its API", kioskPage.includes(`src="/kiosk/kiosk.js?v=${version}"`) && kioskPage.includes(`href="/kiosk/kiosk.css?v=${version}"`)
+    && (await fetch(BASE + "/kiosk/api/config")).headers.get("x-app-version") === version);
+
   server.kill();
   await new Promise((r2) => setTimeout(r2, 300));
   fs.rmSync(dataDir, { recursive: true, force: true });

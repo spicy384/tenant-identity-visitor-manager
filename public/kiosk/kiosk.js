@@ -27,6 +27,11 @@ class KioskError extends Error {
   }
 }
 
+// The version this page was served by. After an upgrade the server answers with another
+// (X-App-Version), and the kiosk reloads the next time it is back at the start, unattended.
+const PAGE_VERSION = document.querySelector('meta[name="app-version"]')?.content || null;
+let updateWaiting = false;
+
 async function api(path, body) {
   let res;
   try {
@@ -38,6 +43,8 @@ async function api(path, body) {
     throw new KioskError("We couldn't reach the server. Please try again in a moment.", 0);
   }
   $("offline").hidden = true;
+  const running = res.headers.get("x-app-version");
+  if (PAGE_VERSION && running && running !== PAGE_VERSION) updateWaiting = true;
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && data.paired === false) {
     showPair();
@@ -143,8 +150,12 @@ async function loadConfig(force = false) {
   document.title = `${site.name}: visitor check-in`;
 }
 
-/** Back to the start, with everything typed forgotten. */
+/** Back to the start, with everything typed forgotten (and, after an upgrade, the new version loaded). */
 function home() {
+  if (updateWaiting) {
+    location.reload();
+    return;
+  }
   k.match = null;
   k.flow = null;
   k.company = null;
@@ -450,3 +461,10 @@ function showReception(title, text) {
     setTimeout(() => location.reload(), 30 * 1000);
   }
 })();
+
+// Every 10 minutes at the start screen, nobody typing: ask the server, so an upgrade is picked up.
+setInterval(() => {
+  if ($("welcome").hidden || $("name-input").value) return;
+  if (updateWaiting) return location.reload();
+  return loadConfig(true).catch(() => {});
+}, 10 * 60 * 1000);

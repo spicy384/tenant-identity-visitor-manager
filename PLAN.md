@@ -532,6 +532,17 @@ classification, rate, unavailable, notes; all or none in one transaction, the er
 room), POST /api/offices/bulk and bulk-delete; tick boxes on the Rooms page and a Select rooms
 mode on the plan.
 
+## Pages that outlive an upgrade (2026-10-22)
+
+Found by the user: after the upgrade to 0.6.1 the Rooms page still ran 0.6.0's script (no tick
+boxes) through Ctrl+F5 and a browser restart, though the server and the published image were
+0.6.1 (checked from the registry): something between the browser and the app kept the old
+/js/22-facilities.js. The staff page and the kiosk page are now served with every script and
+stylesheet addressed by version (?v=0.6.2), Cache-Control: no-cache and a meta app-version;
+every /api and /kiosk/api reply carries X-App-Version. A staff page whose version differs shows
+a bar offering a reload; a kiosk reloads itself the next time it is back at the start (and
+checks every 10 minutes while idle there).
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

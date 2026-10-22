@@ -720,3 +720,4 @@ input[type="color"] { width: 64px; min-height: 36px; padding: 2px; cursor: point
 .plan-shape.is-chosen { stroke: var(--primary); stroke-width: 4; fill: color-mix(in srgb, var(--primary) 35%, transparent); }
 .floor-office-row.is-chosen { background: var(--primary-soft); box-shadow: inset 3px 0 0 var(--primary); }
 #floor-actions { margin-bottom: 12px; }
+.update-bar { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; padding: 8px 16px; background: var(--warn-soft); border-bottom: 1px solid var(--warn); color: var(--text); font-size: 0.9rem; }

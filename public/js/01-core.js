@@ -90,6 +90,22 @@ class ApiError extends Error {
   }
 }
 
+// The version this page was served by; the server says which version it runs on every API reply.
+const PAGE_VERSION = document.querySelector('meta[name="app-version"]')?.content || null;
+
+/**
+ * After an upgrade, a page left open keeps running the old version's scripts. When the server
+ * says it runs another version, a bar offers to reload (once).
+ */
+function noticeVersion(res) {
+  const running = res.headers.get("x-app-version");
+  if (!PAGE_VERSION || !running || running === PAGE_VERSION || $("update-bar")) return;
+  const bar = h("div", { id: "update-bar", class: "update-bar", role: "status" },
+    h("span", { text: `This app was updated to ${running}. Reload to use the new version (anything not yet saved here will be lost).` }),
+    h("button", { type: "button", class: "primary small", text: "Reload", onclick: () => location.reload() }));
+  document.body.prepend(bar);
+}
+
 /** JSON request to the app's API; throws ApiError with the server's message. */
 async function api(url, { method = "GET", body = undefined, raw = false } = {}) {
   const headers = {};
@@ -101,6 +117,7 @@ async function api(url, { method = "GET", body = undefined, raw = false } = {}) 
   } catch {
     throw new ApiError("Could not reach the server. Check the network connection.", 0, null);
   }
+  noticeVersion(res);
   if (raw) {
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
