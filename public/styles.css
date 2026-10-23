@@ -722,3 +722,5 @@ input[type="color"] { width: 64px; min-height: 36px; padding: 2px; cursor: point
 #floor-actions { margin-bottom: 12px; }
 /* After an upgrade (01-core.js): a strip floating at the bottom left, clear of the sticky header and of toasts (bottom centre). */
 .update-bar { position: fixed; left: calc(16px + env(safe-area-inset-left)); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 60; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; width: max-content; max-width: calc(100vw - 32px); padding: 10px 16px; background: var(--warn-soft); border: 1px solid var(--warn); border-radius: var(--radius); box-shadow: var(--shadow-lg); color: var(--text); font-size: 0.9rem; }
+.import-retry { margin-top: 10px; }
+.skipped-rows { max-height: 50vh; overflow-y: auto; }

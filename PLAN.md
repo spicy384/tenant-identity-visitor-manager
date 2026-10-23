@@ -543,6 +543,17 @@ every /api and /kiosk/api reply carries X-App-Version. A staff page whose versio
 a bar offering a reload; a kiosk reloads itself the next time it is back at the start (and
 checks every 10 minutes while idle there).
 
+## Importing past the rows with problems (2026-10-23)
+
+Asked for by the user: one empty field blocked a whole import; they wanted the option to skip
+the rows that would. importRows() keeps all-or-nothing by default but now runs each row in a
+savepoint of its own (a nested transaction), so with skipProblems the failing rows are left
+out cleanly and the rest kept; it returns skipped rows (where, reason, the row's values; at most
+5,000 sent back, all counted) and passes over rows with nothing in them. /api/import/:token/run
+and the CSV import routes take skipProblems; the audit entry counts the skipped. The wizard has
+a Skip rows with problems tick box, an Import the rest button on an all-or-nothing failure, and
+a dialog of skipped rows with a CSV download (app column names plus a problem column).
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

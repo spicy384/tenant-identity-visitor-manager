@@ -710,16 +710,42 @@ function rowPatch(row, columns, writable) {
  * Runs `fn(row)` for every row in one transaction; any failure undoes the lot. `where(i)`
  * names a row in the problems listed: a CSV line by default (the header is line 1).
  */
-function importRows(rows, fn, where = (i) => `Line ${i + 2}`, verb = "imported") {
+// At most this many skipped rows are sent back with their values (all are counted).
+const MAX_SKIPPED_SHOWN = 5000;
+
+/** A row of an import with nothing in any of its cells (the tail of many exports). */
+const isBlankRow = (row) => Boolean(row) && typeof row === "object" && Object.values(row).every((v) => v === undefined || v === null || String(v).trim() === "");
+
+/**
+ * Applies fn to each row in one transaction, each row in a savepoint of its own so a row that
+ * fails part-way leaves nothing behind. By default all or nothing: if any row has a problem,
+ * nothing is kept and the problems are listed. With skipProblems, the rows with problems are
+ * left out and the rest kept: { added, updated, blank, skipped: [{ where, reason, row }],
+ * skippedCount }. Rows with nothing in them are passed over either way (counted as blank).
+ */
+function importRows(rows, fn, where = (i) => `Line ${i + 2}`, verb = "imported", { skipProblems = false } = {}) {
   const errors = [];
-  const counts = { added: 0, updated: 0 };
+  const counts = { added: 0, updated: 0, blank: 0 };
+  const skipped = [];
+  let skippedCount = 0;
   try {
     db.transaction(() => {
       rows.forEach((row, i) => {
+        if (isBlankRow(row)) {
+          counts.blank += 1;
+          return;
+        }
         try {
-          counts[fn(row)] += 1;
+          let outcome;
+          db.transaction(() => { outcome = fn(row); });
+          counts[outcome] += 1;
         } catch (error) {
-          errors.push(`${where(i)}: ${error.message}`);
+          if (skipProblems) {
+            skippedCount += 1;
+            if (skipped.length < MAX_SKIPPED_SHOWN) skipped.push({ where: where(i), reason: error.message, row });
+          } else {
+            errors.push(`${where(i)}: ${error.message}`);
+          }
         }
       });
       if (errors.length) throw fail(400, "rollback");
@@ -729,8 +755,11 @@ function importRows(rows, fn, where = (i) => `Line ${i + 2}`, verb = "imported")
     const shown = errors.slice(0, 10).join("\n");
     throw fail(400, `Nothing was ${verb}. ${errors.length} ${verb === "imported" ? "row" : "of them"}${errors.length === 1 ? (verb === "imported" ? " has" : " has") : (verb === "imported" ? "s have" : " have")} a problem:\n${shown}${errors.length > 10 ? `\n...and ${errors.length - 10} more.` : ""}`);
   }
-  return counts;
+  return { ...counts, skipped, skippedCount };
 }
+
+/** What an import did, for the audit log. */
+const importSummary = (counts) => `${counts.added} added, ${counts.updated} updated${counts.skippedCount ? `, ${counts.skippedCount} skipped` : ""}`;
 
 function checkImport(rows, required) {
   if (!rows.length) throw fail(400, "The file has no rows under its header.");
@@ -761,7 +790,7 @@ function defaultSitesFor(ctx) {
  * Imports companies from rows keyed by column (name, sites or site and suite, phone, ...,
  * custom field keys), from a CSV file or a matched table. `from` goes in the audit log.
  */
-function importCompanies(req, rows, { where, from = "CSV" } = {}) {
+function importCompanies(req, rows, { where, from = "CSV", skipProblems = false } = {}) {
   checkImport(rows, ["name"]);
   const writable = writableColumns(req.ctx, "company");
   const counts = importRows(rows, (row) => {
@@ -778,18 +807,18 @@ function importCompanies(req, rows, { where, from = "CSV" } = {}) {
     if (!patch.sites) patch.sites = defaultSitesFor(req.ctx);
     directory.createCompany(patch, writePlan(req.ctx, "company", patch));
     return "added";
-  }, where);
+  }, where, "imported", { skipProblems });
   const ignored = ignoredColumns(rows, COMPANY_COLUMNS, writable).filter((c) => c !== "suite");
-  auditFrom(req, "import.companies", `${counts.added} added, ${counts.updated} updated`, `from ${from}`);
+  auditFrom(req, "import.companies", importSummary(counts), `from ${from}`);
   return { ...counts, ignored };
 }
 
 app.post("/api/companies/import", editDir, (req, res) => {
-  res.json({ ok: true, ...importCompanies(req, parseCsvObjects(req.body?.csv)) });
+  res.json({ ok: true, ...importCompanies(req, parseCsvObjects(req.body?.csv), { skipProblems: req.body?.skipProblems === true }) });
 });
 
 /** Imports people from rows keyed by column (first_name, last_name, company, ..., custom field keys). */
-function importPeople(req, rows, { createCompanies = false, where, from = "CSV" } = {}) {
+function importPeople(req, rows, { createCompanies = false, where, from = "CSV", skipProblems = false } = {}) {
   checkImport(rows, ["first_name", "last_name", "company"]);
   const writable = writableColumns(req.ctx, "person");
   const counts = importRows(rows, (row) => {
@@ -811,14 +840,14 @@ function importPeople(req, rows, { createCompanies = false, where, from = "CSV" 
     }
     directory.createPerson(patch, writePlan(req.ctx, "person", patch));
     return "added";
-  }, where);
+  }, where, "imported", { skipProblems });
   const ignored = ignoredColumns(rows, PERSON_COLUMNS, writable);
-  auditFrom(req, "import.people", `${counts.added} added, ${counts.updated} updated`, `from ${from}`);
+  auditFrom(req, "import.people", importSummary(counts), `from ${from}`);
   return { ...counts, ignored };
 }
 
 app.post("/api/people/import", editDir, (req, res) => {
-  res.json({ ok: true, ...importPeople(req, parseCsvObjects(req.body?.csv), { createCompanies: Boolean(req.body?.createCompanies) }) });
+  res.json({ ok: true, ...importPeople(req, parseCsvObjects(req.body?.csv), { createCompanies: Boolean(req.body?.createCompanies), skipProblems: req.body?.skipProblems === true }) });
 });
 
 /** Someone in a company, by the name they go by ("Bobby Host" or "Robert Host"), or null. */
@@ -835,7 +864,7 @@ function personInCompanyByName(companyId, name) {
  * same email, else exactly the same name, is updated. Imported visitors count as checked by
  * staff. Clearances aren't imported: only the Security role sets them, by validating.
  */
-function importVisitors(req, rows, { where, from = "CSV" } = {}) {
+function importVisitors(req, rows, { where, from = "CSV", skipProblems = false } = {}) {
   checkImport(rows, ["first_name", "last_name"]);
   const writable = writableColumns(req.ctx, "visitor");
   const list = access.fieldsFor(req.ctx, "visitor");
@@ -865,9 +894,9 @@ function importVisitors(req, rows, { where, from = "CSV" } = {}) {
     }
     visitors.create({ ...patch, links: link ? [link] : [] }, { ...plan(patch), source: "import" });
     return "added";
-  }, where);
+  }, where, "imported", { skipProblems });
   const ignored = ignoredColumns(rows, VISITOR_COLUMNS, writable).filter((c) => linksWritable ? !["host"].includes(c) : true);
-  auditFrom(req, "import.visitors", `${counts.added} added, ${counts.updated} updated`, `from ${from}`);
+  auditFrom(req, "import.visitors", importSummary(counts), `from ${from}`);
   return { ...counts, ignored };
 }
 
@@ -880,7 +909,7 @@ const BADGE_TYPE_NAMES = { personnel: "personnel", staff: "personnel", building:
  * change its type, classification, level or temporary flag). Level names only for roles that
  * see clearance levels.
  */
-function importBadges(req, rows, { where, from = "CSV" } = {}) {
+function importBadges(req, rows, { where, from = "CSV", skipProblems = false } = {}) {
   checkImport(rows, ["number", "type", "classification"]);
   const seesLevels = access.canSeeClearances(req.ctx);
   if (!seesLevels && rows.some((r) => r.level)) throw fail(403, "This account doesn't see clearance levels, so it can't import them; leave the level out, or ask Security.");
@@ -926,9 +955,9 @@ function importBadges(req, rows, { where, from = "CSV" } = {}) {
     fields.writeValues(made.id, values);
     if (status && status !== "active") badges.update(made.id, { status }, { sites: req.ctx.sites });
     return "added";
-  }, where);
+  }, where, "imported", { skipProblems });
   const ignored = Object.keys(rows[0]).filter((c) => !BADGE_COLUMNS.includes(c) && !customDefs.has(c));
-  auditFrom(req, "import.badges", `${counts.added} added, ${counts.updated} updated`, `from ${from}`);
+  auditFrom(req, "import.badges", importSummary(counts), `from ${from}`);
   return { ...counts, ignored };
 }
 

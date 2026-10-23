@@ -201,6 +201,26 @@ async function main() {
   check("csv: a required field left unmatched is refused", (await manager.post(`/api/import/${r.data.token}/run`, { table: "CSV", target: "people", mapping: { first_name: { column: "a" } } })).status === 400);
   check("cancel: the file can be let go", (await manager.del(`/api/import/${r.data.token}`)).status === 200 && (await manager.get(`/api/import/${r.data.token}/table`)).status === 404);
 
+  // --- skipping rows with problems ---------------------------------------------------------------------
+  const messy = Buffer.from("First,Last,Firm\r\nAnn,Able,Acme Corp\r\n,Blank,Acme Corp\r\nCal,Cole,Nowhere Inc\r\n,,\r\nDee,Dunn,Acme Corp\r\n", "utf8");
+  const messyMap = { first_name: { column: "First" }, last_name: { column: "Last" }, company: { column: "Firm" } };
+  token = (await manager.upload("/api/import/read?name=messy.csv", messy)).data.token;
+  r = await manager.post(`/api/import/${token}/run`, { table: "CSV", target: "people", mapping: messyMap });
+  check("skip: by default one problem stops the lot, naming the rows", r.status === 400 && /^Nothing was imported\. 2 rows have a problem/.test(r.data.error) && /Line 3:/.test(r.data.error) && /Line 4:/.test(r.data.error)
+    && !/Line 5/.test(r.data.error) && (await admin.get("/api/people?q=Able")).data.total === 0, r.data.error);
+  r = await manager.post(`/api/import/${token}/run`, { table: "CSV", target: "people", mapping: messyMap, skipProblems: true });
+  check("skip: the same file again, skipping the rows with problems", r.status === 200 && r.data.added === 2 && r.data.skippedCount === 2, JSON.stringify(r.data));
+  check("skip: each skipped row says where, why, and what it held",
+    r.data.skipped.map((x) => x.where).join() === "Line 3,Line 4" && /first name/i.test(r.data.skipped[0].reason) && /Nowhere Inc/.test(r.data.skipped[1].reason)
+    && r.data.skipped[1].row.first_name === "Cal" && r.data.skipped[1].row.company === "Nowhere Inc", JSON.stringify(r.data.skipped));
+  check("skip: the good rows are in", (await admin.get("/api/people?q=Dunn")).data.total === 1 && (await admin.get("/api/people?q=Able")).data.total === 1);
+  check("skip: and the audit log counts the skipped ones", (await admin.get("/api/audit?action=import.people")).data.entries.some((e) => /2 added, 0 updated, 2 skipped/.test(e.target || "")));
+  // A row that fails part-way leaves nothing behind: here its new company.
+  token = (await manager.upload("/api/import/read?name=half.csv", Buffer.from("First,Last,Firm\nEve,Ever,Acme Corp\n,Nobody,Brand New Co\n"))).data.token;
+  r = await manager.post(`/api/import/${token}/run`, { table: "CSV", target: "people", mapping: { ...messyMap, site: { value: "Harbour Point" } }, createCompanies: true, skipProblems: true });
+  check("skip: a row that fails part-way leaves nothing behind", r.status === 200 && r.data.added === 1 && r.data.skippedCount === 1
+    && !(await admin.get("/api/companies?q=Brand New")).data.companies.length, JSON.stringify(r.data));
+
   // --- never on disk ------------------------------------------------------------------------------------
   const written = [];
   const walk = (dir) => { for (const f of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, f.name); if (f.isDirectory()) walk(p); else written.push(p); } };

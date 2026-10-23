@@ -123,7 +123,7 @@ async function importDialog(kind) {
   let table = null;     // the chosen table: { name, columns, rowCount, sample }
   let mapping = {};
   const message = h("div", { class: "message error pre", hidden: true });
-  const showError = (error) => { message.textContent = error.message || String(error); message.hidden = false; };
+  const showError = (error, extra = null) => { message.replaceChildren(error.message || String(error), extra ? h("div", { class: "btn-row import-retry" }, extra) : ""); message.hidden = false; };
   const clearError = () => { message.hidden = true; };
 
   // --- step 1: the file ----------------------------------------------------------------------
@@ -227,6 +227,7 @@ async function importDialog(kind) {
         h("span", { class: "import-match-source" }, select, fixed));
     });
     const createCompanies = h("input", { type: "checkbox" });
+    const skipProblems = h("input", { type: "checkbox" });
     const tablePick = read.tables.length > 1
       ? h("label", {}, h("span", { text: "Table" }), (() => {
         const s = h("select", { "aria-label": "Table" }, read.tables.map((t) => h("option", { value: t.name, text: `${t.name} (${t.rowCount} row${t.rowCount === 1 ? "" : "s"})` })));
@@ -236,36 +237,42 @@ async function importDialog(kind) {
       })())
       : null;
     const label = `Import ${table.rowCount} ${table.rowCount === 1 ? IMPORT_KINDS[target].one : IMPORT_KINDS[target].many}`;
-    const importBtn = h("button", { type: "button", class: "primary", text: label, onclick: async () => {
+    // skip: import what can be, leaving out (and listing) the rows with problems.
+    const run = async (skip) => {
       clearError();
       const missing = fieldsHere.filter((f) => f.required && !(mapping[f.key]?.column || String(mapping[f.key]?.value || "").trim()));
       if (missing.length) return showError(new Error(`Match ${missing.map((f) => f.label).join(", ")} first.`));
       importBtn.disabled = true;
       importBtn.textContent = "Importing…";
       try {
-        const result = await api(`/api/import/${read.token}/run`, { method: "POST", body: { table: table.name, target, mapping, createCompanies: createCompanies.checked } });
+        const result = await api(`/api/import/${read.token}/run`, { method: "POST", body: { table: table.name, target, mapping, createCompanies: createCompanies.checked, skipProblems: skip } });
         dlg.finish(result);
       } catch (error) {
-        showError(error);
+        // Nothing was imported because of some rows: offer to import the rest without them.
+        const byRows = error.status === 400 && /^Nothing was imported\./.test(error.message);
+        showError(error, byRows ? h("button", { type: "button", class: "secondary small", text: "Import the rest, skipping these rows", onclick: () => { skipProblems.checked = true; run(true); } }) : null);
         importBtn.disabled = false;
         importBtn.textContent = label;
       }
       return null;
-    } });
+    };
+    const importBtn = h("button", { type: "button", class: "primary", text: label, onclick: () => run(skipProblems.checked) });
     body.replaceChildren(
       h("p", { class: "muted", text: `${read.format === "access" ? "Access database" : "CSV file"} ${read.fileName}${read.tables.length > 1 ? `, ${read.tables.length} tables` : ""}. Match each field to a column, or give one value for every row. Matches were suggested from the column names.` }),
-      tablePick,
+      tablePick || "",
       h("div", { class: "import-match" }, rows),
       leftOver,
       h("h4", { text: `Preview: the first ${Math.min(5, table.sample.length)} of ${table.rowCount}` }),
       preview,
-      target === "people" ? h("label", { class: "check-row" }, createCompanies, h("span", { text: "Add companies that don't exist yet" })) : null,
+      // replaceChildren would write out null as text, so "" where there is nothing.
+      target === "people" ? h("label", { class: "check-row" }, createCompanies, h("span", { text: "Add companies that don't exist yet" })) : "",
+      h("label", { class: "check-row" }, skipProblems, h("span", { text: "Skip rows with problems (such as a required field left empty): import the rest, and list the ones skipped" })),
       h("p", { class: "muted small-text", text: `${{
         people: "Someone already in the company with the same email (or, without one, the same name) is updated rather than added twice.",
         companies: "A company with the same name is updated.",
         visitors: "A visitor with the same email (or, without one, the same name) is updated rather than added twice. Imported visitors count as checked by staff. Clearances aren't imported: Security validates them.",
         badges: "A badge with the same number is updated. One that is out can't change its type, classification, level or whether it is temporary."
-      }[target]} If any row has a problem, nothing is imported and the problems are listed.` }),
+      }[target]} Rows with nothing in them are passed over. Otherwise, if any row has a problem, nothing is imported and the problems are listed, unless you skip rows with problems.` }),
       message,
       h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary", text: "Back", onclick: () => { clearError(); stepFile(); } }), importBtn));
     renderPreview();
@@ -282,6 +289,46 @@ async function importDialog(kind) {
   // Whatever happened, the server needn't hold the file any longer.
   if (read && !result) api(`/api/import/${read.token}`, { method: "DELETE" }).catch(() => {});
   if (!result) return false;
-  toast(`${result.added} added, ${result.updated} updated.${result.ignored.length ? ` Skipped: ${result.ignored.join(", ")}.` : ""}`);
+  if (result.skippedCount) await showSkippedRows(kind, result);
+  else toast(`${result.added} added, ${result.updated} updated.${result.ignored.length ? ` Columns left out: ${result.ignored.join(", ")}.` : ""}`);
   return true;
+}
+
+/**
+ * After an import that skipped rows: what was imported, each skipped row with where it was and
+ * why, and the skipped rows as a CSV (with a "problem" column) to fix and import again.
+ */
+async function showSkippedRows(kind, result) {
+  const rows = result.skipped;
+  const columns = [...new Set(rows.flatMap((x) => Object.keys(x.row)))];
+  const download = () => {
+    const cell = (v) => {
+      const s = String(v ?? "");
+      return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [[...columns, "problem"].map(cell).join(","), ...rows.map((x) => [...columns.map((c) => x.row[c]), `${x.where}: ${x.reason}`].map(cell).join(","))];
+    const a = h("a", { href: URL.createObjectURL(new Blob([`\ufeff${lines.join("\r\n")}\r\n`], { type: "text/csv" })), download: `skipped-${IMPORT_KINDS[kind].many.replace(/\s+/g, "-")}.csv` });
+    document.body.append(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  };
+  const summary = `${result.added} added, ${result.updated} updated, ${result.skippedCount} ${result.skippedCount === 1 ? "row" : "rows"} skipped${result.blank ? `, ${result.blank} empty ${result.blank === 1 ? "row" : "rows"} passed over` : ""}.`;
+  await openDialog({
+    title: `Imported ${IMPORT_KINDS[kind].many}, with rows skipped`,
+    wide: true,
+    body: h("div", { class: "stack" },
+      h("p", {}, h("strong", { text: summary }), result.ignored.length ? h("span", { class: "muted", text: ` Columns left out: ${result.ignored.join(", ")}.` }) : null),
+      h("p", { class: "muted small-text", text: "These rows weren't imported. Download them to fix them and import that file; the problem column says what to change." }),
+      h("div", { class: "table-wrap skipped-rows" }, h("table", { class: "table compact" },
+        h("thead", {}, h("tr", {}, ["Row", "Problem", ...columns.slice(0, 4)].map((t) => h("th", { text: t })))),
+        h("tbody", {}, rows.map((x) => h("tr", {},
+          h("td", { class: "nowrap small-text", text: x.where }),
+          h("td", { class: "small-text", text: x.reason }),
+          columns.slice(0, 4).map((c) => h("td", { class: "small-text", text: x.row[c] ?? "" }))))))),
+      rows.length < result.skippedCount ? h("p", { class: "muted small-text", text: `The first ${rows.length} of ${result.skippedCount} are shown and downloaded.` }) : null),
+    actions: [
+      { label: "Download skipped rows (CSV)", kind: "secondary", close: false, onClick: () => { download(); } },
+      { label: "Close", kind: "primary", value: true }
+    ]
+  });
 }

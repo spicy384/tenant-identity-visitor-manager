@@ -534,9 +534,15 @@ level (Security).
    columns, or give one value for every row (handy for the company or site). Matches are
    suggested from the column names: `Surname` for Last name, `Firm` for Company, and so on.
    A preview shows the first rows as they'll be imported, and which columns are left out.
-3. Import. The same rules as before apply: only fields the account can change, someone already
-   on record is updated rather than added twice, and if any row has a problem nothing is
-   imported and the problems are listed by row.
+3. Import. The same rules as before apply: only fields the account can change, and someone
+   already on record is updated rather than added twice. Rows with nothing in them are passed
+   over. By default, if any row has a problem (a required field left empty, a company that
+   doesn't exist, ...) nothing is imported and the problems are listed by row; from there,
+   **Import the rest, skipping these rows** imports the others. Or tick **Skip rows with
+   problems** before importing. Either way you get the skipped rows with the reason for each,
+   and can download them as a CSV with a problem column, to fix and import again. Each row is
+   saved on its own, so one that fails part-way (say after adding its new company) leaves
+   nothing behind.
 
 The file is read on the server and held in its memory only, for 15 minutes or until the
 import is done or cancelled, by the account that sent it; it is never written to disk. Yes/no

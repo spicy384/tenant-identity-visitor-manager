@@ -171,10 +171,12 @@ function createImportRoutes({ access, importCompanies, importPeople, importVisit
     const rows = all.map((r) => Object.fromEntries(sources.map(([key, get]) => [key, get(r)])));
     const from = h.format === "access" ? `Access table "${table.name}"${h.fileName ? ` in ${h.fileName}` : ""}` : `CSV${h.fileName ? ` ${h.fileName}` : ""}`;
     const where = h.format === "access" ? (i) => `Row ${i + 1}` : (i) => `Line ${i + 2}`;
-    const result = target === "companies" ? importCompanies(req, rows, { where, from })
-      : target === "visitors" ? importVisitors(req, rows, { where, from })
-        : target === "badges" ? importBadges(req, rows, { where, from })
-          : importPeople(req, rows, { createCompanies: Boolean(body.createCompanies), where, from });
+    // skipProblems: import the rows that can be, and list the ones left out, rather than none.
+    const skipProblems = body.skipProblems === true;
+    const result = target === "companies" ? importCompanies(req, rows, { where, from, skipProblems })
+      : target === "visitors" ? importVisitors(req, rows, { where, from, skipProblems })
+        : target === "badges" ? importBadges(req, rows, { where, from, skipProblems })
+          : importPeople(req, rows, { createCompanies: Boolean(body.createCompanies), where, from, skipProblems });
     held.delete(req.params.token);
     res.json({ ok: true, ...result });
   });
