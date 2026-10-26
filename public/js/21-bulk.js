@@ -309,7 +309,7 @@ async function bulkBadges(list, patch, done) {
 }
 
 async function deleteBadges(list) {
-  if (!(await confirmDialog(`Delete ${list.length} ${list.length === 1 ? "badge" : "badges"} (${list.map((b) => b.number).slice(0, 12).join(", ")}${list.length > 12 ? ", …" : ""})? A badge that has ever been given out can't be deleted: retire it instead, so its history stays.`, { danger: true, confirmLabel: "Delete" }))) return;
+  if (!(await confirmDialog(`Delete ${list.length} ${list.length === 1 ? "badge" : "badges"} (${list.map((b) => b.label).slice(0, 12).join(", ")}${list.length > 12 ? ", …" : ""})? A badge that has ever been given out can't be deleted: retire it instead, so its history stays.`, { danger: true, confirmLabel: "Delete" }))) return;
   try {
     const r = await api("/api/badges/bulk-delete", { method: "POST", body: { ids: list.map((b) => b.id) } });
     toast(`Deleted ${r.deleted} ${r.deleted === 1 ? "badge" : "badges"}.`);
@@ -345,7 +345,9 @@ async function bulkEditBadges(list) {
   const temporary = h("select", { "aria-label": "Temporary" }, options([["no", "No"], ["yes", "Yes, lent for the day"]]));
   const status = h("select", { "aria-label": "Status" }, options(Object.entries(BADGE_STATUS_LABELS)));
   const notes = h("input", { type: "text", "aria-label": "Notes" });
+  const facilityCode = h("input", { type: "text", "aria-label": "Facility code", inputmode: "numeric", maxlength: "3", placeholder: "2-3 digits, or empty for none" });
   const nodes = [
+    row("facilityCode", "Facility code", facilityCode, () => facilityCode.value.trim(), "(empty takes it away)"),
     row("type", "Move to type", type, () => type.value, "(visitor, tenant or personnel)"),
     row("classificationId", "Classification", classification, () => Number(classification.value)),
     level ? row("clearanceLevelId", "Clearance level", level, () => (level.value ? Number(level.value) : null)) : null,
@@ -362,7 +364,7 @@ async function bulkEditBadges(list) {
   const result = await formDialog({
     title: `Change ${list.length} ${list.length === 1 ? "badge" : "badges"}`,
     wide: true,
-    intro: h("p", { class: "muted", text: `Tick each thing to change; it is set the same on every chosen badge (${list.map((b) => b.number).slice(0, 8).join(", ")}${list.length > 8 ? ", …" : ""}). A badge that is out can't move to another type or change its classification, level or whether it is temporary: take it back first. If any badge can't take the change, none does.${level ? "" : " Clearance levels are changed by roles that see them."}` }),
+    intro: h("p", { class: "muted", text: `Tick each thing to change; it is set the same on every chosen badge (${list.map((b) => b.label).slice(0, 8).join(", ")}${list.length > 8 ? ", …" : ""}). A badge that is out can't move to another type or change its classification, level or whether it is temporary: take it back first. If any badge can't take the change, none does.${level ? "" : " Clearance levels are changed by roles that see them."}` }),
     fields: [{ node: h("div", { class: "full-row bulk-fields" }, nodes) }],
     submitLabel: "Change",
     onSubmit: async () => {

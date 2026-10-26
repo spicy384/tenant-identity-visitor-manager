@@ -905,7 +905,7 @@ function importVisitors(req, rows, { where, from = "CSV", skipProblems = false }
   return { ...counts, ignored };
 }
 
-const BADGE_COLUMNS = ["number", "type", "classification", "level", "sites", "temporary", "status", "notes"];
+const BADGE_COLUMNS = ["number", "facility_code", "type", "classification", "level", "sites", "temporary", "status", "notes"];
 const BADGE_TYPE_NAMES = { personnel: "personnel", staff: "personnel", building: "personnel", tenant: "tenant", visitor: "visitor", guest: "visitor" };
 
 /**
@@ -923,7 +923,7 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
   // Custom badge fields the caller may change, by their key.
   const customDefs = new Map(access.fieldsFor(req.ctx, "badge").filter((f) => !f.builtIn && f.access === "edit" && f.recordId === null).map((f) => [f.apiKey, f]));
   const counts = importRows(rows, (row) => {
-    const input = { number: row.number };
+    const input = { number: row.number, facilityCode: row.facility_code || null };
     const values = new Map();
     for (const [key, def] of customDefs) if (row[key] !== undefined && row[key] !== "") values.set(def.id, normaliseFieldValue(def, row[key]));
     const type = BADGE_TYPE_NAMES[String(row.type || "").trim().toLowerCase()];
@@ -947,9 +947,9 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
       input.status = status;
     }
     if (row.notes) input.notes = row.notes;
-    const existingId = badges.findByNumber(row.number);
+    const existingId = badges.findExact(row.number, row.facility_code || null);
     if (existingId) {
-      if (!badges.get(existingId, { sites: req.ctx.sites })) throw fail(403, `Badge ${row.number} is valid only at sites this account can't see.`);
+      if (!badges.get(existingId, { sites: req.ctx.sites })) throw fail(403, `Badge ${row.facility_code ? `${row.facility_code}-` : ""}${row.number} is valid only at sites this account can't see.`);
       badges.update(existingId, input, { sites: req.ctx.sites });
       fields.writeValues(existingId, values);
       return "updated";
@@ -975,7 +975,7 @@ function fieldOut(d) {
   let recordName = null;
   if (d.recordId !== null) {
     const rec = d.entity === "company" ? directory.getCompany(d.recordId) : d.entity === "visitor" ? visitors.get(d.recordId) : d.entity === "badge" ? badges.get(d.recordId) : directory.getPerson(d.recordId);
-    recordName = rec ? (d.entity === "company" ? rec.name : d.entity === "badge" ? `Badge ${rec.number}` : `${rec.firstName} ${rec.lastName}`) : "(removed)";
+    recordName = rec ? (d.entity === "company" ? rec.name : d.entity === "badge" ? `Badge ${rec.label}` : `${rec.firstName} ${rec.lastName}`) : "(removed)";
   }
   return { ...d, recordName };
 }

@@ -15,6 +15,7 @@ const { matchNames } = require("./names");
 const { likeWord } = require("./directory");
 const { cleanDate, today, statusFor, recheckDays } = require("./clearance");
 const { countryCode } = require("./countries");
+const { badgeLabel } = require("./badges");
 
 // Guests of a tenant, and people who come to do work or maintenance (not tied to a tenant).
 const VISITOR_TYPES = ["Guest", "Service Technician"];
@@ -104,12 +105,14 @@ function createVisitors({ db, fields }) {
     return out;
   }
 
+  const reservedOut = (b) => ({ id: b.id, number: b.number, facilityCode: b.facility_code ?? null, label: badgeLabel(b.facility_code, b.number) });
+
   function records(rows, sites) {
     const ids = rows.map((r) => r.id);
     const links = linksFor(ids, sites);
     const reserved = new Map();
     const badgeIds = rows.map((r) => r.reserved_badge_id).filter(Boolean);
-    if (badgeIds.length) for (const b of raw.prepare(`SELECT id, number FROM badges WHERE id IN (${inList(badgeIds)})`).all(...badgeIds)) reserved.set(b.id, b);
+    if (badgeIds.length) for (const b of raw.prepare(`SELECT id, number, facility_code FROM badges WHERE id IN (${inList(badgeIds)})`).all(...badgeIds)) reserved.set(b.id, b);
     const values = fields.valuesFor("visitor", ids);
     const days = recheckDays(db);
     return rows.map((r) => ({
@@ -119,7 +122,7 @@ function createVisitors({ db, fields }) {
       organisation: r.organisation,
       visitorType: r.visitor_type || "Guest",
       citizenship: r.citizenship ?? null,
-      reservedBadge: r.reserved_badge_id && reserved.has(r.reserved_badge_id) ? { id: r.reserved_badge_id, number: reserved.get(r.reserved_badge_id).number } : null,
+      reservedBadge: r.reserved_badge_id && reserved.has(r.reserved_badge_id) ? reservedOut(reserved.get(r.reserved_badge_id)) : null,
       email: r.email,
       phone: r.phone,
       notes: r.notes,
@@ -319,12 +322,13 @@ function createVisitors({ db, fields }) {
       raw.prepare("UPDATE visitors SET reserved_badge_id = NULL, updated_at = ? WHERE id = ?").run(Date.now(), id);
       return get(id, { sites });
     }
-    const badge = raw.prepare("SELECT id, number, type, status FROM badges WHERE id = ?").get(Number(badgeId));
+    const badge = raw.prepare("SELECT id, number, facility_code, type, status FROM badges WHERE id = ?").get(Number(badgeId));
     if (!badge) throw fail(404, "No such badge.");
-    if (badge.type !== "visitor") throw fail(400, `Badge ${badge.number} isn't a visitor badge.`);
-    if (badge.status !== "active") throw fail(400, `Badge ${badge.number} is ${badge.status}.`);
+    badge.label = badgeLabel(badge.facility_code, badge.number);
+    if (badge.type !== "visitor") throw fail(400, `Badge ${badge.label} isn't a visitor badge.`);
+    if (badge.status !== "active") throw fail(400, `Badge ${badge.label} is ${badge.status}.`);
     const other = raw.prepare("SELECT first_name, last_name FROM visitors WHERE reserved_badge_id = ? AND id <> ?").get(badge.id, id);
-    if (other) throw fail(409, `Badge ${badge.number} is reserved for ${other.first_name} ${other.last_name}.`);
+    if (other) throw fail(409, `Badge ${badge.label} is reserved for ${other.first_name} ${other.last_name}.`);
     raw.prepare("UPDATE visitors SET reserved_badge_id = ?, updated_at = ? WHERE id = ?").run(badge.id, Date.now(), id);
     return get(id, { sites });
   }

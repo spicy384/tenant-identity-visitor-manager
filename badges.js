@@ -28,6 +28,12 @@ function fail(status, message) {
 
 const inList = (ids) => ids.map(() => "?").join(",");
 
+// A badge's facility code: 2 or 3 digits (CCURE 9000), optional.
+const FACILITY_CODE_RE = /^\d{2,3}$/;
+
+/** How a badge is written for people: its facility code and number ("101-12345"), or the number alone. */
+const badgeLabel = (facilityCode, number) => (facilityCode ? `${facilityCode}-${number}` : number);
+
 function createBadges({ db, clearance, now = Date.now }) {
   const raw = db.raw;
 
@@ -36,7 +42,7 @@ function createBadges({ db, clearance, now = Date.now }) {
   const SELECT = `SELECT b.*, c.name AS classification_name, c.requires_clearance, l.name AS level_name, l.rank AS level_rank,
       (SELECT json_group_array(json_object('id', s.id, 'name', s.name)) FROM badge_sites bs JOIN sites s ON s.id = bs.site_id WHERE bs.badge_id = b.id) AS sites_json,
       a.id AS a_id, a.holder_kind, a.holder_id, a.holder_name, a.holder_company, a.visit_id, a.assigned_at, a.assigned_by,
-      a.temporary AS a_temporary, a.due_at AS a_due_at, rb.number AS a_replaces_number,
+      a.temporary AS a_temporary, a.due_at AS a_due_at, rb.number AS a_replaces_number, rb.facility_code AS a_replaces_code,
       (SELECT json_object('id', rv.id, 'name', rv.first_name || ' ' || rv.last_name) FROM visitors rv WHERE rv.reserved_badge_id = b.id) AS reserved_json
     FROM badges b
     LEFT JOIN badge_classifications c ON c.id = b.classification_id
@@ -49,6 +55,8 @@ function createBadges({ db, clearance, now = Date.now }) {
     return {
       id: r.id,
       number: r.number,
+      facilityCode: r.facility_code ?? null,
+      label: badgeLabel(r.facility_code, r.number),
       type: r.type,
       classificationId: r.classification_id,
       classificationName: r.classification_name,
@@ -63,7 +71,7 @@ function createBadges({ db, clearance, now = Date.now }) {
       reservedFor: r.reserved_json ? JSON.parse(r.reserved_json) : null,
       holder: r.a_id ? {
         assignmentId: r.a_id, kind: r.holder_kind, id: r.holder_id, name: r.holder_name, company: r.holder_company, visitId: r.visit_id, assignedAt: r.assigned_at, assignedBy: r.assigned_by,
-        temporary: Boolean(r.a_temporary), dueAt: r.a_due_at ?? null, replacesNumber: r.a_replaces_number ?? null, overdue: Boolean(r.a_temporary && r.a_due_at && r.a_due_at < now())
+        temporary: Boolean(r.a_temporary), dueAt: r.a_due_at ?? null, replacesNumber: r.a_replaces_number ? badgeLabel(r.a_replaces_code, r.a_replaces_number) : null, overdue: Boolean(r.a_temporary && r.a_due_at && r.a_due_at < now())
       } : null,
       createdAt: r.created_at,
       updatedAt: r.updated_at
@@ -109,12 +117,13 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (temporary !== null) { where.push("b.temporary = ?"); params.push(temporary ? 1 : 0); }
     for (const word of String(q || "").trim().split(/\s+/).filter(Boolean).slice(0, 6)) {
       const p = `%${word.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-      where.push("(b.number LIKE ? ESCAPE '\\' OR coalesce(a.holder_name, '') LIKE ? ESCAPE '\\' OR coalesce(a.holder_company, '') LIKE ? ESCAPE '\\' OR coalesce(b.notes, '') LIKE ? ESCAPE '\\')");
-      params.push(p, p, p, p);
+      // The number, the facility code, or both as written ("101-12345").
+      where.push("(b.number LIKE ? ESCAPE '\\' OR coalesce(b.facility_code, '') LIKE ? ESCAPE '\\' OR (coalesce(b.facility_code || '-', '') || b.number) LIKE ? ESCAPE '\\' OR coalesce(a.holder_name, '') LIKE ? ESCAPE '\\' OR coalesce(a.holder_company, '') LIKE ? ESCAPE '\\' OR coalesce(b.notes, '') LIKE ? ESCAPE '\\')");
+      params.push(p, p, p, p, p, p);
     }
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const total = raw.prepare(`SELECT count(*) AS n FROM badges b LEFT JOIN badge_assignments a ON a.badge_id = b.id AND a.returned_at IS NULL ${clause}`).get(...params).n;
-    const rows = raw.prepare(`${SELECT} ${clause} ORDER BY b.number COLLATE NOCASE LIMIT ? OFFSET ?`).all(...params, limit, offset);
+    const rows = raw.prepare(`${SELECT} ${clause} ORDER BY b.number COLLATE NOCASE, coalesce(b.facility_code, '') LIMIT ? OFFSET ?`).all(...params, limit, offset);
     return { badges: rows.map(row), total };
   }
 
@@ -124,7 +133,7 @@ function createBadges({ db, clearance, now = Date.now }) {
   }
 
   function history(badgeId, limit = 200) {
-    return raw.prepare("SELECT a.*, rb.number AS replaces_number FROM badge_assignments a LEFT JOIN badges rb ON rb.id = a.replaces_badge_id WHERE a.badge_id = ? ORDER BY a.assigned_at DESC, a.id DESC LIMIT ?").all(badgeId, limit).map(assignmentRow);
+    return raw.prepare("SELECT a.*, rb.number AS replaces_number, rb.facility_code AS replaces_code FROM badge_assignments a LEFT JOIN badges rb ON rb.id = a.replaces_badge_id WHERE a.badge_id = ? ORDER BY a.assigned_at DESC, a.id DESC LIMIT ?").all(badgeId, limit).map(assignmentRow);
   }
 
   function assignmentRow(r) {
@@ -132,6 +141,8 @@ function createBadges({ db, clearance, now = Date.now }) {
       id: r.id,
       badgeId: r.badge_id,
       badgeNumber: r.number ?? undefined,
+      badgeFacilityCode: r.number !== undefined ? r.facility_code ?? null : undefined,
+      badgeLabel: r.number !== undefined ? badgeLabel(r.facility_code, r.number) : undefined,
       badgeType: r.type ?? undefined,
       kind: r.holder_kind,
       holderId: r.holder_id,
@@ -146,19 +157,19 @@ function createBadges({ db, clearance, now = Date.now }) {
       note: r.note,
       temporary: Boolean(r.temporary),
       dueAt: r.due_at ?? null,
-      replacesNumber: r.replaces_number ?? null,
+      replacesNumber: r.replaces_number ? badgeLabel(r.replaces_code, r.replaces_number) : null,
       overdue: Boolean(r.temporary && !r.returned_at && r.due_at && r.due_at < now())
     };
   }
 
   /** A holder's badges, held now and before. kind: "person" or "visitor". */
   function forHolder(kind, holderId, limit = 100) {
-    return raw.prepare(`SELECT a.*, b.number, b.type, rb.number AS replaces_number FROM badge_assignments a JOIN badges b ON b.id = a.badge_id LEFT JOIN badges rb ON rb.id = a.replaces_badge_id
+    return raw.prepare(`SELECT a.*, b.number, b.facility_code, b.type, rb.number AS replaces_number, rb.facility_code AS replaces_code FROM badge_assignments a JOIN badges b ON b.id = a.badge_id LEFT JOIN badges rb ON rb.id = a.replaces_badge_id
       WHERE a.holder_kind = ? AND a.holder_id = ? ORDER BY a.returned_at IS NOT NULL, a.assigned_at DESC LIMIT ?`).all(kind, holderId, limit).map(assignmentRow);
   }
 
   function openForHolder(kind, holderId) {
-    return raw.prepare("SELECT b.number FROM badge_assignments a JOIN badges b ON b.id = a.badge_id WHERE a.holder_kind = ? AND a.holder_id = ? AND a.returned_at IS NULL").all(kind, holderId).map((r) => r.number);
+    return raw.prepare("SELECT b.number, b.facility_code FROM badge_assignments a JOIN badges b ON b.id = a.badge_id WHERE a.holder_kind = ? AND a.holder_id = ? AND a.returned_at IS NULL").all(kind, holderId).map((r) => badgeLabel(r.facility_code, r.number));
   }
 
   // --- writing badges ------------------------------------------------------------------------
@@ -168,9 +179,19 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (input.number !== undefined || !existing) {
       const number = String(input.number ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
       if (!number) throw fail(400, "Give the badge a number.");
-      const clash = raw.prepare("SELECT id FROM badges WHERE number = ?").get(number);
-      if (clash && clash.id !== existing?.id) throw fail(409, `There is already a badge numbered ${number}.`);
       out.number = number;
+    }
+    if (input.facilityCode !== undefined) {
+      const code = String(input.facilityCode ?? "").trim();
+      if (code && !FACILITY_CODE_RE.test(code)) throw fail(400, `The facility code is 2 or 3 digits, not "${code}".`);
+      out.facilityCode = code || null;
+    }
+    // A number is unique within its facility code.
+    if (out.number !== undefined || out.facilityCode !== undefined) {
+      const number = out.number ?? existing.number;
+      const code = out.facilityCode !== undefined ? out.facilityCode : existing?.facilityCode ?? null;
+      const clash = raw.prepare("SELECT id FROM badges WHERE number = ? AND ifnull(facility_code, '') = ?").get(number, code || "");
+      if (clash && clash.id !== existing?.id) throw fail(409, `There is already a badge ${badgeLabel(code, number)}${code ? "" : " without a facility code"}.`);
     }
     if (input.type !== undefined || !existing) {
       if (!TYPES.includes(input.type)) throw fail(400, `The badge type must be one of: ${TYPES.join(", ")}.`);
@@ -232,15 +253,16 @@ function createBadges({ db, clearance, now = Date.now }) {
     const t = now();
     let id;
     db.transaction(() => {
-      id = raw.prepare(`INSERT INTO badges (number, type, classification_id, clearance_level_id, temporary, status, notes, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.number, v.type, v.classificationId, v.clearanceLevelId ?? null, v.temporary ? 1 : 0, v.status || "active", v.notes ?? null, t, t).lastInsertRowid;
+      id = raw.prepare(`INSERT INTO badges (number, facility_code, type, classification_id, clearance_level_id, temporary, status, notes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.number, v.facilityCode ?? null, v.type, v.classificationId, v.clearanceLevelId ?? null, v.temporary ? 1 : 0, v.status || "active", v.notes ?? null, t, t).lastInsertRowid;
       writeSites(id, siteIds);
     });
     return get(id);
   }
 
   /**
-   * Adds a run of badges: prefix + numbers from..to, zero-padded to `width` (B-0001..B-0050).
+   * Adds a run of badges: prefix + numbers from..to, zero-padded to `width` (B-0001..B-0050),
+   * all with the same facility code (if any).
    * All or nothing; at most 1,000 at once.
    */
   function createRange({ prefix = "", from, to, width = 0, ...common }, { sites = null } = {}) {
@@ -269,8 +291,8 @@ function createBadges({ db, clearance, now = Date.now }) {
     }
     const next = { ...existing, ...v };
     db.transaction(() => {
-      raw.prepare("UPDATE badges SET number = ?, type = ?, classification_id = ?, clearance_level_id = ?, temporary = ?, status = ?, notes = ?, updated_at = ? WHERE id = ?")
-        .run(next.number, next.type, next.classificationId, next.clearanceLevelId ?? null, next.temporary ? 1 : 0, next.status, next.notes ?? null, now(), id);
+      raw.prepare("UPDATE badges SET number = ?, facility_code = ?, type = ?, classification_id = ?, clearance_level_id = ?, temporary = ?, status = ?, notes = ?, updated_at = ? WHERE id = ?")
+        .run(next.number, next.facilityCode ?? null, next.type, next.classificationId, next.clearanceLevelId ?? null, next.temporary ? 1 : 0, next.status, next.notes ?? null, now(), id);
       if (siteIds) writeSites(id, siteIds);
     });
     return get(id);
@@ -280,7 +302,7 @@ function createBadges({ db, clearance, now = Date.now }) {
   function remove(id, { sites = null } = {}) {
     const existing = get(id, { sites });
     if (!existing) throw fail(404, "No such badge.");
-    if (raw.prepare("SELECT 1 FROM badge_assignments WHERE badge_id = ?").get(id)) throw fail(409, `Badge ${existing.number} has been assigned before; retire it instead, so its history stays.`);
+    if (raw.prepare("SELECT 1 FROM badge_assignments WHERE badge_id = ?").get(id)) throw fail(409, `Badge ${existing.label} has been assigned before; retire it instead, so its history stays.`);
     raw.prepare("DELETE FROM badges WHERE id = ?").run(id);
     return existing;
   }
@@ -293,7 +315,7 @@ function createBadges({ db, clearance, now = Date.now }) {
       const p = raw.prepare(`SELECT p.*, c.name AS company_name, c.building_staff, c.active AS company_active FROM people p JOIN companies c ON c.id = p.company_id WHERE p.id = ?`).get(Number(id));
       if (!p) return null;
       // The badges they hold: their own (to stand in for) and any temporary one already out.
-      const held = raw.prepare(`SELECT b.id, b.number, a.temporary FROM badge_assignments a JOIN badges b ON b.id = a.badge_id
+      const held = raw.prepare(`SELECT b.id, b.number, b.facility_code, a.temporary FROM badge_assignments a JOIN badges b ON b.id = a.badge_id
         WHERE a.holder_kind = 'person' AND a.holder_id = ? AND a.returned_at IS NULL ORDER BY a.assigned_at`).all(p.id);
       // Where they work, for the end of their day: their site, else their company's first.
       const tz = raw.prepare(`SELECT s.time_zone FROM sites s WHERE s.id = coalesce(?, (SELECT site_id FROM company_sites WHERE company_id = ? ORDER BY site_id LIMIT 1))`).get(p.site_id, p.company_id)?.time_zone;
@@ -319,25 +341,25 @@ function createBadges({ db, clearance, now = Date.now }) {
    * clearance levels) the reason never names the level.
    */
   function refusal(badge, h, { levelNames = true } = {}) {
-    if (badge.status !== "active") return `Badge ${badge.number} is ${badge.status}.`;
-    if (badge.type === "visitor" && h.kind !== "visitor") return `Badge ${badge.number} is a visitor badge; it goes to visitors.`;
-    if (badge.type !== "visitor" && h.kind === "visitor") return `Badge ${badge.number} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`;
-    if (badge.type === "personnel" && !h.buildingStaff) return `Badge ${badge.number} is a personnel badge, for building staff; ${h.company} isn't marked as building staff.`;
-    if (badge.type === "tenant" && h.buildingStaff) return `Badge ${badge.number} is a tenant badge; ${h.name} is building staff and gets a personnel badge.`;
-    if (badge.reservedFor && !(h.kind === "visitor" && h.id === badge.reservedFor.id)) return `Badge ${badge.number} is reserved for ${badge.reservedFor.name}.`;
+    if (badge.status !== "active") return `Badge ${badge.label} is ${badge.status}.`;
+    if (badge.type === "visitor" && h.kind !== "visitor") return `Badge ${badge.label} is a visitor badge; it goes to visitors.`;
+    if (badge.type !== "visitor" && h.kind === "visitor") return `Badge ${badge.label} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`;
+    if (badge.type === "personnel" && !h.buildingStaff) return `Badge ${badge.label} is a personnel badge, for building staff; ${h.company} isn't marked as building staff.`;
+    if (badge.type === "tenant" && h.buildingStaff) return `Badge ${badge.label} is a tenant badge; ${h.name} is building staff and gets a personnel badge.`;
+    if (badge.reservedFor && !(h.kind === "visitor" && h.id === badge.reservedFor.id)) return `Badge ${badge.label} is reserved for ${badge.reservedFor.name}.`;
     if (!h.active) return `${h.name} is inactive.`;
     if (h.blocked) return `${h.name} is blocked.`;
     if (badge.temporary) {
-      if (h.kind !== "person") return `Badge ${badge.number} is temporary, for people who forgot their own; visitors get visitor badges.`;
-      if (!h.regular.length) return `${h.name} doesn't hold a badge for badge ${badge.number} to stand in for; give them a badge of their own instead.`;
-      if (h.temporaryOut.length) return `${h.name} already has temporary badge ${h.temporaryOut[0].number}; take it back first.`;
+      if (h.kind !== "person") return `Badge ${badge.label} is temporary, for people who forgot their own; visitors get visitor badges.`;
+      if (!h.regular.length) return `${h.name} doesn't hold a badge for badge ${badge.label} to stand in for; give them a badge of their own instead.`;
+      if (h.temporaryOut.length) return `${h.name} already has temporary badge ${badgeLabel(h.temporaryOut[0].facility_code, h.temporaryOut[0].number)}; take it back first.`;
     }
     if (badge.clearanceLevelId) {
       const needed = clearance.level(badge.clearanceLevelId);
       if (!clearance.covers(clearance.effectiveLevel(h), needed)) {
         const why = clearance.notCounting(h);
         const level = levelNames ? ` (${needed.name})` : "";
-        return why ? `${h.name}'s clearance ${why}, so it doesn't cover badge ${badge.number}${level}.` : `${h.name}'s clearance doesn't cover badge ${badge.number}${level}.`;
+        return why ? `${h.name}'s clearance ${why}, so it doesn't cover badge ${badge.label}${level}.` : `${h.name}'s clearance doesn't cover badge ${badge.label}${level}.`;
       }
     }
     return null;
@@ -361,7 +383,7 @@ function createBadges({ db, clearance, now = Date.now }) {
   function assign(badgeId, { kind, holderId, visitId = null, replacesBadgeId = null }, { by = null, sites = null, levelNames = true } = {}) {
     const badge = get(badgeId, { sites });
     if (!badge) throw fail(404, "No such badge.");
-    if (badge.holder) throw fail(409, `Badge ${badge.number} is with ${badge.holder.name}; take it back first.`);
+    if (badge.holder) throw fail(409, `Badge ${badge.label} is with ${badge.holder.name}; take it back first.`);
     const h = holder(kind, holderId);
     if (!h) throw fail(404, "No such person or visitor.");
     const why = refusal(badge, h, { levelNames });
@@ -392,7 +414,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (!["returned", "lost"].includes(outcome)) throw fail(400, "A badge comes back returned, or is lost.");
     const badge = get(badgeId, { sites });
     if (!badge) throw fail(404, "No such badge.");
-    if (!badge.holder) throw fail(409, `Badge ${badge.number} isn't with anyone.`);
+    if (!badge.holder) throw fail(409, `Badge ${badge.label} isn't with anyone.`);
     db.transaction(() => {
       raw.prepare("UPDATE badge_assignments SET returned_at = ?, returned_by = ?, outcome = ?, note = ? WHERE id = ?")
         .run(now(), by, outcome, note ? String(note).slice(0, 500) : null, badge.holder.assignmentId);
@@ -458,12 +480,34 @@ function createBadges({ db, clearance, now = Date.now }) {
     return { visitId: v.id, name: `${v.first_name} ${v.last_name}` };
   }
 
-  /** The id of the badge with this number (any case), or null. */
-  function findByNumber(number) {
-    return raw.prepare("SELECT id FROM badges WHERE number = ?").get(String(number ?? "").trim().replace(/\s+/g, " "))?.id ?? null;
+  /** The id of the badge with exactly this number and facility code (none for none), or null. */
+  function findExact(number, facilityCode = null) {
+    return raw.prepare("SELECT id FROM badges WHERE number = ? AND ifnull(facility_code, '') = ?")
+      .get(String(number ?? "").trim().replace(/\s+/g, " "), String(facilityCode ?? "").trim())?.id ?? null;
   }
 
-  return { list, get, history, forHolder, openForHolder, create, createRange, update, remove, holder, refusal, availableFor, assign, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber };
+  /**
+   * The badges a typed number could be (any case): with `facilityCode`, the one under that
+   * code; without, every badge with that number, and the one the text names written with its
+   * code ("101-12345" or "101 12345"). [{ id, label }], none when nothing matches.
+   */
+  function findByNumber(number, { facilityCode = null } = {}) {
+    const typed = String(number ?? "").trim().replace(/\s+/g, " ");
+    if (!typed) return [];
+    const code = String(facilityCode ?? "").trim();
+    const out = new Map();
+    const add = (rows) => { for (const r of rows) out.set(r.id, { id: r.id, label: badgeLabel(r.facility_code, r.number) }); };
+    if (code) {
+      add(raw.prepare("SELECT id, number, facility_code FROM badges WHERE number = ? AND facility_code = ?").all(typed, code));
+      return [...out.values()];
+    }
+    add(raw.prepare("SELECT id, number, facility_code FROM badges WHERE number = ?").all(typed));
+    const written = /^(\d{2,3})[-\s:](.+)$/.exec(typed);
+    if (written) add(raw.prepare("SELECT id, number, facility_code FROM badges WHERE number = ? AND facility_code = ?").all(written[2].trim(), written[1]));
+    return [...out.values()];
+  }
+
+  return { list, get, history, forHolder, openForHolder, create, createRange, update, remove, holder, refusal, availableFor, assign, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
 }
 
-module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES };
+module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES, FACILITY_CODE_RE, badgeLabel };

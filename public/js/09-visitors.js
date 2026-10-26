@@ -191,23 +191,28 @@ function reservedBadgeSection(visitor, refresh) {
     const badge = await formDialog({
       title: `Reserve a badge for ${visitorName(visitor)}`,
       intro: h("p", { class: "muted", text: "Check-in tells the front desk to hand them this badge each time. It goes back into stock when they leave, and stays theirs." }),
-      fields: [{ name: "number", label: "Visitor badge number", required: true, autofocus: true, value: visitor.reservedBadge?.number || "" }],
+      fields: [
+        { ...facilityCodeField(visitor.reservedBadge?.facilityCode), hint: "Needed when another visitor badge has the same number." },
+        { name: "number", label: "Visitor badge number", required: true, half: true, autofocus: true, value: visitor.reservedBadge?.number || "" }
+      ],
       submitLabel: "Reserve",
       onSubmit: async (v) => {
         const typed = v.number.trim().toLowerCase();
-        const { badges } = await api(`/api/badges?${new URLSearchParams({ q: v.number.trim(), type: "visitor", limit: "50" })}`);
-        const found = badges.find((b) => b.number.toLowerCase() === typed);
-        if (!found) throw new Error(`There's no visitor badge ${v.number.trim()}.`);
-        return (await api(`/api/visitors/${visitor.id}/reserved-badge`, { method: "PUT", body: { badgeId: found.id } })).reservedBadge;
+        const code = v.facilityCode.trim();
+        const { badges } = await api(`/api/badges?${new URLSearchParams({ q: v.number.trim(), type: "visitor", limit: "200" })}`);
+        const found = badges.filter((b) => b.number.toLowerCase() === typed && (!code || b.facilityCode === code));
+        if (!found.length) throw new Error(`There's no visitor badge ${code ? `${code}-` : ""}${v.number.trim()}.`);
+        if (found.length > 1) throw new Error(`More than one visitor badge is numbered ${v.number.trim()}: ${found.map((b) => b.label).join(", ")}. Enter its facility code too.`);
+        return (await api(`/api/visitors/${visitor.id}/reserved-badge`, { method: "PUT", body: { badgeId: found[0].id } })).reservedBadge;
       }
     });
     if (badge) {
-      toast(`Badge ${badge.number} reserved for ${visitorName(visitor)}.`);
+      toast(`Badge ${badge.label} reserved for ${visitorName(visitor)}.`);
       refresh();
     }
   };
   const release = async () => {
-    if (!(await confirmDialog(`Stop keeping badge ${visitor.reservedBadge.number} for ${visitorName(visitor)}?`, { confirmLabel: "Release" }))) return;
+    if (!(await confirmDialog(`Stop keeping badge ${visitor.reservedBadge.label} for ${visitorName(visitor)}?`, { confirmLabel: "Release" }))) return;
     try {
       await api(`/api/visitors/${visitor.id}/reserved-badge`, { method: "PUT", body: { badgeId: null } });
       refresh();
@@ -218,7 +223,7 @@ function reservedBadgeSection(visitor, refresh) {
   return h("div", { class: "stack" },
     h("h4", { text: "Reserved badge" }),
     visitor.reservedBadge
-      ? h("p", { class: "row-between" }, h("span", {}, h("a", { href: `#badge/${visitor.reservedBadge.id}`, class: "mono", text: visitor.reservedBadge.number }), h("span", { class: "muted small-text", text: " · handed to them at each check-in" })),
+      ? h("p", { class: "row-between" }, h("span", {}, h("a", { href: `#badge/${visitor.reservedBadge.id}`, class: "mono", text: visitor.reservedBadge.label }), h("span", { class: "muted small-text", text: " · handed to them at each check-in" })),
         may ? h("span", { class: "btn-row" }, h("button", { type: "button", class: "link-btn", text: "Change", onclick: reserve }), h("button", { type: "button", class: "link-btn danger-text", text: "Release", onclick: release })) : null)
       : h("p", { class: "row-between" }, h("span", { class: "muted", text: "None. A regular visitor can have a visitor badge kept for them." }),
         may ? h("button", { type: "button", class: "secondary small", text: "Reserve a badge", onclick: reserve }) : null));

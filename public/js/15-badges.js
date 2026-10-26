@@ -43,7 +43,7 @@ function badgePicker(list, { suggested = null, allowNone = false, label = "Badge
     allowNone ? row("", h("span", { text: "No badge" }), true) : null,
     ordered.map((b, i) => row(String(b.id), [
       templateImg(b.template) || h("span", { class: "badge-thumb empty", title: "No image for this badge yet" }),
-      h("span", { class: "mono", text: b.number }),
+      h("span", { class: "mono", text: b.label }),
       h("span", { class: "muted small-text", text: [badgeClassText(b), multiSite() ? badgeSitesText(b) : null].filter(Boolean).join(" · ") })
     ], !allowNone && i === 0)));
   const value = () => node.querySelector("input:checked")?.value || "";
@@ -101,7 +101,7 @@ function temporaryText(a) {
 
 async function loadBadges() {
   const table = $("badges-table");
-  const head = ["Badge", "Type", "Classification", ...(multiSite() ? ["Valid at"] : []), "Status", "Held by", "Since"];
+  const head = ["Facility code", "Badge", "Type", "Classification", ...(multiSite() ? ["Valid at"] : []), "Status", "Held by", "Since"];
   const picking = canManageBadges();
   const all = h("input", { type: "checkbox", "aria-label": "Choose every badge on this page" });
   table.tHead.replaceChildren(h("tr", {}, picking ? h("th", { class: "pick-cell" }, all) : null, head.map((t) => h("th", { text: t }))));
@@ -116,9 +116,10 @@ async function loadBadges() {
   }
   const boxes = [];
   const rows = data.badges.map((b) => {
-    const box = picking ? h("input", { type: "checkbox", "aria-label": `Choose badge ${b.number}` }) : null;
+    const box = picking ? h("input", { type: "checkbox", "aria-label": `Choose badge ${b.label}` }) : null;
     const row = h("tr", { class: `clickable${b.status !== "active" ? " inactive" : ""}${badgesView.picked.has(b.id) ? " is-picked" : ""}` },
       picking ? h("td", { class: "pick-cell", onclick: (e) => e.stopPropagation() }, box) : null,
+      h("td", { class: "mono", text: b.facilityCode || "" }),
       h("td", {}, h("strong", { class: "mono", text: b.number }), b.temporary ? h("span", { class: "badge muted", text: "Temporary" }) : null),
       h("td", { text: BADGE_TYPE_LABELS[b.type] }),
       h("td", { class: "small-text" }, h("span", { class: "with-thumb" }, templateImg(b.template), h("span", { text: badgeClassText(b) }))),
@@ -202,17 +203,23 @@ async function badgeKindFields(badge = null) {
   return { fields, body };
 }
 
+/** The facility code box (2-3 digits, optional), as CCURE 9000 has it. */
+function facilityCodeField(value = "") {
+  return { name: "facilityCode", label: "Facility code (optional)", half: true, value: value || "", placeholder: "2-3 digits",
+    hint: "Kept apart from the number, as in CCURE 9000. The same number can be under several facility codes." };
+}
+
 $("badges-add").addEventListener("click", async () => {
   const kind = await badgeKindFields();
   const badge = await formDialog({
     title: "Add badge",
     wide: true,
-    fields: [{ name: "number", label: "Badge number", required: true, half: true, autofocus: true }, ...kind.fields, { name: "notes", label: "Notes", type: "textarea", rows: 2 }],
+    fields: [facilityCodeField(), { name: "number", label: "Badge number", required: true, half: true, autofocus: true }, ...kind.fields, { name: "notes", label: "Notes", type: "textarea", rows: 2 }],
     submitLabel: "Add badge",
-    onSubmit: async (v) => (await api("/api/badges", { method: "POST", body: { number: v.number, notes: v.notes, ...kind.body(v) } })).badge
+    onSubmit: async (v) => (await api("/api/badges", { method: "POST", body: { facilityCode: v.facilityCode, number: v.number, notes: v.notes, ...kind.body(v) } })).badge
   });
   if (badge) {
-    toast(`Added badge ${badge.number}.`);
+    toast(`Added badge ${badge.label}.`);
     loadBadges();
   }
 });
@@ -222,8 +229,9 @@ $("badges-range").addEventListener("click", async () => {
   const result = await formDialog({
     title: "Add a range of badges",
     wide: true,
-    intro: h("p", { class: "muted", text: "For a box of badges numbered in sequence, such as B-0001 to B-0050. All get the same type and classification." }),
+    intro: h("p", { class: "muted", text: "For a box of badges numbered in sequence, such as B-0001 to B-0050. All get the same facility code, type and classification." }),
     fields: [
+      { ...facilityCodeField(), half: false },
       { name: "prefix", label: "Prefix", half: true, placeholder: "B-" },
       { name: "width", label: "Digits (pad with zeros to)", type: "number", half: true, value: 4, min: 0, max: 12 },
       { name: "from", label: "From", type: "number", half: true, required: true, value: 1, min: 0 },
@@ -231,10 +239,10 @@ $("badges-range").addEventListener("click", async () => {
       ...kind.fields
     ],
     submitLabel: "Add badges",
-    onSubmit: async (v) => api("/api/badges/range", { method: "POST", body: { prefix: v.prefix, width: Number(v.width), from: Number(v.from), to: Number(v.to), ...kind.body(v) } })
+    onSubmit: async (v) => api("/api/badges/range", { method: "POST", body: { facilityCode: v.facilityCode, prefix: v.prefix, width: Number(v.width), from: Number(v.from), to: Number(v.to), ...kind.body(v) } })
   });
   if (result) {
-    toast(`Added ${result.count} badges, ${result.first.number} to ${result.last.number}.`);
+    toast(`Added ${result.count} badges, ${result.first.label} to ${result.last.label}.`);
     loadBadges();
   }
 });
@@ -243,16 +251,17 @@ async function editBadge(badge) {
   const kind = await badgeKindFields(badge);
   const elsewhere = badge.sites.filter((s) => !state.config.sites.some((x) => x.id === s.id));
   return formDialog({
-    title: `Edit badge ${badge.number}`,
+    title: `Edit badge ${badge.label}`,
     wide: true,
     fields: [
+      facilityCodeField(badge.facilityCode),
       { name: "number", label: "Badge number", required: true, half: true, value: badge.number },
       { name: "status", label: "Status", type: "select", half: true, value: badge.status, options: Object.entries(BADGE_STATUS_LABELS).map(([value, label]) => ({ value, label })), hint: badge.holder ? "Take it back before marking it lost or retired." : "Retired badges stay on record with their history." },
       ...kind.fields,
       ...(elsewhere.length ? [{ type: "readonly", name: "elsewhere", label: "Also valid at (sites you don't see; kept as they are)", value: elsewhere.map((s) => s.name).join(", ") }] : []),
       { name: "notes", label: "Notes", type: "textarea", rows: 2, value: badge.notes }
     ],
-    onSubmit: async (v) => (await api(`/api/badges/${badge.id}`, { method: "PUT", body: { number: v.number, status: v.status, notes: v.notes, ...kind.body(v) } })).badge
+    onSubmit: async (v) => (await api(`/api/badges/${badge.id}`, { method: "PUT", body: { facilityCode: v.facilityCode, number: v.number, status: v.status, notes: v.notes, ...kind.body(v) } })).badge
   });
 }
 
@@ -290,7 +299,7 @@ async function assignBadgeDialog(badge) {
   }, 250);
   search.addEventListener("input", run);
   const given = await openDialog({
-    title: `Give badge ${badge.number}`,
+    title: `Give badge ${badge.label}`,
     wide: true,
     body: h("div", { class: "stack" },
       h("div", { class: "with-thumb" }, templateImg(badge.template), h("p", { class: "muted", text: `${BADGE_TYPE_LABELS[badge.type]} badge, ${badgeClassText(badge)}.${badge.cleared ? " Only someone whose clearance covers it can hold it." : ""}` })),
@@ -298,7 +307,7 @@ async function assignBadgeDialog(badge) {
     actions: [{ label: "Cancel", value: null }],
     onOpen: (d) => { dlg = d; setTimeout(() => search.focus(), 50); }
   });
-  if (given) toast(`Badge ${badge.number} given to ${kind === "visitor" ? visitorName(given) : personName(given)}.`);
+  if (given) toast(`Badge ${badge.label} given to ${kind === "visitor" ? visitorName(given) : personName(given)}.`);
   return given;
 }
 
@@ -331,9 +340,11 @@ async function openBadge(id, onChange = () => {}) {
   const body = h("div", { class: "detail" },
     h("p", {}, badgeStateBadge(badge)),
     h("dl", { class: "facts inline-facts" },
+      h("dt", { text: "Facility code" }), h("dd", { class: "mono", text: badge.facilityCode || "None" }),
+      h("dt", { text: "Badge number" }), h("dd", { class: "mono", text: badge.number }),
       h("dt", { text: "Type" }), h("dd", { text: BADGE_TYPE_LABELS[badge.type] }),
       h("dt", { text: "Classification" }), h("dd", { text: badgeClassText(badge) }),
-      badge.template ? [h("dt", { text: "Looks like" }), h("dd", {}, templateImg(badge.template, { large: true, alt: `Badge ${badge.number}` }))] : null,
+      badge.template ? [h("dt", { text: "Looks like" }), h("dd", {}, templateImg(badge.template, { large: true, alt: `Badge ${badge.label}` }))] : null,
       badge.temporary ? [h("dt", { text: "Temporary" }), h("dd", { text: "Lent for the day to people who forgot their own badge" })] : null,
       multiSite() ? [h("dt", { text: "Valid at" }), h("dd", { text: badgeSitesText(badge) })] : null,
       badge.holder ? [h("dt", { text: "Held by" }), h("dd", {}, h("a", { href: badge.holder.kind === "visitor" ? `#visitor/${badge.holder.id}` : `#person/${badge.holder.id}`, text: badge.holder.name }), badge.holder.company ? ` (${badge.holder.company})` : "", h("span", { class: "muted", text: ` since ${fmtDateTime(badge.holder.assignedAt)}${badge.holder.assignedBy ? `, given by ${badge.holder.assignedBy}` : ""}` }),
@@ -366,16 +377,16 @@ async function openBadge(id, onChange = () => {}) {
     }
   }
   actions.push({ label: "Close", kind: "primary", value: null });
-  const result = await openDialog({ title: `Badge ${badge.number}`, body, wide: true, actions });
+  const result = await openDialog({ title: `Badge ${badge.label}`, body, wide: true, actions });
   const again = () => openBadge(id, onChange);
   try {
     if (result === "edit") { if (await editBadge(badge)) { toast("Saved."); onChange(); } return again(); }
     if (result === "assign") { if (await assignBadgeDialog(badge)) onChange(); return again(); }
-    if (result === "back" || result === "lost") { if (await takeBackBadge(badge.id, badge.number, badge.holder.name, result === "lost" ? "lost" : "returned")) onChange(); return again(); }
+    if (result === "back" || result === "lost") { if (await takeBackBadge(badge.id, badge.label, badge.holder.name, result === "lost" ? "lost" : "returned")) onChange(); return again(); }
     if (result === "delete") {
-      if (!(await confirmDialog(`Delete badge ${badge.number}?`, { danger: true, confirmLabel: "Delete" }))) return again();
+      if (!(await confirmDialog(`Delete badge ${badge.label}?`, { danger: true, confirmLabel: "Delete" }))) return again();
       await api(`/api/badges/${badge.id}`, { method: "DELETE" });
-      toast(`Deleted badge ${badge.number}.`);
+      toast(`Deleted badge ${badge.label}.`);
       onChange();
     }
   } catch (error) {
@@ -402,11 +413,11 @@ function badgeSection(kind, holderId) {
     const parts = [h("h4", { text: "Badges" })];
     if (data.current.length) {
       parts.push(h("ul", { class: "plain-list" }, data.current.map((a) => h("li", { class: "row-between" },
-        h("span", {}, h("a", { href: `#badge/${a.badgeId}`, class: "mono", text: a.badgeNumber }), h("span", { class: "muted small-text", text: ` ${BADGE_TYPE_LABELS[a.badgeType]} · since ${fmtDateTime(a.assignedAt)}` }),
+        h("span", {}, h("a", { href: `#badge/${a.badgeId}`, class: "mono", text: a.badgeLabel }), h("span", { class: "muted small-text", text: ` ${BADGE_TYPE_LABELS[a.badgeType]} · since ${fmtDateTime(a.assignedAt)}` }),
           a.temporary ? h("div", { class: `small-text ${a.overdue ? "bad-text" : "muted"}`, text: `${temporaryText(a)}${a.overdue ? " (overdue)" : ""}` }) : null),
         canEditBadges() ? h("span", { class: "btn-row" },
-          h("button", { type: "button", class: "link-btn", text: "Take back", onclick: async () => { if (await takeBackBadge(a.badgeId, a.badgeNumber, a.holderName)) render(); } }),
-          h("button", { type: "button", class: "link-btn danger-text", text: "Lost", onclick: async () => { if (await takeBackBadge(a.badgeId, a.badgeNumber, a.holderName, "lost")) render(); } })) : null))));
+          h("button", { type: "button", class: "link-btn", text: "Take back", onclick: async () => { if (await takeBackBadge(a.badgeId, a.badgeLabel, a.holderName)) render(); } }),
+          h("button", { type: "button", class: "link-btn danger-text", text: "Lost", onclick: async () => { if (await takeBackBadge(a.badgeId, a.badgeLabel, a.holderName, "lost")) render(); } })) : null))));
     } else {
       parts.push(h("p", { class: "muted", text: "No badge at the moment." }));
     }
@@ -420,7 +431,7 @@ function badgeSection(kind, holderId) {
             if (!chosen) return;
             try {
               await api(`/api/badges/${chosen.id}/assign`, { method: "POST", body: { kind, holderId } });
-              toast(`Badge ${chosen.number} given.`);
+              toast(`Badge ${chosen.label} given.`);
               render();
             } catch (error) {
               toast(error.message, "error");
@@ -434,14 +445,14 @@ function badgeSection(kind, holderId) {
     const own = data.current.filter((a) => !a.temporary);
     if (canEditBadges() && kind === "person" && own.length && !data.current.some((a) => a.temporary)) {
       if (data.temporary.length) {
-        const tmp = h("select", { "aria-label": "Temporary badge" }, data.temporary.map((b) => h("option", { value: String(b.id), text: `${b.number} · ${badgeClassText(b)}` })));
-        const forWhich = own.length > 1 ? h("select", { "aria-label": "In place of" }, own.map((a) => h("option", { value: String(a.badgeId), text: `in place of ${a.badgeNumber}` }))) : null;
+        const tmp = h("select", { "aria-label": "Temporary badge" }, data.temporary.map((b) => h("option", { value: String(b.id), text: `${b.label} · ${badgeClassText(b)}` })));
+        const forWhich = own.length > 1 ? h("select", { "aria-label": "In place of" }, own.map((a) => h("option", { value: String(a.badgeId), text: `in place of ${a.badgeLabel}` }))) : null;
         parts.push(h("div", { class: "temp-row" },
           h("span", { class: "small-text", text: "Forgot their badge today?" }),
           h("div", { class: "btn-row" }, tmp, forWhich, h("button", { type: "button", class: "secondary small", text: "Lend for today", onclick: async () => {
             try {
               const r = await api(`/api/badges/${tmp.value}/assign`, { method: "POST", body: { kind, holderId, replacesBadgeId: forWhich ? Number(forWhich.value) : own[0].badgeId } });
-              toast(`Badge ${r.badge.number} lent until midnight.`);
+              toast(`Badge ${r.badge.label} lent until midnight.`);
               render();
             } catch (error) {
               toast(error.message, "error");
@@ -453,7 +464,7 @@ function badgeSection(kind, holderId) {
     }
     if (data.past.length) {
       parts.push(h("details", {}, h("summary", { class: "small-text", text: `Earlier badges (${data.past.length})` }),
-        h("ul", { class: "plain-list small-text" }, data.past.map((a) => h("li", {}, h("span", { class: "mono", text: a.badgeNumber }), ` ${fmtDate(a.assignedAt)} to ${fmtDate(a.returnedAt)}${a.outcome === "lost" ? ", lost" : ""}`)))));
+        h("ul", { class: "plain-list small-text" }, data.past.map((a) => h("li", {}, h("span", { class: "mono", text: a.badgeLabel }), ` ${fmtDate(a.assignedAt)} to ${fmtDate(a.returnedAt)}${a.outcome === "lost" ? ", lost" : ""}`)))));
     }
     box.replaceChildren(...parts);
   }

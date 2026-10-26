@@ -424,21 +424,23 @@ function checkInWizard(start = {}) {
       const give = async (payload) => {
         const r = await api(`/api/visits/${w.visit.id}/badge`, { method: "POST", body: payload });
         w.changed = true;
-        doneStep(r.already ? `${name()} has badge ${r.badge.number}. Their check-in is done.` : `${name()} is checked in with badge ${r.badge.number}.`);
+        doneStep(r.already ? `${name()} has badge ${r.badge.label}. Their check-in is done.` : `${name()} is checked in with badge ${r.badge.label}.`);
       };
       const content = h("div", { class: "stack" });
       const a = plan.assigned;
       const why = { event: `Picked for ${a?.eventTitle || "the event they're expected at"}.`, reserved: "Reserved for them." };
 
       // The number typed in, checked against the badges: a visitor badge, valid here, they may hold.
+      // The facility code is needed only when the number is under more than one; the server says so.
+      const code = h("input", { type: "text", autocomplete: "off", inputmode: "numeric", maxlength: "3", class: "mono badge-code-input", placeholder: "Facility code", "aria-label": "Facility code (optional)" });
       const number = h("input", { type: "text", autocomplete: "off", spellcheck: "false", class: "mono badge-number-input", placeholder: "Badge number", "aria-label": "Badge number" });
       const issue = btn("Issue badge", "primary", async () => {
         if (!number.value.trim()) throw new Error("Enter the number on the badge.");
-        await give({ number: number.value.trim() });
+        await give({ number: number.value.trim(), facilityCode: code.value.trim() || undefined });
       });
-      number.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); issue.click(); } });
+      for (const input of [code, number]) input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); issue.click(); } });
       const kinds = [...new Set(plan.available.map((b) => badgeClassText(b)).filter(Boolean))];
-      const free = h("div", { class: "free-badges", hidden: true }, plan.available.map((b) => h("button", { type: "button", class: "chip mono", text: b.number, onclick: () => { number.value = b.number; number.focus(); } })));
+      const free = h("div", { class: "free-badges", hidden: true }, plan.available.map((b) => h("button", { type: "button", class: "chip mono", text: b.label, onclick: () => { code.value = b.facilityCode || ""; number.value = b.number; number.focus(); } })));
       const entry = h("div", { class: "stack badge-entry" },
         h("div", { class: "badge-give" }, suggestedBadge(plan.suggested),
           h("div", { class: "stack" },
@@ -446,28 +448,28 @@ function checkInWizard(start = {}) {
             h("p", {}, plan.available.length
               ? [`Give them ${plan.uncleared ? "an uncleared" : "a"} visitor badge${!plan.uncleared && kinds.length ? ` (${kinds.join(" or ")})` : ""}, and enter its number.`, h("span", { class: "muted small-text", text: ` ${plan.available.length} free${multiSite() ? ` at ${plan.visit.siteName}` : ""}.` })]
               : h("span", { class: "message error", text: `No ${plan.uncleared ? "uncleared " : ""}visitor badge is free${multiSite() ? ` at ${plan.visit.siteName}` : ""} that ${name()} may hold.` })),
-            h("div", { class: "btn-row" }, number, issue),
+            h("div", { class: "btn-row" }, code, number, issue),
             plan.available.length ? h("button", { type: "button", class: "link-btn small-text", text: "Show the free badges", onclick: (e) => { free.hidden = !free.hidden; e.target.textContent = free.hidden ? "Show the free badges" : "Hide the free badges"; } }) : null,
             free)));
 
       if (a && !a.problem) {
-        const handed = btn(a.heldByThem ? "Confirm they have it" : `Badge ${a.number} handed over`, "primary", () => give({ badgeId: a.id }));
+        const handed = btn(a.heldByThem ? "Confirm they have it" : `Badge ${a.label} handed over`, "primary", () => give({ badgeId: a.id }));
         content.append(h("div", { class: "badge-assigned" },
-          templateImg(a.template, { large: true, alt: `Badge ${a.number}` }),
+          templateImg(a.template, { large: true, alt: `Badge ${a.label}` }),
           h("div", { class: "stack" },
             h("p", { class: "badge-assigned-label", text: a.heldByThem ? "They already have their badge" : "Give them badge" }),
-            h("p", { class: "badge-assigned-number mono", text: a.number }),
+            h("p", { class: "badge-assigned-number mono", text: a.label }),
             h("p", { class: "muted small-text", text: why[a.source] || "" }),
             h("div", { class: "btn-row" }, handed))));
         const other = h("button", { type: "button", class: "link-btn", text: "Can't find it? Issue a different badge", onclick: () => { entry.hidden = false; other.hidden = true; number.focus(); } });
         entry.hidden = true;
         content.append(other, entry);
       } else {
-        if (a?.problem) content.append(h("p", { class: "message warn", text: `Badge ${a.number} was kept for them (${why[a.source].replace(/\.$/, "").toLowerCase()}), but it can't be given: ${a.problem} Issue another.` }));
+        if (a?.problem) content.append(h("p", { class: "message warn", text: `Badge ${a.label} was kept for them (${why[a.source].replace(/\.$/, "").toLowerCase()}), but it can't be given: ${a.problem} Issue another.` }));
         if (plan.holding.length) {
           const held = plan.holding[0];
           content.append(h("div", { class: "badge-assigned compact" },
-            h("p", {}, "They still have badge ", h("strong", { class: "mono", text: held.number }), " from before."),
+            h("p", {}, "They still have badge ", h("strong", { class: "mono", text: held.label }), " from before."),
             h("div", { class: "btn-row" }, btn("Confirm they have it", "secondary", () => give({ badgeId: held.id })))));
         }
         content.append(entry);

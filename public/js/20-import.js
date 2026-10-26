@@ -51,6 +51,7 @@ const IMPORT_FIELDS = {
     { key: "blocked", field: "blocked", label: "Blocked", hint: "yes or no", names: ["blocked", "banned", "barred", "denied"] }
   ],
   badges: [
+    { key: "facility_code", label: "Facility code", hint: "2 or 3 digits, if the badge has one", names: ["facilitycode", "facility", "fc", "sitecode", "facilitycodenumber"] },
     { key: "number", label: "Badge number", required: true, names: ["number", "badgenumber", "badgeno", "badge", "no", "cardnumber"] },
     { key: "type", label: "Type", required: true, hint: "personnel (or staff), tenant or visitor", names: ["type", "kind", "badgetype"] },
     { key: "classification", label: "Classification", required: true, hint: "A classification's name, such as Cleared or Uncleared.", names: ["classification", "class"] },

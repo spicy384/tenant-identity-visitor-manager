@@ -597,6 +597,21 @@ back from Badge to ID and Confirm (Back, and the passed steps in the step bar) u
 is given: verify-id now accepts a visit at stage badge too, re-recording the ID and any change
 of contact or purpose (audited as checked again), and refuses once the stage is done.
 
+## Facility codes on badges (2026-10-26)
+
+The user asked for each badge's facility code (2-3 digits, as in CCURE 9000) to be kept apart
+from its number: optional, for Security to keep badges in step with CCURE, and visible to all
+who see badges. Asked whether a number can repeat under different codes: yes. So badges.number
+lost its UNIQUE, and a unique index on (ifnull(facility_code, ''), number NOCASE) took its
+place; SQLite can't drop a column constraint, so db.js rebuilds the badges table once (schema
+10; ids kept, foreign keys off meanwhile and checked after), for a table that still has the old
+UNIQUE. badges.js gives each badge facilityCode and label ("101-12345", or the number alone);
+messages, audits and every screen use the label, the list a column of its own. findByNumber
+returns every badge a typed number could be (with a code: that one; without: all with that
+number, plus "101-12345" written together); the check-in badge step and the reserve dialog ask
+for the code when there are several. Imports match on code and number (findExact). Bulk change
+sets the code. Tests in checkin.test.js and import.test.js.
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

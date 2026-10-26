@@ -106,7 +106,7 @@ function guestBadgeCell(e, g) {
       title: `Badge for ${g.firstName} ${g.lastName}`,
       intro: h("p", { class: "muted", text: "Check-in tells the front desk to hand them this badge when they arrive." }),
       fields: [{ name: "badgeId", label: "Visitor badge", type: "select", required: true, value: g.badge ? String(g.badge.id) : "",
-        options: [{ value: "", label: badges.length ? "Choose a badge" : "No visitor badge is free here" }, ...badges.map((b) => ({ value: String(b.id), label: [b.number, badgeClassText(b)].filter(Boolean).join(" · ") }))] }],
+        options: [{ value: "", label: badges.length ? "Choose a badge" : "No visitor badge is free here" }, ...badges.map((b) => ({ value: String(b.id), label: [b.label, badgeClassText(b)].filter(Boolean).join(" · ") }))] }],
       submitLabel: "Pick badge",
       onSubmit: (v) => api(`/api/events/${e.id}/guests/${g.visitorId}/badge`, { method: "PUT", body: { badgeId: Number(v.badgeId) } })
     });
@@ -121,7 +121,7 @@ function guestBadgeCell(e, g) {
     }
   };
   if (g.badge) {
-    return h("span", { class: "btn-row" }, h("span", { class: "mono", text: g.badge.number }),
+    return h("span", { class: "btn-row" }, h("span", { class: "mono", text: g.badge.label }),
       may ? h("button", { type: "button", class: "link-btn", text: "Change", onclick: pickBadge }) : null,
       may ? h("button", { type: "button", class: "link-btn danger-text", text: "Clear", onclick: clearBadge }) : null);
   }

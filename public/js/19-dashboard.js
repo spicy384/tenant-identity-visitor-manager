@@ -98,7 +98,7 @@ const DASHBOARD_MODULES = {
       const list = [...overdue.badges.map((b) => ({ b, why: "Temporary, overdue" })), ...left.badges.map((b) => ({ b, why: "Visitor has left" }))];
       return { count: list.length, attention: list.length > 0, body: dashList(list.map(({ b, why }) => dashRow({
         href: `#badge/${b.id}`,
-        main: h("span", { class: "with-thumb" }, templateImg(b.template), h("span", { class: "mono", text: b.number })),
+        main: h("span", { class: "with-thumb" }, templateImg(b.template), h("span", { class: "mono", text: b.label })),
         sub: `${b.holder?.name || ""} · ${why}`,
         right: h("span", { class: "muted small-text", text: b.holder ? fmtDateTime(b.holder.assignedAt) : "" })
       })), "Every badge is where it should be.", { more: "#badges/visitors" }) };

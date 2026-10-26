@@ -19,7 +19,7 @@ const DB_FILE = "identity.db";
 // 6: badge template images, and which roles see clearance levels. 7: kiosk visits waiting for a badge.
 // 8: facilities (floors, offices, office assignments, rates) and the roles that reach them.
 // 9: room types and classified subcategories, each with a color.
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 function fail(status, message) {
   const error = new Error(message);
@@ -260,9 +260,12 @@ CREATE TABLE IF NOT EXISTS badge_classifications (
   created_at INTEGER NOT NULL
 );
 
+-- A badge is its facility code (optional, 2-3 digits, as in CCURE 9000) and its number; the
+-- same number may be under several facility codes. Unique together (badgeKeyIndex below).
 CREATE TABLE IF NOT EXISTS badges (
   id INTEGER PRIMARY KEY,
-  number TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  number TEXT NOT NULL COLLATE NOCASE,
+  facility_code TEXT,
   type TEXT NOT NULL,
   classification_id INTEGER REFERENCES badge_classifications(id),
   clearance_level_id INTEGER REFERENCES clearance_levels(id),
@@ -460,6 +463,7 @@ const ADDED_COLUMNS = [
   ["roles", "badges", "TEXT NOT NULL DEFAULT 'none'"],
   // Temporary badges, lent for a day to someone who forgot theirs.
   ["badges", "temporary", "INTEGER NOT NULL DEFAULT 0"],
+  ["badges", "facility_code", "TEXT"],
   ["badge_assignments", "temporary", "INTEGER NOT NULL DEFAULT 0"],
   ["badge_assignments", "replaces_badge_id", "INTEGER REFERENCES badges(id) ON DELETE SET NULL"],
   ["badge_assignments", "due_at", "INTEGER"],
@@ -508,6 +512,43 @@ function addColumns(db) {
   }
   // Badges first had one site (badges.site_id); now a list in badge_sites. Moved once.
   db.exec("INSERT OR IGNORE INTO badge_sites (badge_id, site_id) SELECT id, site_id FROM badges WHERE site_id IS NOT NULL; UPDATE badges SET site_id = NULL WHERE site_id IS NOT NULL;");
+  rebuildBadges(db);
+  db.exec(BADGE_KEY_INDEX);
+}
+
+// A badge's number is unique within its facility code (no code counts as one code of its own).
+const BADGE_KEY_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS badges_facility_number ON badges (ifnull(facility_code, ''), number COLLATE NOCASE)";
+
+/**
+ * Badge numbers were first unique on their own (number ... UNIQUE). SQLite can't drop that
+ * from a table, so a table that still has it is rebuilt as the schema now has it, ids kept,
+ * once. Foreign keys are off meanwhile (the tables pointing at badges keep pointing at the
+ * rebuilt one by name), and checked before the change is kept.
+ */
+function rebuildBadges(db) {
+  const oldUnique = db.prepare("PRAGMA index_list(badges)").all()
+    .some((i) => i.origin === "u" && db.prepare(`PRAGMA index_info("${i.name.replace(/"/g, '""')}")`).all().map((c) => c.name).join() === "number");
+  if (!oldUnique) return;
+  const create = SCHEMA.match(/CREATE TABLE IF NOT EXISTS badges \(([\s\S]*?)\n\);/);
+  const columns = db.prepare("PRAGMA table_info(badges)").all().map((c) => c.name);
+  const list = columns.map((c) => `"${c}"`).join(", ");
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      // The schema's columns, then any added later (ADDED_COLUMNS) that it doesn't list.
+      const schemaColumns = create[1].split("\n").map((l) => l.trim().split(/\s+/)[0]).filter((c) => /^[a-z_]+$/.test(c));
+      const extra = db.prepare("PRAGMA table_info(badges)").all().filter((c) => !schemaColumns.includes(c.name))
+        .map((c) => `, ${c.name} ${c.type}${c.notnull ? " NOT NULL" : ""}${c.dflt_value !== null ? ` DEFAULT ${c.dflt_value}` : ""}`).join("");
+      db.exec(`CREATE TABLE badges_rebuilt (${create[1]}${extra}\n)`);
+      db.exec(`INSERT INTO badges_rebuilt (${list}) SELECT ${list} FROM badges`);
+      db.exec("DROP TABLE badges");
+      db.exec("ALTER TABLE badges_rebuilt RENAME TO badges");
+      const broken = db.prepare("PRAGMA foreign_key_check").all();
+      if (broken.length) throw fail(500, `Rebuilding the badges table left ${broken.length} broken reference(s); nothing was changed.`);
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
 }
 
 function openDatabase({ dataDir, key, file = DB_FILE }) {

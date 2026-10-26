@@ -189,6 +189,16 @@ async function main() {
   r = await security.post(`/api/import/${token}/run`, { table: "Badge Stock", target: "badges", mapping: stock });
   check("badges: importing again updates them by number", r.data.added === 0 && r.data.updated === 4);
   check("badges: in the audit log", (await admin.get("/api/audit?action=import.badges")).data.entries.length === 2);
+  // Facility codes: the same number under two codes is two badges; importing again matches code and number.
+  const coded = Buffer.from("FC,Card,Kind,Class\n101,55501,visitor,Uncleared\n205,55501,visitor,Uncleared\n", "utf8");
+  const codedMap = { facility_code: { column: "FC" }, number: { column: "Card" }, type: { column: "Kind" }, classification: { column: "Class" } };
+  r = await security.post(`/api/import/${(await security.upload("/api/import/read?name=coded.csv", coded)).data.token}/run`, { table: "CSV", target: "badges", mapping: codedMap });
+  check("badges: the same number under two facility codes is two badges", r.status === 200 && r.data.added === 2, JSON.stringify(r.data));
+  r = await security.post(`/api/import/${(await security.upload("/api/import/read?name=coded.csv", coded)).data.token}/run`, { table: "CSV", target: "badges", mapping: codedMap });
+  check("badges: importing them again updates each by facility code and number", r.data.added === 0 && r.data.updated === 2);
+  check("badges: listed with their facility codes", (await security.get("/api/badges?q=55501")).data.badges.map((b) => b.label).sort().join() === "101-55501,205-55501");
+  r = await security.post(`/api/import/${(await security.upload("/api/import/read?name=bad.csv", Buffer.from("FC,Card,Kind,Class\n1234,55502,visitor,Uncleared\n"))).data.token}/run`, { table: "CSV", target: "badges", mapping: codedMap });
+  check("badges: a facility code that isn't 2-3 digits is refused", r.status === 400 && /2 or 3 digits/.test(r.data.error));
 
   // --- CSV through the same steps, with a value for every row -----------------------------------------------
   const csv = Buffer.from("﻿Given Name,Family Name,E-mail\r\nKay,Kiosk,kay@acme.example\r\nLee,Lobby,\r\n", "utf8");

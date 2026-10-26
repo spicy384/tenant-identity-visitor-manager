@@ -9,6 +9,8 @@
  */
 const { today } = require("./clearance");
 
+const { badgeLabel } = require("./badges");
+
 function fail(status, message) {
   const error = new Error(message);
   error.status = status;
@@ -27,7 +29,7 @@ function createEvents({ db, now = Date.now }) {
   function guestsOf(eventIds) {
     const out = new Map();
     if (!eventIds.length) return out;
-    const rows = raw.prepare(`SELECT g.event_id, g.visitor_id, g.visit_id, g.badge_id, b.number AS badge_number, v.first_name, v.last_name, v.organisation, v.blocked, x.checked_in_at, x.checked_out_at, x.checkin_stage
+    const rows = raw.prepare(`SELECT g.event_id, g.visitor_id, g.visit_id, g.badge_id, b.number AS badge_number, b.facility_code AS badge_code, v.first_name, v.last_name, v.organisation, v.blocked, x.checked_in_at, x.checked_out_at, x.checkin_stage
       FROM event_guests g JOIN visitors v ON v.id = g.visitor_id LEFT JOIN visits x ON x.id = g.visit_id LEFT JOIN badges b ON b.id = g.badge_id
       WHERE g.event_id IN (${inList(eventIds)}) ORDER BY v.last_name COLLATE NOCASE, v.first_name COLLATE NOCASE`).all(...eventIds);
     for (const r of rows) {
@@ -43,7 +45,7 @@ function createEvents({ db, now = Date.now }) {
         // Arrived, but the desk hasn't finished checking them in (their ID, or a badge).
         checkinStage: r.visit_id && !r.checked_out_at && ["id", "badge"].includes(r.checkin_stage) ? r.checkin_stage : null,
         // The visitor badge picked for them ahead of time.
-        badge: r.badge_id ? { id: r.badge_id, number: r.badge_number } : null,
+        badge: r.badge_id ? { id: r.badge_id, number: r.badge_number, facilityCode: r.badge_code ?? null, label: badgeLabel(r.badge_code, r.badge_number) } : null,
         arrivedAt: r.checked_in_at ?? null,
         leftAt: r.checked_out_at ?? null
       });
@@ -195,8 +197,9 @@ function createEvents({ db, now = Date.now }) {
     if (!event) throw fail(404, "No such event.");
     if (!raw.prepare("SELECT 1 FROM event_guests WHERE event_id = ? AND visitor_id = ?").get(event.id, Number(visitorId))) throw fail(404, "They aren't a guest at this event.");
     if (badgeId !== null) {
-      const badge = raw.prepare("SELECT id, number, type, status FROM badges WHERE id = ?").get(Number(badgeId));
+      const badge = raw.prepare("SELECT id, number, facility_code, type, status FROM badges WHERE id = ?").get(Number(badgeId));
       if (!badge) throw fail(404, "No such badge.");
+      badge.number = badgeLabel(badge.facility_code, badge.number); // named with its code below
       if (badge.type !== "visitor") throw fail(400, `Badge ${badge.number} isn't a visitor badge.`);
       if (badge.status !== "active") throw fail(400, `Badge ${badge.number} is ${badge.status}.`);
       const sitesOf = raw.prepare("SELECT site_id FROM badge_sites WHERE badge_id = ?").all(badge.id).map((r) => r.site_id);
@@ -213,9 +216,9 @@ function createEvents({ db, now = Date.now }) {
 
   /** The badge picked ahead for the event guest this visit is (null if none), with the event's title. */
   function badgeForVisit(visitId) {
-    const r = raw.prepare(`SELECT g.badge_id, b.number, e.title FROM event_guests g JOIN visitor_events e ON e.id = g.event_id JOIN badges b ON b.id = g.badge_id
+    const r = raw.prepare(`SELECT g.badge_id, b.number, b.facility_code, e.title FROM event_guests g JOIN visitor_events e ON e.id = g.event_id JOIN badges b ON b.id = g.badge_id
       WHERE g.visit_id = ? ORDER BY coalesce(e.start_time, '99') LIMIT 1`).get(Number(visitId));
-    return r ? { id: r.badge_id, number: r.number, eventTitle: r.title } : null;
+    return r ? { id: r.badge_id, number: r.number, label: badgeLabel(r.facility_code, r.number), eventTitle: r.title } : null;
   }
 
   /**

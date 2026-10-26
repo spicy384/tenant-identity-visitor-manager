@@ -161,6 +161,15 @@ The design and decisions are in [PLAN.md](PLAN.md).
   the classification needs one, a clearance level; and the sites it is valid at (any number,
   or every site). Add them one at a time
   or as a numbered range (B-0001 to B-0050). Statuses: active, lost, retired.
+- **Facility codes.** A badge can also have a facility code (2 or 3 digits), kept apart from
+  its number as CCURE 9000 keeps it. It is optional, Security sets it (one at a time, for a
+  range, by changing several badges at once, or from an import's facility code column), and
+  everyone who sees badges sees it, in a column of its own. The same number can be under
+  several facility codes; a number is unique within its code (no code counts as a code of its
+  own). Elsewhere a badge is written with its code: 101-12345. Where someone types a badge's
+  number (giving a visitor their badge at check-in, reserving one), the code can be left out
+  while the number is unique, given in its own box, or written in (101-12345); when the number
+  is under several codes, the app names them and asks for the code.
 - **Who may hold what.** Personnel badges go to people of companies marked **Building
   staff**, tenant badges to everyone else's people, visitor badges to visitors. A badge with
   a clearance level goes only to someone whose clearance covers it. A badge can be given to

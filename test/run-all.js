@@ -18,7 +18,8 @@ const SUITES = [
   "import.test.js",
   "bulk.test.js",
   "facilities.test.js",
-  "roles.test.js"
+  "roles.test.js",
+  "frontend.test.js"
 ];
 
 let failed = 0;
