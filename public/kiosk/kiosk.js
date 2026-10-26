@@ -346,7 +346,7 @@ async function openDetails(flow) {
     const words = typedName().split(" ");
     $("first-name").value = words[0] || "";
     $("last-name").value = words.slice(1).join(" ");
-    $("organisation").value = "";
+    $("organization").value = "";
     $("contact").value = "";
     pickType("Guest");
   }
@@ -380,9 +380,9 @@ $("details-form").addEventListener("submit", async (e) => {
     setError("details-error", "Please enter your first and last name.");
     return;
   }
-  if (k.flow === "new" && !$("organisation").value.trim()) {
+  if (k.flow === "new" && !$("organization").value.trim()) {
     setError("details-error", "Please enter your company.");
-    $("organisation").focus();
+    $("organization").focus();
     return;
   }
   if (!k.company) {
@@ -392,8 +392,8 @@ $("details-form").addEventListener("submit", async (e) => {
   }
   const body = { companyId: k.company.id, hostId: k.hostId };
   if (k.flow === "new") {
-    body.visitor = { firstName: $("first-name").value.trim(), lastName: $("last-name").value.trim(), organisation: $("organisation").value.trim(), contact: $("contact").value.trim(), visitorType: k.visitorType };
-    askVisitInfo(body, { organisation: false, citizenship: true });
+    body.visitor = { firstName: $("first-name").value.trim(), lastName: $("last-name").value.trim(), organization: $("organization").value.trim(), contact: $("contact").value.trim(), visitorType: k.visitorType };
+    askVisitInfo(body, { organization: false, citizenship: true });
   } else {
     body.ref = k.match.ref;
     askVisitInfo(body, k.match.needs);
@@ -403,12 +403,12 @@ $("details-form").addEventListener("submit", async (e) => {
 // --- the visit screen: what it's for, and their company and citizenship if we don't have them ---
 
 function askVisitInfo(body, needs = {}) {
-  k.pending = { body, needs: { organisation: Boolean(needs.organisation), citizenship: Boolean(needs.citizenship) } };
+  k.pending = { body, needs: { organization: Boolean(needs.organization), citizenship: Boolean(needs.citizenship) } };
   k.citizen = null;
   k.country = null;
   $("purpose").value = "";
-  $("info-organisation").value = "";
-  $("info-org").hidden = !k.pending.needs.organisation;
+  $("info-organization").value = "";
+  $("info-org").hidden = !k.pending.needs.organization;
   $("info-citizen").hidden = !k.pending.needs.citizenship;
   pickCitizen(null);
   setError("info-error", "");
@@ -477,10 +477,10 @@ $("info-form").addEventListener("submit", async (e) => {
     $("purpose").focus();
     return;
   }
-  const organisation = $("info-organisation").value.trim();
-  if (needs.organisation && !organisation) {
+  const organization = $("info-organization").value.trim();
+  if (needs.organization && !organization) {
     setError("info-error", "Please enter your company.");
-    $("info-organisation").focus();
+    $("info-organization").focus();
     return;
   }
   let citizenship = null;
@@ -495,7 +495,7 @@ $("info-form").addEventListener("submit", async (e) => {
   }
   const send = { ...body, purpose };
   if (send.visitor) send.visitor = { ...send.visitor, citizenship };
-  else send.details = { ...(needs.organisation ? { organisation } : {}), ...(citizenship ? { citizenship } : {}) };
+  else send.details = { ...(needs.organization ? { organization } : {}), ...(citizenship ? { citizenship } : {}) };
   await checkIn(send, null, $("info-submit"));
 });
 

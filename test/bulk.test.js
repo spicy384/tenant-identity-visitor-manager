@@ -66,15 +66,15 @@ async function main() {
   }
 
   const admin = client();
-  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbour Point" });
-  const harbour = (await admin.get("/api/config")).data.sites[0];
+  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbor Point" });
+  const harbor = (await admin.get("/api/config")).data.sites[0];
   const river = (await admin.post("/api/sites", { name: "Riverside", timeZone: "UTC" })).data.site;
   const field = (await admin.post("/api/fields", { entity: "company", label: "Account manager", type: "text", visibility: "all" })).data.field;
   const mk = async (name, sites, extra = {}) => (await admin.post("/api/companies", { name, sites, ...extra })).data.company;
-  const acme = await mk("Acme", [{ siteId: harbour.id, suite: "Suite 100" }], { phone: "555-0100", custom: { [field.key]: "Dana" } });
+  const acme = await mk("Acme", [{ siteId: harbor.id, suite: "Suite 100" }], { phone: "555-0100", custom: { [field.key]: "Dana" } });
   const acmeInc = await mk("Acme Inc", [{ siteId: river.id, suite: "Unit 4" }], { phone: "555-0400", custom: { [field.key]: "Eve" } });
-  const acmeCorp = await mk("ACME Corporation", [{ siteId: harbour.id, suite: "Suite 200" }]);
-  const other = await mk("Globex", [{ siteId: harbour.id }]);
+  const acmeCorp = await mk("ACME Corporation", [{ siteId: harbor.id, suite: "Suite 200" }]);
+  const other = await mk("Globex", [{ siteId: harbor.id }]);
   const person = async (firstName, lastName, companyId, extra = {}) => (await admin.post("/api/people", { firstName, lastName, companyId, ...extra })).data.person;
   const ann = await person("Ann", "Able", acme.id);
   const bob = await person("Bob", "Baker", acmeInc.id, { siteId: river.id });
@@ -88,26 +88,26 @@ async function main() {
   const visit = (await admin.post("/api/visits", { visitorId: vera.id, siteId: river.id, companyId: acmeInc.id })).data.visit;
   const event = (await admin.post("/api/events", { siteId: river.id, title: "Review", date: "2099-01-01", companyId: acmeInc.id })).data.event;
 
-  const pw = { manny: password(), desk: password(), harbourManager: password() };
+  const pw = { manny: password(), desk: password(), harborManager: password() };
   await admin.post("/api/users", { username: "manny", password: pw.manny, role: "manager" });
   await admin.post("/api/users", { username: "desk", password: pw.desk, role: "frontdesk" });
-  await admin.post("/api/users", { username: "harbourManager", password: pw.harbourManager, role: "manager", sites: [harbour.id] });
+  await admin.post("/api/users", { username: "harborManager", password: pw.harborManager, role: "manager", sites: [harbor.id] });
   const as = async (u) => { const c = client(); await c.post("/api/auth/login", { username: u, password: pw[u] }); return c; };
   const manager = await as("manny");
   const desk = await as("desk");
-  const harbourManager = await as("harbourManager");
+  const harborManager = await as("harborManager");
 
   // --- merging companies ---------------------------------------------------------------------------
   const mergeBody = { intoId: acme.id, fromIds: [acmeInc.id, acmeCorp.id], company: { name: "Acme Corporation", custom: { [field.key]: "Eve" } } };
   check("merge: front desk can't (it only reads the directory)", (await desk.post("/api/companies/merge", mergeBody)).status === 403);
-  check("merge: nor someone who can't see one of them", (await harbourManager.post("/api/companies/merge", mergeBody)).status === 404);
+  check("merge: nor someone who can't see one of them", (await harborManager.post("/api/companies/merge", mergeBody)).status === 404);
   check("merge: needs another company", (await manager.post("/api/companies/merge", { intoId: acme.id, fromIds: [acme.id] })).status === 400);
   let r = await manager.post("/api/companies/merge", mergeBody);
   check("merge: a manager merges two into one", r.status === 200 && r.data.peopleMoved === 2 && r.data.merged.sort().join() === "ACME Corporation,Acme Inc", JSON.stringify(r.data));
   check("merge: the kept company takes a merged one's name", r.data.company.name === "Acme Corporation" && r.data.company.id === acme.id);
   const merged = (await admin.get(`/api/companies/${acme.id}`)).data;
   check("merge: everyone is in it", merged.people.map((p) => p.firstName).sort().join() === "Ann,Bob,Cat");
-  check("merge: at every site any of them was, with their suites", merged.company.sites.map((s) => `${s.siteName}: ${s.suite}`).sort().join("; ") === "Harbour Point: Suite 100; Riverside: Unit 4");
+  check("merge: at every site any of them was, with their suites", merged.company.sites.map((s) => `${s.siteName}: ${s.suite}`).sort().join("; ") === "Harbor Point: Suite 100; Riverside: Unit 4");
   check("merge: a person keeps their site where the company still is", merged.people.find((p) => p.firstName === "Bob").siteId === river.id);
   check("merge: the field value chosen is kept", merged.company.custom[field.key] === "Eve" && merged.company.phone === "555-0100");
   check("merge: a field added to a merged company alone comes along, value and all", merged.company.custom[own.key] === "Dock 3" && merged.fields.some((f) => f.key === own.key && f.recordOnly));
@@ -189,8 +189,8 @@ async function main() {
   check("badges: deleted together", r.status === 200 && r.data.deleted === 2 && (await security.get(`/api/badges/${b1.id}`)).status === 404);
 
   // --- custom badge fields --------------------------------------------------------------------------
-  const lanyard = (await admin.post("/api/fields", { entity: "badge", label: "Lanyard colour", type: "text", visibility: "all" })).data.field;
-  check("badge fields: an administrator adds one", lanyard && lanyard.entity === "badge" && lanyard.key === "lanyard_colour");
+  const lanyard = (await admin.post("/api/fields", { entity: "badge", label: "Lanyard color", type: "text", visibility: "all" })).data.field;
+  check("badge fields: an administrator adds one", lanyard && lanyard.entity === "badge" && lanyard.key === "lanyard_color");
   const grid = (await admin.get("/api/field-access")).data;
   const gridField = grid.entities.badge.find((f) => f.apiKey === lanyard.key);
   const cell = (role) => gridField.access[role];

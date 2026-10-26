@@ -184,7 +184,7 @@ async function showClearance() {
       h("thead", {}, h("tr", {}, ["Name", "Clearance on record", "Requested", "Note", "SSN last four", ""].map((t) => h("th", { text: t })))),
       h("tbody", {}, data.requests.map((q) => h("tr", {},
         h("td", {}, h("a", { href: q.kind === "visitor" ? `#visitor/${q.holderId}` : `#person/${q.holderId}`, text: q.name }),
-          h("div", { class: "muted small-text", text: [q.kind === "visitor" ? "Visitor" : "Person", q.organisation].filter(Boolean).join(" · ") })),
+          h("div", { class: "muted small-text", text: [q.kind === "visitor" ? "Visitor" : "Person", q.organization].filter(Boolean).join(" · ") })),
         h("td", { class: "small-text" }, q.currentLevel || "None", q.lastValidatedAt ? h("div", { class: "muted", text: `last validated ${fmtDate(q.lastValidatedAt)}` }) : null),
         h("td", { class: "small-text nowrap" }, fmtDateTime(q.requestedAt), q.requestedBy ? h("div", { class: "muted", text: `by ${q.requestedBy}` }) : null),
         h("td", { class: "small-text", text: q.note || "" }),
@@ -195,7 +195,7 @@ async function showClearance() {
             if (!(await confirmDialog(`Cancel the request for ${q.name}?${q.digitsHeld ? " The SSN digits given with it are wiped." : ""}`, { confirmLabel: "Cancel request", danger: true }))) return;
             try {
               await api(`/api/clearance/requests/${q.id}/cancel`, { method: "POST" });
-              toast("Request cancelled.");
+              toast("Request canceled.");
               refreshCounts();
               showClearance();
             } catch (error) {
@@ -252,7 +252,7 @@ function clearanceTable(list, columns, empty) {
   return h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
     h("thead", {}, h("tr", {}, ["Name", ...columns.map((c) => c.label), ""].map((t) => h("th", { text: t })))),
     h("tbody", {}, list.map((x) => h("tr", {},
-      h("td", {}, h("a", { href: holderHref(x), text: x.name }), h("div", { class: "muted small-text", text: [x.kind === "visitor" ? "Visitor" : "Person", x.organisation].filter(Boolean).join(" · ") })),
+      h("td", {}, h("a", { href: holderHref(x), text: x.name }), h("div", { class: "muted small-text", text: [x.kind === "visitor" ? "Visitor" : "Person", x.organization].filter(Boolean).join(" · ") })),
       columns.map((c) => h("td", { class: "small-text" }, c.cell(x))),
       h("td", {}, isSecurity() ? h("button", { type: "button", class: "secondary small", text: "Validate", onclick: () => validateHolder(x, () => showClearances()) }) : null))))));
 }

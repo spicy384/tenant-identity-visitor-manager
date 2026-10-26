@@ -9,7 +9,7 @@
  */
 
 /** Lower-case letters and digits, words separated by single spaces. */
-function normaliseName(value) {
+function normalizeName(value) {
   return String(value || "")
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
@@ -54,7 +54,7 @@ function partScore(typed, stored) {
 
 /** True when `typed` is a full name: two or more words of two or more letters each. */
 function isFullName(typed) {
-  const words = normaliseName(typed).split(" ").filter(Boolean);
+  const words = normalizeName(typed).split(" ").filter(Boolean);
   return words.length >= 2 && words.every((w) => w.length >= 2);
 }
 
@@ -64,10 +64,10 @@ function isFullName(typed) {
  * last part is tried, in both orders.
  */
 function nameScore(typed, person) {
-  const words = normaliseName(typed).split(" ").filter(Boolean);
+  const words = normalizeName(typed).split(" ").filter(Boolean);
   if (words.length < 2) return null;
-  const firsts = [normaliseName(person.firstName), normaliseName(person.preferredName)].filter(Boolean);
-  const last = normaliseName(person.lastName);
+  const firsts = [normalizeName(person.firstName), normalizeName(person.preferredName)].filter(Boolean);
+  const last = normalizeName(person.lastName);
   let best = null;
   for (let i = 1; i < words.length; i += 1) {
     const head = words.slice(0, i).join(" ");
@@ -109,4 +109,4 @@ function splitName(typed) {
   return { firstName: words[0], lastName: words.slice(1).join(" ") };
 }
 
-module.exports = { normaliseName, editDistance, nameScore, matchNames, isFullName, splitName };
+module.exports = { normalizeName, editDistance, nameScore, matchNames, isFullName, splitName };

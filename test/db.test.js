@@ -24,7 +24,7 @@ const db = openDatabase({ dataDir, key });
 const fields = createFields({ db });
 const sites = createSites({ db });
 const directory = createDirectory({ db, fields });
-const site = sites.ensureDefault("Harbour Point");
+const site = sites.ensureDefault("Harbor Point");
 const company = directory.createCompany({ name: "Quartz Holdings", sites: [{ siteId: site.id, suite: "Suite 9" }] });
 directory.createPerson({ firstName: "Zebulon", lastName: "Quartermaine", companyId: company.id, email: "zeb@quartz.example" });
 db.writeDoc("users", [{ username: "secret-admin", passwordHash: "scrypt$x" }]);
@@ -126,6 +126,28 @@ afterScript.close();
 
 const gen = spawnSync(process.execPath, [path.join(__dirname, "..", "scripts", "new-key.js"), newKeyFile], { encoding: "utf8" });
 check("npm run new-key refuses to overwrite an existing key file", gen.status !== 0);
+
+// --- names first spelled the British way, renamed once ------------------------------------------
+
+{
+  const oldDir = path.join(tmp, "spelling");
+  const oldKey = generateKey();
+  const old = "organi" + "sation";
+  let d = openDatabase({ dataDir: oldDir, key: oldKey });
+  // As a database from before: the column, its row in the field access grid, a canceled request.
+  d.raw.exec(`ALTER TABLE visitors RENAME COLUMN organization TO ${old}`);
+  d.raw.prepare(`INSERT INTO visitors (first_name, last_name, ${old}, created_at, updated_at) VALUES ('Ada', 'Old', 'Navy', 0, 0)`).run();
+  d.raw.prepare("INSERT INTO roles (id, name, kind, created_at) VALUES ('desk2', 'Desk 2', 'user', 0)").run();
+  d.raw.prepare("INSERT INTO field_policies (role_id, entity, field, access) VALUES ('desk2', 'visitor', ?, 'view')").run(old);
+  d.raw.prepare("INSERT INTO clearance_requests (holder_kind, holder_id, status, requested_at) VALUES ('visitor', 1, ?, 0)").run("cancel" + "led");
+  d.close();
+  d = openDatabase({ dataDir: oldDir, key: oldKey });
+  const cols = d.raw.prepare("PRAGMA table_info(visitors)").all().map((c) => c.name);
+  check("spelling: the visitors' company column is organization now, its data kept", cols.includes("organization") && !cols.includes(old) && d.raw.prepare("SELECT organization FROM visitors").get().organization === "Navy");
+  check("spelling: and its row in the field access grid", d.raw.prepare("SELECT field FROM field_policies WHERE role_id = 'desk2'").get().field === "organization");
+  check("spelling: canceled requests too", d.raw.prepare("SELECT status FROM clearance_requests").get().status === "canceled");
+  d.close();
+}
 
 fs.rmSync(tmp, { recursive: true, force: true });
 process.exit(report() ? 0 : 1);

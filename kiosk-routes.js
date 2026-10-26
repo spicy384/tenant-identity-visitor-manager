@@ -165,7 +165,7 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
     countLookup(req);
     const ids = visitors.findByName(name).slice(0, 5);
     const matches = ids.map((id) => {
-      const v = raw.prepare("SELECT id, first_name, organisation, citizenship FROM visitors WHERE id = ?").get(id);
+      const v = raw.prepare("SELECT id, first_name, organization, citizenship FROM visitors WHERE id = ?").get(id);
       const links = raw.prepare(`SELECT l.company_id, c.name AS company_name, p.id AS host_id, p.first_name, p.last_name, p.preferred_name, p.active AS host_active
         FROM visitor_links l JOIN companies c ON c.id = l.company_id JOIN company_sites cs ON cs.company_id = c.id AND cs.site_id = ?
         LEFT JOIN people p ON p.id = l.host_id WHERE l.visitor_id = ? AND c.active = 1 ORDER BY c.name`).all(req.site.id, id);
@@ -175,7 +175,7 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
       return {
         ref: makeRef(req.kiosk.id, "visitor", id),
         firstName: v.first_name,
-        needs: { organisation: !v.organisation, citizenship: !v.citizenship },
+        needs: { organization: !v.organization, citizenship: !v.citizenship },
         companies: [...expected.filter((e, i) => expected.findIndex((x) => x.companyId === e.companyId) === i), ...links.filter((l) => !seen.has(l.company_id)).map((l) => ({
           companyId: l.company_id,
           companyName: l.company_name,
@@ -189,9 +189,9 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
 
   /**
    * Checks someone in, for the front desk to check their ID and give them a badge. Either
-   * `ref` (from a lookup), with `details` { organisation, citizenship } filling in what their
+   * `ref` (from a lookup), with `details` { organization, citizenship } filling in what their
    * record lacks (never changing what it has), or `visitor` { firstName, lastName,
-   * organisation, citizenship, visitorType, contact } for someone new; plus `companyId`,
+   * organization, citizenship, visitorType, contact } for someone new; plus `companyId`,
    * optional `hostId`, and `purpose`.
    */
   router.post("/checkin", (req, res) => {
@@ -216,12 +216,12 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
     if (body.ref) {
       visitorId = takeRef(req.kiosk.id, "visitor", body.ref);
       if (!visitorId) throw fail(409, "That took a little long. Please start again.");
-      const known = raw.prepare("SELECT organisation, citizenship FROM visitors WHERE id = ?").get(visitorId);
+      const known = raw.prepare("SELECT organization, citizenship FROM visitors WHERE id = ?").get(visitorId);
       const d = body.details || {};
       const fill = {};
-      if (!known.organisation) {
-        fill.organisation = String(d.organisation || "").trim().slice(0, 120);
-        if (!fill.organisation) throw fail(400, "Please enter your company.");
+      if (!known.organization) {
+        fill.organization = String(d.organization ?? d.organisation ?? "").trim().slice(0, 120);
+        if (!fill.organization) throw fail(400, "Please enter your company.");
       }
       if (!known.citizenship) fill.citizenship = citizenshipOf(d.citizenship);
       if (Object.keys(fill).length) visitors.update(visitorId, fill, {});
@@ -231,11 +231,13 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
       const contact = String(v.contact || "").trim().slice(0, 254);
       const isEmail = contact.includes("@");
       if (isEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) throw fail(400, "That email address doesn't look right.");
-      if (!String(v.organisation || "").trim()) throw fail(400, "Please enter your company.");
+      // A kiosk page from before the spelling changed sends the British one, until it reloads.
+      if (v.organization === undefined && v.organisation !== undefined) v.organization = v.organisation;
+      if (!String(v.organization || "").trim()) throw fail(400, "Please enter your company.");
       const visitor = visitors.create({
         firstName: v.firstName,
         lastName: v.lastName,
-        organisation: v.organisation,
+        organization: v.organization,
         citizenship: citizenshipOf(v.citizenship),
         visitorType: VISITOR_TYPES.includes(v.visitorType) ? v.visitorType : "Guest",
         email: isEmail ? contact : undefined,

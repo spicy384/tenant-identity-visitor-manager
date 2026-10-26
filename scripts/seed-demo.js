@@ -35,8 +35,8 @@ const directory = createDirectory({ db, fields });
 const clearance = createClearance({ db });
 const badges = createBadges({ db, clearance });
 const [first] = sites.list();
-const harbour = first ? sites.update(first.id, { name: "Harbour Point", kioskName: "Welcome to Harbour Point", welcome: "Please sign in at reception", endOfDay: "18:00", timeZone: "America/New_York" }) : sites.create({ name: "Harbour Point", timeZone: "America/New_York", endOfDay: "18:00" });
-const riverside = sites.create({ name: "Riverside Centre", timeZone: "America/New_York", endOfDay: "19:00", welcome: "Visitors check in here" });
+const harbor = first ? sites.update(first.id, { name: "Harbor Point", kioskName: "Welcome to Harbor Point", welcome: "Please sign in at reception", endOfDay: "18:00", timeZone: "America/New_York" }) : sites.create({ name: "Harbor Point", timeZone: "America/New_York", endOfDay: "18:00" });
+const riverside = sites.create({ name: "Riverside Center", timeZone: "America/New_York", endOfDay: "19:00", welcome: "Visitors check in here" });
 
 function field(entity, label, type, visibility, extra = {}) {
   const def = fields.create({ entity, label, type, ...extra });
@@ -49,14 +49,14 @@ field("company", "Lease ends", "date", "editors");
 field("company", "Tenant tier", "choice", "all", { choices: ["Standard", "Premier", "Anchor"] });
 
 const companies = [
-  ["Northwind Traders", [[harbour.id, "Suite 1200"]], "Premier"],
-  ["Contoso Legal", [[harbour.id, "Suite 900"]], "Standard"],
-  ["Fabrikam Design", [[harbour.id, "Floor 4"], [riverside.id, "Unit 12"]], "Anchor"],
+  ["Northwind Traders", [[harbor.id, "Suite 1200"]], "Premier"],
+  ["Contoso Legal", [[harbor.id, "Suite 900"]], "Standard"],
+  ["Fabrikam Design", [[harbor.id, "Floor 4"], [riverside.id, "Unit 12"]], "Anchor"],
   ["Tailspin Toys", [[riverside.id, "Unit 3"]], "Standard"],
-  ["Woodgrove Bank", [[harbour.id, "Floors 10-11"]], "Anchor"],
+  ["Woodgrove Bank", [[harbor.id, "Floors 10-11"]], "Anchor"],
   ["Adatum Health", [[riverside.id, "Unit 7"]], "Premier"],
   ["Litware Labs", [[riverside.id, "Unit 21"]], "Standard"],
-  ["Proseware Consulting", [[harbour.id, "Suite 610"]], "Standard"]
+  ["Proseware Consulting", [[harbor.id, "Suite 610"]], "Standard"]
 ];
 const firstNames = ["Avery", "Jordan", "Priya", "Mateo", "Hannah", "Kwame", "Sofia", "Liam", "Mei", "Noah", "Amara", "Diego", "Elena", "Omar", "Grace", "Tariq"];
 const lastNames = ["Patel", "Okafor", "Nguyen", "Garcia", "Kowalski", "Haddad", "Reyes", "Lindqvist", "Tanaka", "Murphy", "Adeyemi", "Schmidt"];
@@ -90,7 +90,7 @@ db.writeDoc("users", accounts.map((a) => ({
   totpSecret: null, mfaEnrolled: false, lastTotpCounter: 0, recoveryCodes: [], createdAt: Date.now(), lastLoginAt: null, failedAttempts: 0, lockedUntil: null
 })));
 // Building security, and a stock of badges.
-directory.createCompany({ name: "Harbour Point Security", buildingStaff: true, phone: "555-0911", sites: [{ siteId: harbour.id, suite: "Lobby desk" }, { siteId: riverside.id, suite: "Security office" }] });
+directory.createCompany({ name: "Harbor Point Security", buildingStaff: true, phone: "555-0911", sites: [{ siteId: harbor.id, suite: "Lobby desk" }, { siteId: riverside.id, suite: "Security office" }] });
 const cls = Object.fromEntries(clearance.classifications().map((c) => [c.name, c.id]));
 const lvl = Object.fromEntries(clearance.levels().map((l) => [l.name, l.id]));
 badges.createRange({ prefix: "P-", from: 1, to: 6, width: 3, type: "personnel", classificationId: cls.Cleared, clearanceLevelId: lvl.TS });

@@ -3,6 +3,7 @@
 //
 //   #home  #companies  #company/3  #people  #person/7  #here  #visitors  #visitor/5  #visits
 //   #expected  #badges(/tenants|/visitors)  #badge/4  #clearance  #clearances  #floors(/3)  #offices  #rates
+//   #leases  #lease/2  #charges  #invoices  #invoice/9  #balances  #payments  #finance-settings
 //   #settings  #settings/fields  #account
 
 const VIEWS = {
@@ -20,6 +21,12 @@ const VIEWS = {
   offices: showOffices,
   roomtypes: showRoomTypes,
   rates: showRates,
+  leases: showLeases,
+  charges: showCharges,
+  invoices: showInvoices,
+  balances: showBalances,
+  payments: showPayments,
+  "finance-settings": showFinanceSettings,
   settings: showSettings,
   account: showAccount
 };
@@ -46,11 +53,19 @@ const SECTIONS = [
     { view: "visits", href: "#visits", label: "Visit log", show: canReadVisitors },
     { view: "badges", sub: "visitors", href: "#badges/visitors", label: "Badges", pill: "nav-badges", title: "Badges out past their time: visitor badges with visitors who have left, and temporary badges not back by the end of their day", show: canReadBadges }
   ] },
-  { id: "facilities", label: "Facilities", show: canReadFacilities, pages: [
+  { id: "facilities", label: "Facilities", show: canSeeLeases, pages: [
     { view: "floors", href: "#floors", label: "Floor plans", show: canReadFacilities },
     { view: "offices", href: "#offices", label: "Rooms", show: canReadFacilities },
     { view: "roomtypes", href: "#roomtypes", label: "Room types", show: canReadFacilities },
-    { view: "rates", href: "#rates", label: "Rates", show: canReadFacilities }
+    { view: "rates", href: "#rates", label: "Rates", show: canReadFacilities },
+    { view: "leases", href: "#leases", label: "Leases", show: canSeeLeases },
+    { view: "charges", href: "#charges", label: "Charges", show: canSeeLeases }
+  ] },
+  { id: "finance", label: "Finance", show: canReadFinance, pages: [
+    { view: "invoices", href: "#invoices", label: "Invoices", show: canReadFinance },
+    { view: "balances", href: "#balances", label: "Balances", show: canReadFinance },
+    { view: "payments", href: "#payments", label: "Payments", show: canReadFinance },
+    { view: "finance-settings", href: "#finance-settings", label: "Billing settings", show: canEditFinance }
   ] },
   { id: "security", label: "Security", pill: "nav-security", show: seesSecurity, pages: [
     { view: "clearance", href: "#clearance", label: "Clearance queue", pill: "nav-clearance", title: "Clearances waiting to be validated", show: isSecurity },
@@ -183,7 +198,8 @@ function showView(name, sub = null) {
 function route() {
   if (!state.me) return;
   refreshCounts();
-  const [name, sub] = location.hash.replace(/^#/, "").split("/");
+  // Anything after ? is for the page itself (QuickBooks coming back to #finance-settings?qbo=connected).
+  const [name, sub] = location.hash.replace(/^#/, "").split("?")[0].split("/");
   if (name === "visitor" && sub && canReadVisitors()) {
     if (!state.view || !["visitors", "here", "visits", "home"].includes(state.view)) { showView("visitors"); showVisitors(); }
     openVisitor(Number(sub), refreshCurrentView);
@@ -199,6 +215,16 @@ function route() {
     openPerson(Number(sub), refreshCurrentView);
     return;
   }
+  if (name === "lease" && sub && canSeeLeases()) {
+    if (state.view !== "leases") { showView("leases"); showLeases(); }
+    openLease(Number(sub));
+    return;
+  }
+  if (name === "invoice" && sub && canReadFinance()) {
+    if (!["invoices", "balances", "payments", "home"].includes(state.view)) { showView("invoices"); showInvoices(); }
+    openInvoice(Number(sub));
+    return;
+  }
   if (name === "badge" && sub && canReadBadges()) {
     if (state.view !== "badges" && state.view !== "home") { showView("badges"); showBadges(); }
     openBadge(Number(sub), refreshCurrentView);
@@ -212,6 +238,9 @@ function route() {
   if (view === "clearance" && !isSecurity()) view = "home";
   if (view === "clearances" && !seesSecurity()) view = "home";
   if (["floors", "offices", "roomtypes", "rates"].includes(view) && !canReadFacilities()) view = "home";
+  if (["leases", "charges"].includes(view) && !canSeeLeases()) view = "home";
+  if (["invoices", "balances", "payments"].includes(view) && !canReadFinance()) view = "home";
+  if (view === "finance-settings" && !canEditFinance()) view = "home";
   showView(view, sub);
   VIEWS[view](sub);
 }

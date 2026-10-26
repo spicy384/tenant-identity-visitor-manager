@@ -6,7 +6,7 @@
  * Records come back in the internal shape access.project() expects: built-in values
  * under their catalog keys plus `values`, a Map(fieldId -> stored text) of custom fields.
  */
-const { normaliseValue } = require("./fields");
+const { normalizeValue } = require("./fields");
 const { cleanDate, statusFor, recheckDays } = require("./clearance");
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -234,13 +234,13 @@ function createDirectory({ db, fields }) {
   }
 
   /**
-   * Normalised custom values for a write: Map(fieldId -> text|null). `custom` is the
+   * Normalized custom values for a write: Map(fieldId -> text|null). `custom` is the
    * Map(definition -> input) access.checkWrite() returned; `editable` the definitions
    * the caller can edit, so a required one left empty on a new record is refused.
    */
   function customValues(custom, { creating = false, editable = [], current = new Map() } = {}) {
     const out = new Map();
-    for (const [def, value] of custom) out.set(def.id, normaliseValue(def, value));
+    for (const [def, value] of custom) out.set(def.id, normalizeValue(def, value));
     for (const def of editable) {
       if (!def.required || def.builtIn) continue;
       const after = out.has(def.id) ? out.get(def.id) : current.get(def.id) ?? null;
@@ -322,6 +322,8 @@ function createDirectory({ db, fields }) {
       raw.prepare(`UPDATE visitor_events SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
       // Their offices (and office history) go to the company they're merged into; its own rate stays.
       raw.prepare(`UPDATE office_assignments SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
+      // So do their leases, charges and invoices (each keeps the name it was billed under).
+      for (const table of ["leases", "charges", "invoices"]) raw.prepare(`UPDATE ${table} SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
       // Fields added to a merged company alone come along, with their values.
       for (const id of ids) {
         const own = raw.prepare("SELECT id FROM field_definitions WHERE entity = 'company' AND record_id = ?").all(id).map((r) => r.id);
@@ -352,7 +354,7 @@ function createDirectory({ db, fields }) {
     db.transaction(() => {
       const ids = raw.prepare("SELECT id FROM people WHERE company_id = ?").all(id).map((r) => r.id);
       for (const pid of ids) fields.forgetRecord("person", pid);
-      raw.prepare("UPDATE clearance_requests SET status = 'cancelled', resolved_at = ? WHERE holder_kind = 'person' AND status = 'open' AND holder_id IN (SELECT id FROM people WHERE company_id = ?)").run(Date.now(), id);
+      raw.prepare("UPDATE clearance_requests SET status = 'canceled', resolved_at = ? WHERE holder_kind = 'person' AND status = 'open' AND holder_id IN (SELECT id FROM people WHERE company_id = ?)").run(Date.now(), id);
       peopleRemoved = raw.prepare("DELETE FROM people WHERE company_id = ?").run(id).changes;
       fields.forgetRecord("company", id);
       raw.prepare("DELETE FROM companies WHERE id = ?").run(id);
@@ -516,7 +518,7 @@ function createDirectory({ db, fields }) {
     if (!existing) throw fail(404, "No such person.");
     db.transaction(() => {
       fields.forgetRecord("person", id);
-      raw.prepare("UPDATE clearance_requests SET status = 'cancelled', resolved_at = ? WHERE holder_kind = 'person' AND holder_id = ? AND status = 'open'").run(Date.now(), id);
+      raw.prepare("UPDATE clearance_requests SET status = 'canceled', resolved_at = ? WHERE holder_kind = 'person' AND holder_id = ? AND status = 'open'").run(Date.now(), id);
       raw.prepare("DELETE FROM people WHERE id = ?").run(id);
     });
     return existing;

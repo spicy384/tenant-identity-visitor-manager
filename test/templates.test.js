@@ -74,7 +74,7 @@ async function main() {
   }
 
   const admin = client();
-  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbour Point" });
+  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbor Point" });
   const site = (await admin.get("/api/config")).data.sites[0];
   const acme = (await admin.post("/api/companies", { name: "Acme Corp", sites: [{ siteId: site.id }] })).data.company;
   const { levels, classifications } = (await admin.get("/api/clearance")).data;

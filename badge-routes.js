@@ -14,7 +14,7 @@
 const express = require("express");
 const { TYPES, TYPE_LABELS, STATUSES } = require("./badges");
 const { kindFor, KINDS, KIND_LABELS } = require("./badge-templates");
-const { normaliseValue } = require("./fields");
+const { normalizeValue } = require("./fields");
 
 function fail(status, message) {
   const error = new Error(message);
@@ -86,13 +86,13 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
 
   /**
    * The custom field values in a request body (`custom: { key: value }`), checked against what
-   * the caller may change and normalised: Map(fieldId -> text or null). With `creating`,
+   * the caller may change and normalized: Map(fieldId -> text or null). With `creating`,
    * required fields must be given. Throws before anything is saved.
    */
   function customValues(req, body, { recordId = null, creating = false } = {}) {
     const list = access.fieldsFor(req.ctx, "badge", { recordId });
     const out = new Map();
-    for (const [def, value] of access.checkWrite(req.ctx, "badge", { custom: body.custom || {} }, list)) out.set(def.id, normaliseValue(def, value));
+    for (const [def, value] of access.checkWrite(req.ctx, "badge", { custom: body.custom || {} }, list)) out.set(def.id, normalizeValue(def, value));
     if (creating) {
       for (const def of list.filter((f) => !f.builtIn && f.required && f.recordId === null)) {
         if (out.get(def.id) === undefined || out.get(def.id) === null) throw fail(400, `${def.label} is required.`);
@@ -506,6 +506,10 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     return v;
   }
 
+  /** "following": a change reaches the date and its series' later dates; otherwise that date alone. */
+  const scopeOf = (value) => (str(value, 20) === "following" ? "following" : "one");
+  const datesText = (n) => (n > 1 ? ` (${n} dates)` : "");
+
   router.get("/api/events", readVisitors, (req, res) => {
     const from = day(req.query.from || req.query.date);
     const to = day(req.query.to || req.query.date || from);
@@ -520,26 +524,28 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
 
   router.post("/api/events", editVisitors, (req, res) => {
     const event = events.create(req.body || {}, { by: staffName(req), sites: req.ctx.sites });
-    auditFrom(req, "event.add", event.title, `${event.siteName} ${event.date}${event.companyName ? `; ${event.companyName}` : ""}`);
+    auditFrom(req, "event.add", event.title, `${event.siteName} ${event.date}${event.repeatText ? `, ${event.repeatText.toLowerCase()}${datesText(event.count)}` : ""}${event.companyName ? `; ${event.companyName}` : ""}`);
     res.json({ ok: true, event });
   });
 
   router.put("/api/events/:id", editVisitors, (req, res) => {
-    const event = events.update(positiveInt(req.params.id), req.body || {}, { sites: req.ctx.sites });
-    auditFrom(req, "event.update", event.title, Object.keys(req.body || {}).join(", "));
+    const { scope, ...body } = req.body || {};
+    const event = events.update(positiveInt(req.params.id), body, { sites: req.ctx.sites, scope: scopeOf(scope) });
+    auditFrom(req, "event.update", event.title, `${Object.keys(body).join(", ")}${datesText(event.count)}`);
     res.json({ ok: true, event });
   });
 
   router.delete("/api/events/:id", editVisitors, (req, res) => {
-    const event = events.remove(positiveInt(req.params.id), { sites: req.ctx.sites });
-    auditFrom(req, "event.remove", event.title, `${event.siteName} ${event.date}`);
-    res.json({ ok: true });
+    const event = events.remove(positiveInt(req.params.id), { sites: req.ctx.sites, scope: scopeOf(req.query.scope) });
+    auditFrom(req, "event.remove", event.title, `${event.siteName} ${event.date}${event.count > 1 ? ` and later dates${datesText(event.count)}` : ""}`);
+    res.json({ ok: true, count: event.count });
   });
 
   /**
    * Adds an expected guest: { visitorId } for someone on record, or { visitor: { firstName,
-   * lastName, organisation, email, phone } } for someone new, who is added as a checked
-   * visitor (so the kiosk finds them) and linked to the event's company and host.
+   * lastName, organization, email, phone } } for someone new, who is added as a checked
+   * visitor (so the kiosk finds them) and linked to the event's company and host. With
+   * scope "following", to the event's later dates in its series too.
    */
   router.post("/api/events/:id/guests", editVisitors, (req, res) => {
     const event = events.get(positiveInt(req.params.id), { sites: req.ctx.sites });
@@ -552,13 +558,13 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
       if (!req.body?.addAnyway && v.firstName && v.lastName) {
         const same = visitors.findByName(`${v.firstName} ${v.lastName}`).map((id) => visitors.get(id, { sites: req.ctx.sites })).filter(Boolean).slice(0, 3);
         if (same.length) {
-          const err = fail(409, `Already on record: ${same.map((x) => `${x.firstName} ${x.lastName}${x.organisation ? ` (${x.organisation})` : ""}`).join("; ")}. Pick them from the list, or add a new visitor anyway.`);
+          const err = fail(409, `Already on record: ${same.map((x) => `${x.firstName} ${x.lastName}${x.organization ? ` (${x.organization})` : ""}`).join("; ")}. Pick them from the list, or add a new visitor anyway.`);
           err.duplicate = true;
           throw err;
         }
       }
       const links = event.companyId ? [{ companyId: event.companyId, hostId: event.hostId }] : [];
-      const created = visitors.create({ firstName: v.firstName, lastName: v.lastName, organisation: v.organisation, visitorType: v.visitorType, citizenship: v.citizenship, email: v.email, phone: v.phone, links }, { sites: req.ctx.sites, source: "staff", verified: true });
+      const created = visitors.create({ firstName: v.firstName, lastName: v.lastName, organization: v.organization, visitorType: v.visitorType, citizenship: v.citizenship, email: v.email, phone: v.phone, links }, { sites: req.ctx.sites, source: "staff", verified: true });
       visitorId = created.id;
       auditFrom(req, "visitor.add", `${created.firstName} ${created.lastName}`, `expected at ${event.title}`);
     } else if (event.companyId) {
@@ -566,9 +572,10 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
       const known = visitors.get(visitorId);
       if (!known.companies.some((c) => c.companyId === event.companyId)) visitors.setLink(visitorId, { companyId: event.companyId, hostId: event.hostId });
     }
-    const updated = events.addGuest(event.id, visitorId, { sites: req.ctx.sites });
+    const scope = scopeOf(req.body?.scope);
+    const updated = events.addGuest(event.id, visitorId, { sites: req.ctx.sites, scope });
     const guest = updated.guests.find((g) => g.visitorId === visitorId);
-    auditFrom(req, "event.guest_add", event.title, `${guest.firstName} ${guest.lastName}`);
+    auditFrom(req, "event.guest_add", event.title, `${guest.firstName} ${guest.lastName}${scope === "following" && event.seriesId ? `, ${event.date} and later dates` : ""}`);
     res.json({ ok: true, event: updated });
   });
 
@@ -588,8 +595,9 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const before = events.get(positiveInt(req.params.id), { sites: req.ctx.sites });
     if (!before) throw fail(404, "No such event.");
     const guest = before.guests.find((g) => g.visitorId === positiveInt(req.params.visitorId));
-    const event = events.removeGuest(before.id, positiveInt(req.params.visitorId), { sites: req.ctx.sites });
-    if (guest) auditFrom(req, "event.guest_remove", event.title, `${guest.firstName} ${guest.lastName}`);
+    const scope = scopeOf(req.query.scope);
+    const event = events.removeGuest(before.id, positiveInt(req.params.visitorId), { sites: req.ctx.sites, scope });
+    if (guest) auditFrom(req, "event.guest_remove", event.title, `${guest.firstName} ${guest.lastName}${scope === "following" && before.seriesId ? `, ${before.date} and later dates` : ""}`);
     res.json({ ok: true, event });
   });
 

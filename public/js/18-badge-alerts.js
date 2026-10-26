@@ -47,7 +47,7 @@ function renderBadgeAlerts() {
     h("div", { class: "badge-alerts-head" }, h("strong", { text: list.length === 1 ? "1 visitor needs their check-in finished" : `${list.length} visitors need their check-in finished` })),
     ...shown.map((a) => h("div", { class: `badge-alert stage-${a.stage}` },
       h("div", { class: "badge-alert-text" },
-        h("strong", { text: a.name }), a.organisation ? h("span", { class: "muted", text: ` (${a.organisation})` }) : null,
+        h("strong", { text: a.name }), a.organization ? h("span", { class: "muted", text: ` (${a.organization})` }) : null,
         a.visitorType === "Service Technician" ? h("span", { class: "badge", text: "Service Technician" }) : null,
         ` checked in ${a.kioskName ? `at ${a.kioskName}` : "at the desk"}${multiSite() ? `, ${a.siteName},` : ""} ${agoText(a.checkedInAt)}. `,
         h("strong", { text: a.stage === "id" ? "Check their ID, then give them a badge." : "Their ID is checked; give them a badge." }),

@@ -69,32 +69,32 @@ async function main() {
   }
 
   const admin = client();
-  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbour Point" });
-  const harbour = (await admin.get("/api/config")).data.sites[0];
+  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbor Point" });
+  const harbor = (await admin.get("/api/config")).data.sites[0];
   const river = (await admin.post("/api/sites", { name: "Riverside", timeZone: "UTC" })).data.site;
   const mk = async (name, sites) => (await admin.post("/api/companies", { name, sites })).data.company;
-  const acme = await mk("Acme", [{ siteId: harbour.id }]);
-  const globex = await mk("Globex", [{ siteId: harbour.id }]);
+  const acme = await mk("Acme", [{ siteId: harbor.id }]);
+  const globex = await mk("Globex", [{ siteId: harbor.id }]);
   const initech = await mk("Initech", [{ siteId: river.id }]);
 
   // A custom role that only looks at facilities.
   const leasing = (await admin.post("/api/roles", { name: "Leasing", directory: "read", visitors: "none", badges: "none", facilities: "read" })).data.role;
-  const pw = { manny: password(), desk: password(), harbourManager: password(), lee: password() };
+  const pw = { manny: password(), desk: password(), harborManager: password(), lee: password() };
   await admin.post("/api/users", { username: "manny", password: pw.manny, role: "manager" });
   await admin.post("/api/users", { username: "desk", password: pw.desk, role: "frontdesk" });
-  await admin.post("/api/users", { username: "harbourManager", password: pw.harbourManager, role: "manager", sites: [harbour.id] });
+  await admin.post("/api/users", { username: "harborManager", password: pw.harborManager, role: "manager", sites: [harbor.id] });
   await admin.post("/api/users", { username: "lee", password: pw.lee, role: leasing.id });
   const as = async (u) => { const c = client(); await c.post("/api/auth/login", { username: u, password: pw[u] }); return c; };
   const manager = await as("manny");
   const desk = await as("desk");
-  const harbourManager = await as("harbourManager");
+  const harborManager = await as("harborManager");
   const lee = await as("lee");
 
   // --- who reaches facilities -----------------------------------------------------------------------
   check("access: managers change facilities", (await manager.get("/api/config")).data.access.facilities === "edit");
   check("access: front desk doesn't see them", (await desk.get("/api/config")).data.access.facilities === "none" && (await desk.get("/api/floors")).status === 403);
   check("access: a custom role can be given read", leasing.facilities === "read" && (await lee.get("/api/floors")).status === 200);
-  check("access: which can't change anything", (await lee.post("/api/floors", { siteId: harbour.id, name: "Ground" })).status === 403);
+  check("access: which can't change anything", (await lee.post("/api/floors", { siteId: harbor.id, name: "Ground" })).status === 403);
   const roles = (await admin.get("/api/roles")).data.roles;
   check("access: Administrator and Manager have it by default, the others don't", roles.filter((r) => r.facilities === "edit").map((r) => r.id).sort().join() === "admin,manager"
     && roles.find((r) => r.id === "security").facilities === "none");
@@ -104,15 +104,15 @@ async function main() {
     && !(await desk.get("/api/me/prefs")).data.available.includes("occupancy"));
 
   // --- floors and plans ------------------------------------------------------------------------------
-  let r = await manager.post("/api/floors", { siteId: harbour.id, name: "Level 1" });
+  let r = await manager.post("/api/floors", { siteId: harbor.id, name: "Level 1" });
   const level1 = r.data.floor;
-  check("floors: added", r.status === 200 && level1.siteId === harbour.id && level1.planRef === null);
-  check("floors: one name per site", (await manager.post("/api/floors", { siteId: harbour.id, name: "level 1" })).status === 409);
+  check("floors: added", r.status === 200 && level1.siteId === harbor.id && level1.planRef === null);
+  check("floors: one name per site", (await manager.post("/api/floors", { siteId: harbor.id, name: "level 1" })).status === 409);
   const riverFloor = (await manager.post("/api/floors", { siteId: river.id, name: "Level 1" })).data.floor;
   check("floors: the same name at another site is fine", Boolean(riverFloor));
-  check("floors: not at a site the account can't see", (await harbourManager.post("/api/floors", { siteId: river.id, name: "Level 2" })).status === 403
-    && (await harbourManager.get(`/api/floors/${riverFloor.id}`)).status === 404
-    && (await harbourManager.get("/api/floors")).data.floors.every((f) => f.siteId === harbour.id));
+  check("floors: not at a site the account can't see", (await harborManager.post("/api/floors", { siteId: river.id, name: "Level 2" })).status === 403
+    && (await harborManager.get(`/api/floors/${riverFloor.id}`)).status === 404
+    && (await harborManager.get("/api/floors")).data.floors.every((f) => f.siteId === harbor.id));
   check("plans: only PNG or JPEG", (await manager.put(`/api/floors/${level1.id}/plan`, { dataUrl: "data:image/svg+xml;base64,PHN2Zz4=" })).status === 400);
   check("plans: whose contents match", (await manager.put(`/api/floors/${level1.id}/plan`, { dataUrl: "data:image/png;base64,aGVsbG8gd29ybGQ=" })).status === 400);
   r = await manager.put(`/api/floors/${level1.id}/plan`, { dataUrl: PNG });
@@ -122,7 +122,7 @@ async function main() {
   check("plans: shown to those who see facilities", r.status === 200 && r.data.type === "image/png" && r.data.bytes > 0);
   check("plans: not to others", (await desk.get(`/api/floor-plans/${ref}`)).status === 403);
   const riverPlan = (await manager.put(`/api/floors/${riverFloor.id}/plan`, { dataUrl: PNG })).data.floor.planRef;
-  check("plans: nor at sites the account can't see", (await harbourManager.get(`/api/floor-plans/${riverPlan}`)).status === 404);
+  check("plans: nor at sites the account can't see", (await harborManager.get(`/api/floor-plans/${riverPlan}`)).status === 404);
   check("plans: a new upload gets a new address", (await manager.put(`/api/floors/${level1.id}/plan`, { dataUrl: PNG })).data.floor.planRef !== ref
     && (await manager.get(`/api/floor-plans/${ref}`)).status === 404);
 
@@ -150,7 +150,7 @@ async function main() {
   ihdr[16] = 8;
   ihdr[17] = 2;
   const widePng = `data:image/png;base64,${Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), ihdr, Buffer.from("0000000049454e44ae426082", "hex")]).toString("base64")}`;
-  const level2 = (await manager.post("/api/floors", { siteId: harbour.id, name: "Level 2" })).data.floor;
+  const level2 = (await manager.post("/api/floors", { siteId: harbor.id, name: "Level 2" })).data.floor;
   check("scale: needs a plan first", (await manager.put(`/api/floors/${level2.id}/scale`, { from: [0, 0], to: [1, 0], feet: 100 })).status === 400);
   r = await manager.put(`/api/floors/${level2.id}/plan`, { dataUrl: widePng });
   check("plans: their size is kept", r.data.floor.planWidth === 200 && r.data.floor.planHeight === 100 && r.data.floor.scale === null);
@@ -220,7 +220,7 @@ async function main() {
   await manager.post(`/api/offices/${storeroom.id}/assignments`, { companyId: acme.id, startDate: "2099-01-01" });
   check("kinds: a type stays assignable while one of its rooms is assigned", (await manager.put(`/api/facilities/room-types/${typeId("Storage")}`, { assignable: false })).status === 409);
   check("kinds: nor can such a room become a shared type", (await manager.put(`/api/offices/${storeroom.id}`, { roomTypeId: typeId("IT Room") })).status === 409);
-  check("kinds: shared rooms aren't offered as free", !(await manager.get(`/api/offices?site=${harbour.id}&freeFrom=2030-01-01`)).data.offices.some((o) => o.name === "Boardroom"));
+  check("kinds: shared rooms aren't offered as free", !(await manager.get(`/api/offices?site=${harbor.id}&freeFrom=2030-01-01`)).data.offices.some((o) => o.name === "Boardroom"));
   // Several rooms at once.
   const spare = [];
   for (const name of ["S1", "S2"]) spare.push((await manager.post("/api/offices", { floorId: level1.id, name, sqft: 100 })).data.office);
@@ -246,18 +246,18 @@ async function main() {
   await manager.del(`/api/offices/${boardroom.id}`);
 
   // --- rates -------------------------------------------------------------------------------------------
-  check("rates: front desk can't set them", (await desk.put(`/api/facilities/site-rates/${harbour.id}`, { rate: 3 })).status === 403);
-  check("rates: nor can read-only roles", (await lee.put(`/api/facilities/site-rates/${harbour.id}`, { rate: 3 })).status === 403);
-  check("rates: a site's default", (await manager.put(`/api/facilities/site-rates/${harbour.id}`, { rate: 3 })).data.rate === 3);
+  check("rates: front desk can't set them", (await desk.put(`/api/facilities/site-rates/${harbor.id}`, { rate: 3 })).status === 403);
+  check("rates: nor can read-only roles", (await lee.put(`/api/facilities/site-rates/${harbor.id}`, { rate: 3 })).status === 403);
+  check("rates: a site's default", (await manager.put(`/api/facilities/site-rates/${harbor.id}`, { rate: 3 })).data.rate === 3);
   r = (await manager.get(`/api/offices/${o101.id}`)).data.office;
   check("rates: an office without its own uses the site's", r.effectiveRate === 3 && r.rateSource === "site" && r.monthly === 3600);
   r = (await manager.put(`/api/offices/${o101.id}`, { rate: 2.5 })).data.office;
   check("rates: an office's own wins over the site's", r.effectiveRate === 2.5 && r.rateSource === "office" && r.monthly === 3000);
   check("rates: a negative one is refused", (await manager.put(`/api/offices/${o101.id}`, { rate: -1 })).status === 400);
   check("rates: a company's", (await manager.put(`/api/facilities/company-rates/${acme.id}`, { rate: 2 })).data.rate === 2);
-  check("rates: not for a company at sites the account can't see", (await harbourManager.put(`/api/facilities/company-rates/${initech.id}`, { rate: 2 })).status === 404);
+  check("rates: not for a company at sites the account can't see", (await harborManager.put(`/api/facilities/company-rates/${initech.id}`, { rate: 2 })).status === 404);
   r = (await lee.get("/api/facilities/rates")).data;
-  check("rates: listed", r.sites.find((s) => s.siteId === harbour.id).rate === 3 && r.companies.some((c) => c.companyId === acme.id && c.rate === 2));
+  check("rates: listed", r.sites.find((s) => s.siteId === harbor.id).rate === 3 && r.companies.some((c) => c.companyId === acme.id && c.rate === 2));
 
   // --- assigning --------------------------------------------------------------------------------------
   check("assign: front desk can't", (await desk.post(`/api/offices/${o101.id}/assignments`, { companyId: acme.id, startDate: "2020-01-01" })).status === 403);
@@ -282,9 +282,9 @@ async function main() {
   // --- several at once, from the company --------------------------------------------------------------
   const extra = [];
   for (const name of ["106", "107"]) extra.push((await manager.post("/api/offices", { floorId: level1.id, name, sqft: 300 })).data.office);
-  r = (await manager.get(`/api/offices?site=${harbour.id}&freeFrom=2099-06-01`)).data.offices.map((o) => o.name).sort();
+  r = (await manager.get(`/api/offices?site=${harbor.id}&freeFrom=2099-06-01`)).data.offices.map((o) => o.name).sort();
   check("free: only offices that can be assigned for the dates", r.join() === "106,107", r.join());
-  r = (await manager.get(`/api/offices?site=${harbour.id}&freeFrom=2097-01-01&freeTo=2097-12-31`)).data.offices.map((o) => o.name).sort();
+  r = (await manager.get(`/api/offices?site=${harbor.id}&freeFrom=2097-01-01&freeTo=2097-12-31`)).data.offices.map((o) => o.name).sort();
   check("free: an office assigned only later is free before then", r.join() === "102,106,107", r.join());
   check("free: dates are checked", (await manager.get("/api/offices?freeFrom=2099-13-01")).status === 400);
   check("several: front desk can't", (await desk.post(`/api/companies/${globex.id}/offices`, { officeIds: extra.map((o) => o.id), startDate: "2030-01-01" })).status === 403);
@@ -303,7 +303,7 @@ async function main() {
   r = (await lee.get(`/api/companies/${acme.id}/facilities`)).data;
   check("company: its offices now and later", r.offices.length === 2 && r.offices[0].when === "current" && r.offices[0].officeName === "101" && r.offices[1].when === "upcoming");
   check("company: with its rate and what it pays now", r.rate === 2 && r.totals.offices === 1 && r.totals.sqft === 1200 && r.totals.monthly === 2400);
-  r = (await manager.get(`/api/facilities/summary?siteId=${harbour.id}`)).data.summary;
+  r = (await manager.get(`/api/facilities/summary?siteId=${harbor.id}`)).data.summary;
   check("summary: offices by status", r.offices === 3 && r.occupied === 1 && r.upcoming === 1 && r.unavailable === 1 && r.available === 0);
   check("summary: square feet and rent", r.sqft.total === 2500 && r.sqft.occupied === 1200 && r.sqft.available === 800 && r.monthly === 2400 && r.asking === 2400);
   check("summary: by status in the list too", (await manager.get("/api/offices?status=upcoming")).data.offices.map((o) => o.name).join() === "102");

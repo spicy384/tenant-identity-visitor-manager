@@ -10,7 +10,7 @@
 const DEFAULT_WINDOW_MS = 15 * 60 * 1000;
 const DEFAULT_MAX_FAILURES = 20;
 
-/** The client address as Express resolves it, honouring the app's "trust proxy" setting. */
+/** The client address as Express resolves it, honoring the app's "trust proxy" setting. */
 function clientAddress(req) {
   return req.ip || req.socket?.remoteAddress || "unknown";
 }

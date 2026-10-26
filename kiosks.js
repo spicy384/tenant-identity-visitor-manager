@@ -26,7 +26,7 @@ function newPairingCode() {
 }
 
 /** A typed code in canonical form: upper case, no spaces or dashes, the dash put back. */
-function normaliseCode(input) {
+function normalizeCode(input) {
   const s = String(input || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
   return s.length === 8 ? `${s.slice(0, 4)}-${s.slice(4)}` : s;
 }
@@ -117,7 +117,7 @@ function createKiosks({ db, now = Date.now }) {
 
   /** Exchanges a pairing code for a device token; null when the code is wrong or expired. */
   function pair(code, ip = null) {
-    const r = raw.prepare("SELECT * FROM kiosks WHERE pairing_hash = ?").get(hash(normaliseCode(code)));
+    const r = raw.prepare("SELECT * FROM kiosks WHERE pairing_hash = ?").get(hash(normalizeCode(code)));
     if (!r || !(r.pairing_expires_at > now())) return null;
     const token = crypto.randomBytes(32).toString("base64url");
     raw.prepare("UPDATE kiosks SET token_hash = ?, pairing_hash = NULL, pairing_expires_at = NULL, paired_at = ?, last_seen_at = ?, last_ip = ? WHERE id = ?").run(hash(token), now(), now(), ip, r.id);
@@ -139,4 +139,4 @@ function createKiosks({ db, now = Date.now }) {
   return { list, get, create, update, newCode, remove, pair, authenticate };
 }
 
-module.exports = { createKiosks, newPairingCode, normaliseCode };
+module.exports = { createKiosks, newPairingCode, normalizeCode };

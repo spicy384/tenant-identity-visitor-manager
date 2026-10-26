@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS visitors (
   id INTEGER PRIMARY KEY,
   first_name TEXT NOT NULL,
   last_name TEXT NOT NULL,
-  organisation TEXT,
+  organization TEXT,
   email TEXT,
   phone TEXT,
   notes TEXT,
@@ -443,6 +443,120 @@ CREATE TABLE IF NOT EXISTS room_classes (
   created_at INTEGER NOT NULL
 );
 
+-- A lease: a company's agreement for offices from a start date to an end date (none: it runs
+-- on). Its offices are its office assignments (office_assignments.lease_id), which carry the
+-- same company and dates. Rent comes from the rates (each office's square feet times its rate)
+-- or is a fixed monthly amount, which goes up by escalation_pct on each anniversary.
+CREATE TABLE IF NOT EXISTS leases (
+  id INTEGER PRIMARY KEY,
+  reference TEXT,
+  company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+  company_name TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  end_date TEXT,
+  rent_mode TEXT NOT NULL DEFAULT 'rates',
+  monthly_rent REAL,
+  deposit REAL,
+  escalation_pct REAL,
+  notes TEXT,
+  created_by TEXT,
+  created_at INTEGER NOT NULL,
+  updated_by TEXT,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS leases_company ON leases(company_id);
+
+-- The price list of things billed to tenants (After-hours HVAC, per hour; Key replacement, each).
+CREATE TABLE IF NOT EXISTS charge_items (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  unit TEXT NOT NULL DEFAULT 'each',
+  rate REAL NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+-- A charge to a tenant: from the price list or one-off. Billed once an invoice holds it.
+CREATE TABLE IF NOT EXISTS charges (
+  id INTEGER PRIMARY KEY,
+  company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+  company_name TEXT NOT NULL,
+  date TEXT NOT NULL,
+  item_id INTEGER REFERENCES charge_items(id) ON DELETE SET NULL,
+  description TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  unit TEXT,
+  rate REAL NOT NULL,
+  amount REAL NOT NULL,
+  notes TEXT,
+  invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+  created_by TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS charges_company ON charges(company_id, date);
+CREATE INDEX IF NOT EXISTS charges_invoice ON charges(invoice_id);
+
+-- Invoices: a draft until issued, when it gets its number; void ones stay, numbered, as history.
+CREATE TABLE IF NOT EXISTS invoices (
+  id INTEGER PRIMARY KEY,
+  number TEXT UNIQUE,
+  company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+  company_name TEXT NOT NULL,
+  period TEXT,
+  issue_date TEXT NOT NULL,
+  due_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  total REAL NOT NULL DEFAULT 0,
+  notes TEXT,
+  qbo_id TEXT,
+  qbo_synced_at INTEGER,
+  created_by TEXT,
+  created_at INTEGER NOT NULL,
+  issued_by TEXT,
+  issued_at INTEGER,
+  voided_by TEXT,
+  voided_at INTEGER,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS invoices_company ON invoices(company_id, status);
+
+-- An invoice's lines: rent for a lease and a month, a charge, or an adjustment typed in.
+CREATE TABLE IF NOT EXISTS invoice_lines (
+  id INTEGER PRIMARY KEY,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  description TEXT NOT NULL,
+  quantity REAL NOT NULL DEFAULT 1,
+  unit TEXT,
+  rate REAL NOT NULL,
+  amount REAL NOT NULL,
+  lease_id INTEGER REFERENCES leases(id) ON DELETE SET NULL,
+  period TEXT,
+  charge_id INTEGER REFERENCES charges(id) ON DELETE SET NULL,
+  item_name TEXT,
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS invoice_lines_invoice ON invoice_lines(invoice_id);
+CREATE INDEX IF NOT EXISTS invoice_lines_lease ON invoice_lines(lease_id, period);
+
+-- Payments against issued invoices; from QuickBooks too (qbo_id) when it is connected.
+CREATE TABLE IF NOT EXISTS payments (
+  id INTEGER PRIMARY KEY,
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+  date TEXT NOT NULL,
+  amount REAL NOT NULL,
+  method TEXT NOT NULL,
+  reference TEXT,
+  notes TEXT,
+  source TEXT NOT NULL DEFAULT 'app',
+  qbo_id TEXT UNIQUE,
+  created_by TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS payments_invoice ON payments(invoice_id);
+
 CREATE TABLE IF NOT EXISTS company_rates (
   company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
   rate REAL NOT NULL,
@@ -464,6 +578,14 @@ const ADDED_COLUMNS = [
   // Temporary badges, lent for a day to someone who forgot theirs.
   ["badges", "temporary", "INTEGER NOT NULL DEFAULT 0"],
   ["badges", "facility_code", "TEXT"],
+  // Repeating visitor events: each date is an event of its own, sharing the first one's id.
+  ["visitor_events", "series_id", "INTEGER"],
+  ["visitor_events", "series_rule", "TEXT"],
+  // A room let for a fixed amount a month rather than by the square foot.
+  ["offices", "monthly_rent", "REAL"],
+  // Finance: a role area, and the lease each office assignment belongs to.
+  ["roles", "finance", "TEXT NOT NULL DEFAULT 'none'"],
+  ["office_assignments", "lease_id", "INTEGER REFERENCES leases(id) ON DELETE CASCADE"],
   ["badge_assignments", "temporary", "INTEGER NOT NULL DEFAULT 0"],
   ["badge_assignments", "replaces_badge_id", "INTEGER REFERENCES badges(id) ON DELETE SET NULL"],
   ["badge_assignments", "due_at", "INTEGER"],
@@ -505,7 +627,23 @@ const ADDED_COLUMNS = [
   ["event_guests", "badge_id", "INTEGER REFERENCES badges(id) ON DELETE SET NULL"]
 ];
 
+/**
+ * Names spelled the British way at first, renamed once to the American: the visitors'
+ * company column (and its row in the field access grid), and canceled clearance requests.
+ */
+function americanSpellings(db) {
+  const old = "organisation";
+  if (db.prepare("PRAGMA table_info(visitors)").all().some((c) => c.name === old)) {
+    db.transaction(() => {
+      db.exec(`ALTER TABLE visitors RENAME COLUMN ${old} TO organization`);
+      db.prepare("UPDATE OR REPLACE field_policies SET field = 'organization' WHERE entity = 'visitor' AND field = ?").run(old);
+    })();
+  }
+  db.prepare("UPDATE clearance_requests SET status = 'canceled' WHERE status = ?").run("cancel" + "led");
+}
+
 function addColumns(db) {
+  americanSpellings(db);
   for (const [table, column, definition] of ADDED_COLUMNS) {
     const have = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
     if (!have) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -514,6 +652,7 @@ function addColumns(db) {
   db.exec("INSERT OR IGNORE INTO badge_sites (badge_id, site_id) SELECT id, site_id FROM badges WHERE site_id IS NOT NULL; UPDATE badges SET site_id = NULL WHERE site_id IS NOT NULL;");
   rebuildBadges(db);
   db.exec(BADGE_KEY_INDEX);
+  db.exec("CREATE INDEX IF NOT EXISTS visitor_events_series ON visitor_events(series_id, date)");
 }
 
 // A badge's number is unique within its facility code (no code counts as one code of its own).

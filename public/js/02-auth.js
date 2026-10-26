@@ -224,7 +224,7 @@ $("passkey-btn").addEventListener("click", async () => {
     const data = await api("/api/auth/passkeys/login/verify", { method: "POST", body: { token, response: webauthnCredentialToJson(cred) } });
     await signedIn(data.user, data.csrfToken);
   } catch (error) {
-    authMessage(error.name === "NotAllowedError" ? "Passkey sign-in was cancelled." : error.message);
+    authMessage(error.name === "NotAllowedError" ? "Passkey sign-in was canceled." : error.message);
   } finally {
     btn.disabled = false;
   }

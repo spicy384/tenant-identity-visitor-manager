@@ -88,7 +88,7 @@ async function editApiClient(client, fields) {
     title: client ? `Edit ${client.name}` : "Add API client",
     wide: true,
     fields: [
-      { name: "name", label: "Name", required: true, value: client?.name, placeholder: "Equipment Checkout, Harbour Point" },
+      { name: "name", label: "Name", required: true, value: client?.name, placeholder: "Equipment Checkout, Harbor Point" },
       ...(picker ? [{ node: picker.node }] : []),
       { name: "canWrite", label: "Can add people and companies (Equipment Checkout's New person button needs this)", type: "checkbox", value: client ? client.canWrite : true },
       { type: "heading", label: "Fields it receives" },

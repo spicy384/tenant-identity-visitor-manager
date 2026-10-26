@@ -13,118 +13,130 @@ const CHECKIN_STEPS = [
 const isTechnician = (v) => v?.visitorType === "Service Technician";
 
 /**
- * Picks a visit's point of contact. Guests visit a tenant: the company, then someone there
- * who can host. A service technician's contact can be anyone in the directory at the site,
- * found by name. Returns { node, value() ({ companyId, hostId } or nulls), setType(type),
- * setSite(siteId) }.
+ * Picks a visit's point of contact by name. Guests visit a tenant: someone there who can
+ * host, whose company comes with them. A service technician's contact can be anyone in the
+ * directory. With a site, only people there are offered; with none yet, anyone at the sites
+ * the account sees, and onSite(siteId) is called with their company's site when there's only
+ * one it can be. Returns { node, value() ({ companyId, hostId } or nulls), setType(type),
+ * setSite(siteId) }; a new site keeps the contact if their company is there.
  */
-function contactPicker({ type = "Guest", siteId = "", companyId = null, hostId = null } = {}) {
+function contactPicker({ type = "Guest", siteId = "", companyId = null, hostId = null, onSite = () => {} } = {}) {
   let mode = type === "Service Technician" ? "anyone" : "tenant";
   let site = siteId;
   let chosen = { companyId: companyId || null, hostId: hostId || null };
-  const area = h("div", { class: "stack" });
+  // The sites (of those in use) of the chosen contact's company; null until looked up.
+  let companySites = null;
+  const search = h("input", { type: "search", autocomplete: "off", "aria-label": "Point of contact" });
+  const hint = h("span", { class: "hint" });
+  const note = h("p", { class: "message", hidden: true });
+  const picked = h("div", { class: "chosen-row", hidden: true });
+  const results = h("div", { class: "choices-list short", hidden: true });
   const card = h("div", { class: "contact-card", hidden: true });
-  const node = h("div", { class: "full-row stack contact-picker" }, area, card);
+  const node = h("div", { class: "full-row stack contact-picker" },
+    h("label", { class: "full-row" }, h("span", { text: "Point of contact *" }), picked, search, hint), note, results, card);
+
+  function describe() {
+    search.placeholder = mode === "anyone" ? "Type a name from the directory" : "Type the name of the person they're visiting";
+    hint.textContent = mode === "anyone"
+      ? "Anyone in the directory: who asked for the work, or building management."
+      : "Someone at a tenant who can host them; their company comes with them.";
+  }
 
   /** The contact's details, as the caller's field access shows them. */
-  async function showCard() {
-    if (!chosen.hostId) {
-      card.hidden = true;
-      return;
-    }
-    try {
-      const { person } = await api(`/api/people/${chosen.hostId}`);
-      const line = (label, value) => (value ? h("div", { class: "small-text" }, h("span", { class: "muted", text: `${label} ` }), value) : null);
-      const phone = (n) => h("a", { href: `tel:${String(n).replace(/[^\d+]/g, "")}`, text: n });
-      card.replaceChildren(...[
-        h("div", {}, h("strong", { text: personName(person) }), person.jobTitle ? h("span", { class: "muted", text: `, ${person.jobTitle}` }) : null),
-        line("Company", person.companyName),
-        line("Work phone", person.workPhone ? phone(person.workPhone) : null),
-        line("Mobile", person.mobile ? phone(person.mobile) : null),
-        line("Email", person.email ? h("a", { href: `mailto:${person.email}`, text: person.email }) : null)
-      ].filter(Boolean));
-      card.hidden = false;
-    } catch {
-      card.hidden = true;
-    }
+  function showCard(person) {
+    const line = (label, value) => (value ? h("div", { class: "small-text" }, h("span", { class: "muted", text: `${label} ` }), value) : null);
+    const phone = (n) => h("a", { href: `tel:${String(n).replace(/[^\d+]/g, "")}`, text: n });
+    card.replaceChildren(...[
+      h("div", {}, h("strong", { text: personName(person) }), person.jobTitle ? h("span", { class: "muted", text: `, ${person.jobTitle}` }) : null),
+      line("Company", person.companyName),
+      line("Work phone", person.workPhone ? phone(person.workPhone) : null),
+      line("Mobile", person.mobile ? phone(person.mobile) : null),
+      line("Email", person.email ? h("a", { href: `mailto:${person.email}`, text: person.email }) : null)
+    ].filter(Boolean));
+    card.hidden = false;
   }
 
-  async function renderTenant() {
-    const companies = await companiesAt(site).catch(() => []);
-    const company = h("select", { "aria-label": "Tenant they're visiting" },
-      h("option", { value: "", text: companies.length ? "Choose the tenant" : "No tenants at this site" }),
-      companies.map((c) => h("option", { value: String(c.id), text: c.name })));
-    const host = h("select", { "aria-label": "Point of contact" });
-    company.value = companies.some((c) => c.id === chosen.companyId) ? String(chosen.companyId) : "";
-    const fillHosts = async () => {
-      const hosts = await hostsOf(company.value, site).catch(() => []);
-      host.replaceChildren(h("option", { value: "", text: company.value ? (hosts.length ? "Choose their point of contact" : "Nobody there can host") : "Choose the tenant first" }),
-        ...hosts.map((p) => h("option", { value: String(p.id), text: personName(p) })));
-      host.value = hosts.some((p) => p.id === chosen.hostId) ? String(chosen.hostId) : "";
-      readTenant();
-      showCard();
-    };
-    const readTenant = () => {
-      chosen = {
-        companyId: company.value ? Number(company.value) : null, companyName: company.value ? company.selectedOptions[0].text : null,
-        hostId: host.value ? Number(host.value) : null, hostName: host.value ? host.selectedOptions[0].text : null
-      };
-    };
-    company.addEventListener("change", fillHosts);
-    host.addEventListener("change", () => { readTenant(); showCard(); });
-    area.replaceChildren(
-      h("label", { class: "half" }, h("span", { text: "Tenant they're visiting *" }), company),
-      h("label", { class: "half" }, h("span", { text: "Point of contact *" }), host));
-    await fillHosts();
-  }
-
-  async function renderAnyone() {
-    const results = h("div", { class: "choices-list short" });
-    const search = h("input", { type: "search", placeholder: "Type a name from the directory", autocomplete: "off", "aria-label": "Point of contact" });
-    const picked = h("div", { class: "chosen-row" });
-    const choose = (p) => {
-      chosen = { companyId: p.companyId, companyName: p.companyName || null, hostId: p.id, hostName: personName(p) };
-      picked.replaceChildren(h("strong", { text: personName(p) }), h("span", { class: "muted", text: ` · ${p.companyName || ""}` }),
-        h("button", { type: "button", class: "link-btn", text: "Change", onclick: () => { chosen = { companyId: null, hostId: null }; renderAnyone(); } }));
-      picked.hidden = false;
-      search.hidden = true;
-      results.hidden = true;
-      showCard();
-    };
-    const run = debounce(async () => {
-      const q = search.value.trim();
-      if (q.length < 2) return results.replaceChildren();
-      const { people } = await api(`/api/people?${new URLSearchParams({ q, limit: "10", ...(site ? { site: String(site) } : {}) })}`).catch(() => ({ people: [] }));
-      results.replaceChildren(...(people.length
-        ? people.map((p) => h("button", { type: "button", class: "pick-row", onclick: () => choose(p) }, h("strong", { text: personName(p) }), h("span", { class: "muted small-text", text: ` ${p.companyName || ""}${p.jobTitle ? ` · ${p.jobTitle}` : ""}` })))
-        : [h("p", { class: "muted small-text", text: "Nobody in the directory by that name." })]));
-    }, 250);
-    search.addEventListener("input", run);
+  function reset(message = "") {
+    chosen = { companyId: null, hostId: null };
+    companySites = null;
     picked.hidden = true;
-    area.replaceChildren(h("label", { class: "full-row" }, h("span", { text: "Point of contact *" }), picked, search,
-      h("span", { class: "hint", text: "Anyone in the directory: who asked for the work, or building management." })), results);
-    if (chosen.hostId) {
-      try {
-        const { person } = await api(`/api/people/${chosen.hostId}`);
-        choose(person);
-      } catch {
-        chosen = { companyId: null, hostId: null };
+    card.hidden = true;
+    search.hidden = false;
+    search.value = "";
+    results.hidden = true;
+    note.textContent = message;
+    note.hidden = !message;
+  }
+
+  async function sitesOf(id) {
+    const { company } = await api(`/api/companies/${id}`).catch(() => ({ company: null }));
+    const at = new Set((company?.sites || []).map((s) => String(s.siteId)));
+    return activeSites().filter((s) => at.has(String(s.id))).map((s) => String(s.id));
+  }
+
+  async function choose(p) {
+    chosen = { companyId: p.companyId, companyName: p.companyName || null, hostId: p.id, hostName: personName(p), canHost: p.canHost !== false };
+    note.hidden = true;
+    picked.replaceChildren(h("strong", { text: personName(p) }), h("span", { class: "muted", text: ` · ${p.companyName || ""}` }),
+      h("button", { type: "button", class: "link-btn", text: "Change", onclick: () => { reset(); search.focus(); } }));
+    picked.hidden = false;
+    search.hidden = true;
+    results.hidden = true;
+    showCard(p);
+    companySites = await sitesOf(p.companyId);
+    // No site yet: theirs, when it can only be one.
+    if (!site && chosen.hostId === p.id) {
+      const one = companySites.length === 1 ? companySites[0] : companySites.includes(String(p.siteId)) ? String(p.siteId) : "";
+      if (one) {
+        site = one;
+        onSite(one);
       }
-    } else {
-      card.hidden = true;
     }
   }
 
-  const render = () => (mode === "anyone" ? renderAnyone() : renderTenant());
-  render();
+  const run = debounce(async () => {
+    const q = search.value.trim();
+    if (q.length < 2) return (results.hidden = true);
+    const { people } = await api(`/api/people?${new URLSearchParams({ q, limit: "10", ...(site ? { site: String(site) } : {}) })}`).catch(() => ({ people: [] }));
+    if (search.value.trim() !== q) return null; // typed on meanwhile: a newer search is coming
+    const offer = mode === "anyone" ? people : people.filter((p) => p.canHost !== false);
+    results.replaceChildren(...(offer.length
+      ? offer.map((p) => h("button", { type: "button", class: "pick-row", onclick: () => choose(p) }, h("strong", { text: personName(p) }),
+        h("span", { class: "muted small-text", text: ` ${p.companyName || ""}${p.jobTitle ? ` · ${p.jobTitle}` : ""}` })))
+      : [h("p", { class: "muted small-text", text: mode === "anyone" ? "Nobody in the directory by that name." : `Nobody by that name can host${site ? " at this site" : ""}.` })]));
+    results.hidden = false;
+    return null;
+  }, 200);
+  search.addEventListener("input", run);
+  // Enter picks the first match rather than moving on.
+  search.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    results.querySelector(".pick-row")?.click();
+  });
+
+  describe();
+  if (chosen.hostId) {
+    api(`/api/people/${chosen.hostId}`).then(({ person }) => choose(person)).catch(() => reset());
+  }
   return {
     node,
-    value: () => ({ ...chosen }),
+    value: () => ({ companyId: chosen.companyId, companyName: chosen.companyName ?? null, hostId: chosen.hostId, hostName: chosen.hostName ?? null }),
     setType: (t) => {
       const next = t === "Service Technician" ? "anyone" : "tenant";
-      if (next !== mode) { mode = next; render(); }
+      if (next === mode) return;
+      mode = next;
+      describe();
+      // A guest's contact must be able to host.
+      if (mode === "tenant" && chosen.hostId && chosen.canHost === false) reset(`${chosen.hostName} can't host guests; choose someone who can.`);
     },
-    setSite: (id) => { site = id; chosen = { companyId: null, hostId: null }; render(); }
+    setSite: async (id) => {
+      site = id;
+      if (!chosen.hostId || !id) return;
+      const name = chosen.hostName;
+      const at = companySites ?? (await sitesOf(chosen.companyId));
+      if (!at.includes(String(id))) reset(`${chosen.companyName || name}${chosen.companyName ? ` (${name})` : ""} isn't at ${siteName(id) || "that site"}; choose their point of contact there.`);
+    }
   };
 }
 
@@ -226,7 +238,7 @@ function checkInWizard(start = {}) {
           results.replaceChildren(...(visitors.length
             ? visitors.map((v) => h("button", { type: "button", class: "pick-row", onclick: () => pick(v.id) },
               h("strong", { text: visitorName(v) }), " ", visitorBadges(v),
-              h("span", { class: "muted small-text", text: ` ${[v.organisation, isTechnician(v) ? "Service Technician" : null, (v.companies || []).map((c) => c.companyName).join(", ")].filter(Boolean).join(" · ")}` })))
+              h("span", { class: "muted small-text", text: ` ${[v.organization, isTechnician(v) ? "Service Technician" : null, (v.companies || []).map((c) => c.companyName).join(", ")].filter(Boolean).join(" · ")}` })))
             : [h("p", { class: "muted", text: "Nobody by that name in the visitor list. Add them as a new visitor." })]));
         } catch (e) {
           showError(e);
@@ -251,7 +263,7 @@ function checkInWizard(start = {}) {
     /** Fields for the visitor's company, type and citizenship; null where the caller can't change one. */
     function visitorFields(v) {
       const editable = (key) => visitorField(key)?.access === "edit";
-      const org = editable("organisation") ? h("input", { type: "text", value: v?.organisation || "", maxlength: "120", "aria-label": "Company" }) : null;
+      const org = editable("organization") ? h("input", { type: "text", value: v?.organization || "", maxlength: "120", "aria-label": "Company" }) : null;
       const type = editable("visitorType") ? h("select", { "aria-label": "Visitor type" }, ["Guest", "Service Technician"].map((t) => h("option", { value: t, text: t }))) : null;
       if (type) type.value = v?.visitorType || "Guest";
       const citizen = editable("citizenship") ? citizenshipControl(v?.citizenship || null, { required: true }) : null;
@@ -264,7 +276,7 @@ function checkInWizard(start = {}) {
       const last = h("input", { type: "text", value: words.slice(1).join(" "), maxlength: "80", autocapitalize: "words", "aria-label": "Last name" });
       const f = visitorFields(null);
       const site = siteChooser();
-      const contact = contactPicker({ type: "Guest", siteId: w.siteId });
+      const contact = contactPicker({ type: "Guest", siteId: w.siteId, onSite: (id) => { w.siteId = id; if (site) site.value = id; } });
       if (f.type) f.type.addEventListener("change", () => contact.setType(f.type.value));
       if (site) site.addEventListener("change", () => { w.siteId = site.value; contact.setSite(site.value); });
       page("find", "Add a new visitor", h("div", { class: "form-grid stack" },
@@ -285,7 +297,7 @@ function checkInWizard(start = {}) {
         const c = contact.value();
         if (!c.hostId) throw new Error("Choose their point of contact.");
         const body = { firstName: first.value.trim(), lastName: last.value.trim() };
-        if (f.org) body.organisation = f.org.value.trim();
+        if (f.org) body.organization = f.org.value.trim();
         if (f.type) body.visitorType = f.type.value;
         if (f.citizen) body.citizenship = f.citizen.value();
         if (canEditVisitorLinks() && (!f.type || f.type.value === "Guest")) body.links = [{ companyId: c.companyId, hostId: c.hostId }];
@@ -315,7 +327,7 @@ function checkInWizard(start = {}) {
         const usual = (v.companies || []).find((c) => c.hostId);
         if (usual) Object.assign(w, { companyId: usual.companyId, companyName: usual.companyName, hostId: usual.hostId, hostName: usual.hostName });
       }
-      const contact = contactPicker({ type: f.type ? f.type.value : v.visitorType, siteId: w.siteId, companyId: w.companyId, hostId: w.hostId });
+      const contact = contactPicker({ type: f.type ? f.type.value : v.visitorType, siteId: w.siteId, companyId: w.companyId, hostId: w.hostId, onSite: (id) => { w.siteId = id; if (site) site.value = id; } });
       if (f.type) f.type.addEventListener("change", () => contact.setType(f.type.value));
       if (site) site.addEventListener("change", () => { w.siteId = site.value; contact.setSite(site.value); });
       const purpose = h("input", { type: "text", value: w.purpose, maxlength: "200", placeholder: "Meeting, interview, repair…", "aria-label": "Purpose of the visit" });
@@ -327,7 +339,7 @@ function checkInWizard(start = {}) {
           !w.visit ? h("label", { class: "check-row" }, override, h("span", { text: "A manager has agreed to let them in" })) : null) : null,
         w.visit ? h("p", { class: "full-row muted", text: `Checked in at ${w.visit.kioskName || "the kiosk"} ${agoText(w.visit.checkedInAt)}.` }) : null,
         h("dl", { class: "full-row facts inline-facts" }, fact("Name", name()),
-          !f.org ? fact("Company", v.organisation) : null, !f.type ? fact("Visitor type", v.visitorType) : null, !f.citizen ? fact("Citizenship", citizenshipText(v.citizenship)) : null),
+          !f.org ? fact("Company", v.organization) : null, !f.type ? fact("Visitor type", v.visitorType) : null, !f.citizen ? fact("Citizenship", citizenshipText(v.citizenship)) : null),
         f.org ? h("label", { class: "half" }, h("span", { text: "Company *" }), f.org) : null,
         f.type ? h("label", { class: "half" }, h("span", { text: "Visitor type" }), f.type) : null,
         f.citizen ? f.citizen.node : null,
@@ -339,8 +351,8 @@ function checkInWizard(start = {}) {
         const changes = {};
         if (f.org) {
           if (!f.org.value.trim()) throw new Error("Enter their company.");
-          if (f.org.value.trim() !== (v.organisation || "")) changes.organisation = f.org.value.trim();
-        } else if (!v.organisation) throw new Error(`${name()}'s company isn't on record, and this account can't fill it in.`);
+          if (f.org.value.trim() !== (v.organization || "")) changes.organization = f.org.value.trim();
+        } else if (!v.organization) throw new Error(`${name()}'s company isn't on record, and this account can't fill it in.`);
         if (f.type && f.type.value !== v.visitorType) changes.visitorType = f.type.value;
         if (f.citizen) {
           const problem = f.citizen.check();
@@ -381,7 +393,7 @@ function checkInWizard(start = {}) {
         h("div", { class: "id-person" },
           h("div", { class: "id-name", text: name() }),
           h("dl", { class: "facts inline-facts" },
-            fact("Company", v.organisation), fact("Visitor type", v.visitorType), fact("Citizenship", citizenshipText(v.citizenship)),
+            fact("Company", v.organization), fact("Visitor type", v.visitorType), fact("Citizenship", citizenshipText(v.citizenship)),
             fact("Visiting", w.companyName), fact("Point of contact", w.hostName),
             fact("Purpose", w.purpose), multiSite() ? fact("Site", siteName()) : null),
           h("button", { type: "button", class: "link-btn small-text", text: "Change these details", onclick: detailsStep })),
@@ -519,7 +531,7 @@ function checkInWizard(start = {}) {
           w.visitor = (await api(`/api/visitors/${w.visit.visitorId}`)).visitor;
           if (w.visit.checkinStage === "badge") return badgeStep();
           // A kiosk arrival: straight to their ID, unless something check-in needs is missing.
-          const missing = !w.visitor.organisation || !w.visitor.citizenship || !w.visit.hostId || !w.visit.purpose;
+          const missing = !w.visitor.organization || !w.visitor.citizenship || !w.visit.hostId || !w.visit.purpose;
           return missing ? detailsStep() : idStep();
         }
         if (w.visitor) return detailsStep();

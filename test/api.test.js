@@ -76,17 +76,17 @@ async function main() {
   }
 
   const admin = staff();
-  await admin.post("/api/auth/setup", { username: "admin", password: crypto.randomBytes(12).toString("base64url"), siteName: "Harbour Point" });
-  const harbour = (await admin.get("/api/config")).data.sites[0];
+  await admin.post("/api/auth/setup", { username: "admin", password: crypto.randomBytes(12).toString("base64url"), siteName: "Harbor Point" });
+  const harbor = (await admin.get("/api/config")).data.sites[0];
   const river = (await admin.post("/api/sites", { name: "Riverside" })).data.site;
-  const acme = (await admin.post("/api/companies", { name: "Acme Corp", phone: "555-0100", notes: "Rent overdue", sites: [{ siteId: harbour.id, suite: "Suite 100" }] })).data.company;
-  const both = (await admin.post("/api/companies", { name: "Both Partners", sites: [{ siteId: harbour.id, suite: "Floor 2" }, { siteId: river.id, suite: "Unit 9" }] })).data.company;
+  const acme = (await admin.post("/api/companies", { name: "Acme Corp", phone: "555-0100", notes: "Rent overdue", sites: [{ siteId: harbor.id, suite: "Suite 100" }] })).data.company;
+  const both = (await admin.post("/api/companies", { name: "Both Partners", sites: [{ siteId: harbor.id, suite: "Floor 2" }, { siteId: river.id, suite: "Unit 9" }] })).data.company;
   const riverCo = (await admin.post("/api/companies", { name: "River Co", sites: [{ siteId: river.id }] })).data.company;
   await admin.post("/api/fields", { entity: "person", label: "Badge number", type: "text", visibility: "all" });
   await admin.post("/api/fields", { entity: "person", label: "Salary", type: "number", visibility: "admins" });
   const jane = (await admin.post("/api/people", { firstName: "Jane", lastName: "Doe", companyId: acme.id, email: "jane@acme.example", workPhone: "555-0101", mobile: "555-0199", notes: "VIP", custom: { badge_number: "B-1", salary: "90000" } })).data.person;
   const rae = (await admin.post("/api/people", { firstName: "Rae", lastName: "River", companyId: both.id, siteId: river.id })).data.person;
-  const hal = (await admin.post("/api/people", { firstName: "Hal", lastName: "Harbour", companyId: both.id, siteId: harbour.id })).data.person;
+  const hal = (await admin.post("/api/people", { firstName: "Hal", lastName: "Harbor", companyId: both.id, siteId: harbor.id })).data.person;
   await admin.post("/api/people", { firstName: "Ron", lastName: "Rivers", companyId: riverCo.id });
 
   // --- keys --------------------------------------------------------------------------------------
@@ -94,20 +94,20 @@ async function main() {
   check("keys: a made-up key is refused", (await apiAs("ivm_1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx").get("/api/v1/whoami")).status === 401);
   check("keys: a staff session isn't an API key", (await fetch(`${BASE}/api/v1/whoami`, { headers: { cookie: Object.entries(admin.jar).map(([k, v]) => `${k}=${v}`).join("; ") } })).status === 401);
   check("keys: only administrators manage API clients", (await staff().get("/api/api-clients")).status === 401);
-  let r = await admin.post("/api/api-clients", { name: "Checkout Harbour", sites: [harbour.id], canWrite: false });
+  let r = await admin.post("/api/api-clients", { name: "Checkout Harbor", sites: [harbor.id], canWrite: false });
   check("keys: a client is added and its key shown once", r.status === 200 && /^ivm_\d+_[A-Za-z0-9_-]{40,}$/.test(r.data.key) && !JSON.stringify((await admin.get("/api/api-clients")).data).includes(r.data.key.replace(/^ivm_\d+_/, "")));
-  const harbourClient = r.data.client;
+  const harborClient = r.data.client;
   const reader = apiAs(r.data.key);
-  check("keys: the client starts with the template's fields", JSON.stringify(harbourClient.fields.person) === JSON.stringify(["firstName", "lastName", "preferredName", "company", "jobTitle", "email", "workPhone", "active"]), JSON.stringify(harbourClient.fields));
+  check("keys: the client starts with the template's fields", JSON.stringify(harborClient.fields.person) === JSON.stringify(["firstName", "lastName", "preferredName", "company", "jobTitle", "email", "workPhone", "active"]), JSON.stringify(harborClient.fields));
 
   r = await reader.get("/api/v1/whoami");
-  check("whoami: names the client, its sites and fields", r.status === 200 && r.data.client.name === "Checkout Harbour" && r.data.client.canWrite === false && r.data.sites.map((s) => s.name).join() === "Harbour Point" && r.data.fields.person.some((f) => f.key === "email"));
+  check("whoami: names the client, its sites and fields", r.status === 200 && r.data.client.name === "Checkout Harbor" && r.data.client.canWrite === false && r.data.sites.map((s) => s.name).join() === "Harbor Point" && r.data.fields.person.some((f) => f.key === "email"));
 
   // --- what a client sees --------------------------------------------------------------------------
   r = await reader.get("/api/v1/sync");
   const first = r.data;
   check("sync: only companies at its site", first.companies.map((c) => c.name).sort().join() === "Acme Corp,Both Partners");
-  check("sync: a company's other sites are left out", first.companies.find((c) => c.name === "Both Partners").sites.map((s) => s.siteName).join() === "Harbour Point");
+  check("sync: a company's other sites are left out", first.companies.find((c) => c.name === "Both Partners").sites.map((s) => s.siteName).join() === "Harbor Point");
   check("sync: people at its site, or at any site, of those companies", first.people.map((p) => p.firstName).sort().join() === "Hal,Jane");
   const j = first.people.find((p) => p.firstName === "Jane");
   check("sync: the template's fields are there", j.email === "jane@acme.example" && j.workPhone === "555-0101" && j.companyName === "Acme Corp" && j.companyActive === true);
@@ -134,7 +134,7 @@ async function main() {
   check("since: someone moved to another site drops out of the ids", !r.data.personIds.includes(hal.id) && r.data.personIds.includes(jane.id));
 
   // --- fields per client --------------------------------------------------------------------------------
-  r = await admin.put(`/api/api-clients/${harbourClient.id}`, { fields: { person: ["firstName", "lastName", "email", "mobile", "badge_number"], company: ["name", "phone"] } });
+  r = await admin.put(`/api/api-clients/${harborClient.id}`, { fields: { person: ["firstName", "lastName", "email", "mobile", "badge_number"], company: ["name", "phone"] } });
   check("fields: the checklist is saved, names kept whatever", r.status === 200 && r.data.client.fields.person.includes("mobile") && r.data.client.fields.person.includes("company") && !r.data.client.fields.person.includes("workPhone"));
   r = await reader.get(`/api/v1/sync?since=${second.serverTime}`);
   check("fields: a change of fields changes the version, so the client fetches everything again", r.data.fieldsVersion !== first.fieldsVersion);
@@ -143,7 +143,7 @@ async function main() {
   check("fields: the client now gets mobile and the badge number, not the work phone", j2.mobile === "555-0199" && j2.custom.badge_number === "B-1" && !("workPhone" in j2));
   check("fields: an administrators-only field can't be given... unless ticked on purpose", !("salary" in j2.custom));
   r = await admin.get("/api/field-access");
-  check("fields: the client has its own column in the grid", r.data.roles.some((x) => x.name === "API: Checkout Harbour") && r.data.entities.person.find((f) => f.key === "mobile").access[harbourClient.roleId] === "view");
+  check("fields: the client has its own column in the grid", r.data.roles.some((x) => x.name === "API: Checkout Harbor") && r.data.entities.person.find((f) => f.key === "mobile").access[harborClient.roleId] === "view");
 
   // --- writing -------------------------------------------------------------------------------------------
   check("write: a read-only key can't add people", (await reader.post("/api/v1/people", { firstName: "X", lastName: "Y", companyId: acme.id })).status === 403);
@@ -165,18 +165,18 @@ async function main() {
   check("write: and matched by name the next time", r.data.matched === true);
   r = await admin.get("/api/audit?action=person.add");
   check("write: changes are audited under the client's name", r.data.entries.some((e) => e.username === "api:Checkout All"));
-  const harbourWriter = (await admin.post("/api/api-clients", { name: "Harbour Writer", sites: [harbour.id], canWrite: true })).data;
-  r = await apiAs(harbourWriter.key).post("/api/v1/companies", { name: "Harbour Only Co" });
-  check("write: a client with one site doesn't have to name it", r.status === 200 && r.data.company.sites[0].siteName === "Harbour Point");
-  check("write: nor can it put a company elsewhere", (await apiAs(harbourWriter.key).post("/api/v1/companies", { name: "Elsewhere", sites: [{ siteId: river.id }] })).status === 403);
+  const harborWriter = (await admin.post("/api/api-clients", { name: "Harbor Writer", sites: [harbor.id], canWrite: true })).data;
+  r = await apiAs(harborWriter.key).post("/api/v1/companies", { name: "Harbor Only Co" });
+  check("write: a client with one site doesn't have to name it", r.status === 200 && r.data.company.sites[0].siteName === "Harbor Point");
+  check("write: nor can it put a company elsewhere", (await apiAs(harborWriter.key).post("/api/v1/companies", { name: "Elsewhere", sites: [{ siteId: river.id }] })).status === 403);
   r = await admin.put(`/api/api-clients/${writerClient.id}`, { canWrite: false });
   check("write: taking write away turns its editable fields read-only", r.data.client.canWrite === false && (await writer.post("/api/v1/people", { firstName: "C", lastName: "D", companyId: acme.id })).status === 403 && (await admin.get("/api/field-access")).data.entities.person.find((f) => f.key === "email").access[writerClient.roleId] === "view");
 
   // --- revoking -------------------------------------------------------------------------------------------
-  r = await admin.post(`/api/api-clients/${harbourClient.id}/key`);
+  r = await admin.post(`/api/api-clients/${harborClient.id}/key`);
   check("revoke: a new key stops the old one at once", (await reader.get("/api/v1/whoami")).status === 401 && (await apiAs(r.data.key).get("/api/v1/whoami")).status === 200);
-  check("revoke: an API client's role can't be removed from Roles", (await admin.del(`/api/roles/${harbourClient.roleId}`)).status === 400);
-  check("revoke: removing the client removes its key and its column", (await admin.del(`/api/api-clients/${harbourClient.id}`)).status === 200 && (await apiAs(r.data.key).get("/api/v1/whoami")).status === 401 && !(await admin.get("/api/field-access")).data.roles.some((x) => x.id === harbourClient.roleId));
+  check("revoke: an API client's role can't be removed from Roles", (await admin.del(`/api/roles/${harborClient.roleId}`)).status === 400);
+  check("revoke: removing the client removes its key and its column", (await admin.del(`/api/api-clients/${harborClient.id}`)).status === 200 && (await apiAs(r.data.key).get("/api/v1/whoami")).status === 401 && !(await admin.get("/api/field-access")).data.roles.some((x) => x.id === harborClient.roleId));
 }
 
 main()

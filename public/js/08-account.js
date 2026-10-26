@@ -92,7 +92,7 @@ async function passkeyPanel() {
         toast(`Passkey "${name}" added.`);
         renderAccount();
       } catch (error) {
-        toast(error.name === "NotAllowedError" ? "Cancelled; nothing was added." : error.name === "InvalidStateError" ? "This device already has a passkey for your account." : error.message, "error");
+        toast(error.name === "NotAllowedError" ? "Canceled; nothing was added." : error.name === "InvalidStateError" ? "This device already has a passkey for your account." : error.message, "error");
       }
     } }));
   }

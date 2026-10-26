@@ -67,9 +67,9 @@ async function main() {
   }
 
   const admin = client();
-  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbour Point" });
-  const harbour = (await admin.get("/api/config")).data.sites[0];
-  const acme = (await admin.post("/api/companies", { name: "Acme", sites: [{ siteId: harbour.id }] })).data.company;
+  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbor Point" });
+  const harbor = (await admin.get("/api/config")).data.sites[0];
+  const acme = (await admin.post("/api/companies", { name: "Acme", sites: [{ siteId: harbor.id }] })).data.company;
   // A field only those who can change the directory see.
   const field = (await admin.post("/api/fields", { entity: "company", label: "Lease notes", type: "text", visibility: "editors" })).data.field;
   await admin.put(`/api/companies/${acme.id}`, { custom: { [field.key]: "Renews in May" } });
@@ -142,10 +142,10 @@ async function main() {
   const river = (await admin.post("/api/sites", { name: "Riverside", timeZone: "UTC" })).data.site;
   const initech = (await admin.post("/api/companies", { name: "Initech", sites: [{ siteId: river.id }] })).data.company;
   pw.manny = password();
-  pw.harbourManny = password();
+  pw.harborManny = password();
   pw.desk = password();
   await admin.post("/api/users", { username: "manny", password: pw.manny, roles: ["manager"] });
-  await admin.post("/api/users", { username: "harbourManny", password: pw.harbourManny, roles: ["manager"], sites: [harbour.id] });
+  await admin.post("/api/users", { username: "harborManny", password: pw.harborManny, roles: ["manager"], sites: [harbor.id] });
   await admin.post("/api/users", { username: "desk", password: pw.desk, roles: ["frontdesk"] });
   const manny = await as("manny");
   const desk = await as("desk");
@@ -178,9 +178,9 @@ async function main() {
   check("fields: a manager changes one", (await manny.put(`/api/fields/${deskPhone.id}`, { label: "Desk phone number" })).data.field.label === "Desk phone number");
   check("fields: but only an administrator deletes one", (await manny.del(`/api/fields/${deskPhone.id}`)).status === 403 && (await admin.del(`/api/fields/${deskPhone.id}`)).status === 200);
   check("fields: nor sets who sees them", (await manny.get("/api/field-access")).status === 403);
-  const harbourManny = await as("harbourManny");
-  check("fields: one for a single record only at the account's sites", (await harbourManny.post("/api/fields", { entity: "company", label: "Dock", type: "text", recordId: initech.id })).status === 404
-    && (await harbourManny.post("/api/fields", { entity: "company", label: "Dock", type: "text", recordId: acme.id })).status === 200);
+  const harborManny = await as("harborManny");
+  check("fields: one for a single record only at the account's sites", (await harborManny.post("/api/fields", { entity: "company", label: "Dock", type: "text", recordId: initech.id })).status === 404
+    && (await harborManny.post("/api/fields", { entity: "company", label: "Dock", type: "text", recordId: acme.id })).status === 200);
   const helper = (await admin.post("/api/roles", { name: "Data steward", directory: "edit", visitors: "read", badges: "none", fields: true })).data.role;
   check("fields: any role can be given it", helper.fields === true);
   await admin.post(`/api/users/${dee.id}/role`, { roles: ["frontdesk"] });
@@ -196,11 +196,11 @@ async function main() {
   // --- the name in the header -------------------------------------------------------------------
   const anon = client();
   check("name: the default, even before sign-in", (await anon.get("/api/auth/me")).data.branding.name === "Identity and Visitor Manager");
-  check("name: only administrators set it", (await manny.put("/api/branding", { name: "Harbour Point Tenants" })).status === 403);
+  check("name: only administrators set it", (await manny.put("/api/branding", { name: "Harbor Point Tenants" })).status === 403);
   check("name: kept to a sensible length", (await admin.put("/api/branding", { name: "x".repeat(61) })).status === 400);
-  r = await admin.put("/api/branding", { name: "  Harbour Point   Tenants ", subtitle: "Front desk" });
-  check("name: set", r.status === 200 && r.data.name === "Harbour Point Tenants" && r.data.subtitle === "Front desk");
-  check("name: shown on the sign-in page and to everyone", (await anon.get("/api/auth/me")).data.branding.name === "Harbour Point Tenants" && (await desk.get("/api/config")).data.branding.subtitle === "Front desk");
+  r = await admin.put("/api/branding", { name: "  Harbor Point   Tenants ", subtitle: "Front desk" });
+  check("name: set", r.status === 200 && r.data.name === "Harbor Point Tenants" && r.data.subtitle === "Front desk");
+  check("name: shown on the sign-in page and to everyone", (await anon.get("/api/auth/me")).data.branding.name === "Harbor Point Tenants" && (await desk.get("/api/config")).data.branding.subtitle === "Front desk");
   r = await admin.put("/api/branding", { name: "", subtitle: "" });
   check("name: empty goes back to the default", r.data.name === "Identity and Visitor Manager" && r.data.subtitle === "");
 

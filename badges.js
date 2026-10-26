@@ -329,7 +329,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (kind === "visitor") {
       const v = raw.prepare("SELECT * FROM visitors WHERE id = ?").get(Number(id));
       return v && {
-        kind, id: v.id, name: `${v.first_name} ${v.last_name}`, company: v.organisation, buildingStaff: false, active: true, blocked: Boolean(v.blocked),
+        kind, id: v.id, name: `${v.first_name} ${v.last_name}`, company: v.organization, buildingStaff: false, active: true, blocked: Boolean(v.blocked),
         clearanceLevelId: v.clearance_level_id, clearanceExpires: v.clearance_expires, clearanceValidatedAt: v.clearance_validated_at
       };
     }
@@ -449,13 +449,13 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (sites) where.push(`v.site_id IN (${[...sites].map(Number).join(",") || "NULL"})`);
     if (siteId) { where.push("v.site_id = ?"); params.push(Number(siteId)); }
     return raw.prepare(`SELECT v.id, v.visitor_id, v.site_id, v.company_name, v.host_name, v.checked_in_at, v.checkin_stage, v.purpose, s.name AS site_name, k.name AS kiosk_name,
-        p.first_name, p.last_name, p.organisation, coalesce(v.visitor_type, p.visitor_type) AS visitor_type
+        p.first_name, p.last_name, p.organization, coalesce(v.visitor_type, p.visitor_type) AS visitor_type
       FROM visits v JOIN visitors p ON p.id = v.visitor_id JOIN sites s ON s.id = v.site_id LEFT JOIN kiosks k ON k.id = v.kiosk_id
       WHERE ${where.join(" AND ")} ORDER BY v.checked_in_at`).all(...params).map((r) => ({
       visitId: r.id,
       visitorId: r.visitor_id,
       name: `${r.first_name} ${r.last_name}`,
-      organisation: r.organisation,
+      organization: r.organization,
       siteId: r.site_id,
       siteName: r.site_name,
       kioskName: r.kiosk_name,

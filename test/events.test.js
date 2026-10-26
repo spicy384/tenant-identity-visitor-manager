@@ -70,12 +70,12 @@ async function main() {
   }
 
   const admin = client();
-  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbour Point" });
+  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbor Point" });
   const site = (await admin.get("/api/config")).data.sites[0];
   await admin.put(`/api/sites/${site.id}`, { timeZone: "UTC" });
   const other = (await admin.post("/api/sites", { name: "Riverside", timeZone: "UTC" })).data.site;
   const acme = (await admin.post("/api/companies", { name: "Acme Corp", sites: [{ siteId: site.id }] })).data.company;
-  let r = await admin.post("/api/companies", { name: "Harbour Security", buildingStaff: true, sites: [{ siteId: site.id }] });
+  let r = await admin.post("/api/companies", { name: "Harbor Security", buildingStaff: true, sites: [{ siteId: site.id }] });
   check("companies: building staff is set through the API", r.status === 200 && r.data.company.buildingStaff === true);
   const { levels, classifications } = (await admin.get("/api/clearance")).data;
   const L = Object.fromEntries(levels.map((l) => [l.name, l]));
@@ -135,13 +135,13 @@ async function main() {
   r = await desk.get(`/api/badge-holders/person/${tess.id}`);
   check("holders: their badges and what else they could be given", r.data.current.map((a) => a.badgeNumber).join() === "T-100" && r.data.available.map((b) => b.number).sort().join() === "R-1,T-101");
   check("holders: a viewer sees their badges but isn't offered any", (await viewer.get(`/api/badge-holders/person/${tess.id}`)).data.available.length === 0);
-  check("sites: a Riverside desk can't see Harbour Point's people to give them badges", (await river.post(`/api/badges/${riverBadge.id}/assign`, { kind: "person", holderId: tess.id })).status === 404);
-  const harbourOnly = (await admin.post("/api/badges", { number: "H-1", type: "tenant", classificationId: uncleared.id, siteIds: [site.id] })).data.badge;
-  check("sites: nor badges valid only at Harbour Point", (await river.get(`/api/badges/${harbourOnly.id}`)).status === 404 && (await river.get(`/api/badges/${sciBadge.id}`)).status === 200);
+  check("sites: a Riverside desk can't see Harbor Point's people to give them badges", (await river.post(`/api/badges/${riverBadge.id}/assign`, { kind: "person", holderId: tess.id })).status === 404);
+  const harborOnly = (await admin.post("/api/badges", { number: "H-1", type: "tenant", classificationId: uncleared.id, siteIds: [site.id] })).data.badge;
+  check("sites: nor badges valid only at Harbor Point", (await river.get(`/api/badges/${harborOnly.id}`)).status === 404 && (await river.get(`/api/badges/${sciBadge.id}`)).status === 200);
   const both = (await admin.post("/api/badges", { number: "B-1", type: "tenant", classificationId: uncleared.id, siteIds: [site.id, other.id] })).data.badge;
   check("sites: a badge valid at both sites is seen at both", both.sites.length === 2 && (await river.get(`/api/badges/${both.id}`)).status === 200);
   r = await admin.post(`/api/badges/${riverBadge.id}/assign`, { kind: "person", holderId: tess.id });
-  check("sites: a Riverside badge can go to someone who works at Harbour Point", r.status === 200);
+  check("sites: a Riverside badge can go to someone who works at Harbor Point", r.status === 200);
   await admin.post(`/api/badges/${riverBadge.id}/return`);
   check("delete: someone holding a badge can't be deleted", (await admin.del(`/api/people/${tess.id}`)).status === 409);
   check("delete: nor their company", (await admin.del(`/api/companies/${acme.id}`)).status === 409);
@@ -158,7 +158,7 @@ async function main() {
   r = await desk.post("/api/events", { siteId: site.id, title: "Board meeting", date: day, startTime: "09:00", companyId: acme.id, hostId: host.id });
   check("events: front desk adds one", r.status === 200 && r.data.event.hostName === "Hana Host");
   const meeting = r.data.event;
-  r = await desk.post(`/api/events/${meeting.id}/guests`, { visitor: { firstName: "Grace", lastName: "Hopper", organisation: "Navy" } });
+  r = await desk.post(`/api/events/${meeting.id}/guests`, { visitor: { firstName: "Grace", lastName: "Hopper", organization: "Navy" } });
   check("guests: someone new is added as a visitor, linked to the company and host", r.status === 200 && r.data.event.guests[0].status === "expected");
   const graceId = r.data.event.guests[0].visitorId;
   const grace = (await admin.get(`/api/visitors/${graceId}`)).data.visitor;
@@ -183,7 +183,7 @@ async function main() {
   const match = r.data.matches[0];
   check("kiosk: an expected guest is offered their event's company and host first", match.companies[0].expected === true && match.companies[0].companyName === "Acme Corp" && match.companies[0].hostName === "Hana Host");
   check("kiosk: listed once, not twice", match.companies.filter((c) => c.companyId === acme.id).length === 1 && match.companies.length === 2);
-  r = await kiosk.post("/kiosk/api/checkin", { ref: match.ref, companyId: acme.id, hostId: host.id, purpose: "Meeting", details: { organisation: "Navy", citizenship: "US" } });
+  r = await kiosk.post("/kiosk/api/checkin", { ref: match.ref, companyId: acme.id, hostId: host.id, purpose: "Meeting", details: { organization: "Navy", citizenship: "US" } });
   check("kiosk: checks in", r.data.ok);
   r = await desk.get(`/api/events?date=${day}`);
   check("expected: the guest shows as here", r.data.events[0].guests[0].status === "here");
@@ -215,6 +215,49 @@ async function main() {
   check("temporary: not overdue yet", (await desk.get("/api/visits/summary")).data.tempOverdue === 0 && (await desk.get("/api/badges?state=temporary")).data.total === 1);
   await desk.post(`/api/badges/${tmp.id}/return`);
   check("temporary: back, nothing out", (await desk.get("/api/badges?state=temporary")).data.total === 0);
+
+  // --- repeating events -------------------------------------------------------------------------------
+  const { datesOf, cleanRule } = require("../events");
+  const dates = (rule, start) => datesOf(cleanRule(rule, start), start).join();
+  check("repeat: every other week on Tuesday and Thursday", dates({ freq: "weekly", interval: 2, days: [2, 4], until: "2026-11-21" }, "2026-10-27") === "2026-10-27,2026-10-29,2026-11-10,2026-11-12");
+  check("repeat: every weekday", dates({ freq: "weekdays", until: "2026-11-03" }, "2026-10-30") === "2026-10-30,2026-11-02,2026-11-03");
+  check("repeat: monthly on the second Tuesday", dates({ freq: "monthly", by: "weekday", until: "2027-01-31" }, "2026-10-13") === "2026-10-13,2026-11-10,2026-12-08,2027-01-12");
+  check("repeat: monthly on the last Friday", dates({ freq: "monthly", by: "weekday", until: "2026-12-31" }, "2026-10-30") === "2026-10-30,2026-11-27,2026-12-25");
+  check("repeat: monthly on day 31 skips the shorter months", dates({ freq: "monthly", by: "date", until: "2027-03-31" }, "2026-10-31") === "2026-10-31,2026-12-31,2027-01-31,2027-03-31");
+  let tooLong = null;
+  try { cleanRule({ freq: "daily", until: "2027-10-28" }, "2026-10-27"); } catch (error) { tooLong = error; }
+  check("repeat: for at most a year", tooLong?.status === 400 && cleanRule({ freq: "daily", until: "2027-10-27" }, "2026-10-27").until === "2027-10-27");
+
+  r = await desk.post("/api/events", { siteId: site.id, title: "Standup", date: "2099-03-01", startTime: "09:00", companyId: acme.id, hostId: host.id, repeat: { freq: "daily", until: "2099-03-05" } });
+  check("series: one event a date", r.status === 200 && r.data.event.count === 5 && r.data.event.seriesId === r.data.event.id && r.data.event.repeatText === "Every day, until 2099-03-05", JSON.stringify(r.data));
+  check("series: not more than a year ahead", (await desk.post("/api/events", { siteId: site.id, title: "Too long", date: "2099-03-01", repeat: { freq: "daily", until: "2100-03-02" } })).status === 400);
+  const standup = r.data.event;
+  const series = async () => (await desk.get("/api/events?from=2099-03-01&to=2099-03-31")).data.events.filter((e) => e.seriesId === standup.id);
+  r = await desk.post(`/api/events/${standup.id}/guests`, { visitor: { firstName: "Ada", lastName: "Lovelace", organization: "Engines" }, scope: "following" });
+  const ada = r.data.event.guests[0].visitorId;
+  let list = await series();
+  check("series: a guest added at the start is expected on every date", list.length === 5 && list.every((e) => e.guests.some((g) => g.visitorId === ada)));
+  const third = list[2];
+  r = await desk.put(`/api/events/${third.id}`, { title: "Standup B", startTime: "09:30", scope: "following" });
+  list = await series();
+  check("series: a change to a date and the later ones", r.data.event.count === 3 && list.map((e) => e.title).join() === "Standup,Standup,Standup B,Standup B,Standup B" && list[4].startTime === "09:30" && list[1].startTime === "09:00");
+  check("series: the later ones keep their dates", list.map((e) => e.date.slice(-2)).join() === "01,02,03,04,05");
+  await desk.put(`/api/events/${list[1].id}`, { date: "2099-03-10", scope: "one" });
+  list = await series();
+  check("series: a date moved alone", list.map((e) => e.date.slice(-2)).join() === "01,03,04,05,10");
+  r = await desk.post(`/api/events/${list[2].id}/guests`, { visitor: { firstName: "Alan", lastName: "Turing" } });
+  const alan = r.data.event.guests.find((g) => g.lastName === "Turing").visitorId;
+  list = await series();
+  check("series: a guest added to one date only", list.filter((e) => e.guests.some((g) => g.visitorId === alan)).map((e) => e.date).join() === "2099-03-04");
+  await desk.del(`/api/events/${list[2].id}/guests/${ada}?scope=following`);
+  list = await series();
+  check("series: a guest taken off a date and the later ones", list.filter((e) => e.guests.some((g) => g.visitorId === ada)).map((e) => e.date.slice(-2)).join() === "01,03");
+  r = await desk.del(`/api/events/${list[3].id}?scope=following`);
+  list = await series();
+  check("series: a date and the later ones canceled", r.data.count === 2 && list.map((e) => e.date.slice(-2)).join() === "01,03,04");
+  r = await desk.del(`/api/events/${list[0].id}`);
+  check("series: one date canceled alone", r.data.count === 1 && (await series()).length === 2);
+  check("series: in the audit log", (await admin.get("/api/audit?action=event.add")).data.entries.some((e) => /every day, until 2099-03-05 \(5 dates\)/.test(e.detail)));
 }
 
 main()

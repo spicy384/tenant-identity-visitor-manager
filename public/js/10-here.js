@@ -19,8 +19,8 @@ function hereSiteName() {
 async function loadHere() {
   const table = $("here-table");
   const allSites = multiSite() && !state.site;
-  const showOrg = Boolean(visitorField("organisation"));
-  const head = ["Visitor", ...(showOrg ? ["Organisation"] : []), "Visiting", "Host", ...(allSites ? ["Site"] : []), "Arrived", ""];
+  const showOrg = Boolean(visitorField("organization"));
+  const head = ["Visitor", ...(showOrg ? ["Company"] : []), "Visiting", "Host", ...(allSites ? ["Site"] : []), "Arrived", ""];
   table.tHead.replaceChildren(h("tr", {}, head.map((t) => h("th", { text: t }))));
   $("here-title").textContent = `In the building${multiSite() ? `: ${hereSiteName()}` : ""}`;
   let data;
@@ -32,7 +32,7 @@ async function loadHere() {
   }
   const rows = data.visits.map((v) => h("tr", {},
     h("td", {}, h("a", { href: `#visitor/${v.visitorId}`, text: visitorName(v.visitor) }), v.visitor.blocked ? h("span", { class: "badge bad", text: "Blocked" }) : null, v.visitor.verified === false ? h("span", { class: "badge warn no-print", text: "New" }) : null),
-    showOrg ? h("td", { text: v.visitor.organisation || "" }) : null,
+    showOrg ? h("td", { text: v.visitor.organization || "" }) : null,
     h("td", { text: v.companyName || "" }),
     h("td", { text: v.hostName || "" }),
     allSites ? h("td", { text: v.siteName }) : null,

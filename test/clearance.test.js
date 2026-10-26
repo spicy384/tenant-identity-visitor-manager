@@ -1,7 +1,7 @@
 /**
  * Clearance validation: asking for it (optionally with the last four of the SSN), the
- * Security role's queue, validating and cancelling, the digits held only in memory and
- * wiped (on validation, cancelling, deletion, expiry and shutdown), the visitor re-check
+ * Security role's queue, validating and canceling, the digits held only in memory and
+ * wiped (on validation, canceling, deletion, expiry and shutdown), the visitor re-check
  * period, and that the digits never reach the database, the audit log or the server's log.
  */
 const { spawn } = require("child_process");
@@ -91,9 +91,9 @@ function inProcess() {
   check("validate: an expiry before the grant is refused", throwsStatus(() => clearance.validate({ kind: "person", id: person.id, levelId: L.TS.id, granted: "2025-01-02", expires: "2024-01-01" }), 400) === true);
   check("validate: an unknown level is refused", throwsStatus(() => clearance.validate({ kind: "person", id: person.id, levelId: 9999 }), 400) === true);
 
-  const cancelled = clearance.requestValidation({ kind: "visitor", id: visitor.id, last4: DIGITS });
-  clearance.cancelRequest(cancelled.id, "sec");
-  check("cancel: the request goes and its digits are wiped", clearance.openCount() === 0 && clearance.digitsOf(cancelled.id) === null);
+  const canceled = clearance.requestValidation({ kind: "visitor", id: visitor.id, last4: DIGITS });
+  clearance.cancelRequest(canceled.id, "sec");
+  check("cancel: the request goes and its digits are wiped", clearance.openCount() === 0 && clearance.digitsOf(canceled.id) === null);
 
   // Visitors are re-checked every so often; people aren't.
   clearance.validate({ kind: "visitor", id: visitor.id, levelId: L.Secret.id, by: "sec" });
@@ -113,7 +113,7 @@ function inProcess() {
   const goneReq = clearance.requestValidation({ kind: "person", id: gone.id, last4: DIGITS });
   directory.deletePerson(gone.id);
   clearance.sweepDigits();
-  check("delete: their request is cancelled and the digits wiped", clearance.openCount() === 0 && clearance.digitsOf(goneReq.id) === null);
+  check("delete: their request is canceled and the digits wiped", clearance.openCount() === 0 && clearance.digitsOf(goneReq.id) === null);
   const mergeFrom = visitors.create({ firstName: "Val", lastName: "Visitor", phone: "555" });
   clearance.requestValidation({ kind: "visitor", id: mergeFrom.id, last4: DIGITS });
   visitors.merge(mergeFrom.id, visitor.id);
@@ -214,7 +214,7 @@ async function overHttp() {
   }
 
   const admin = client();
-  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbour Point" });
+  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbor Point" });
   const site = (await admin.get("/api/config")).data.sites[0];
   const other = (await admin.post("/api/sites", { name: "Riverside", timeZone: "UTC" })).data.site;
   const acme = (await admin.post("/api/companies", { name: "Acme Corp", sites: [{ siteId: site.id }] })).data.company;
@@ -243,7 +243,7 @@ async function overHttp() {
   check("http: but can for a visitor (they manage visitors)", (await desk.post("/api/clearance/requests", { kind: "visitor", id: visitor.id, last4: OTHER })).status === 200);
   check("http: a viewer can't ask", (await viewer.post("/api/clearance/requests", { kind: "person", id: person.id })).status === 403);
   check("http: the tag shows the request to anyone who reads the directory", (await viewer.get(`/api/people/${person.id}`)).data.person.clearanceStatus === "requested");
-  check("http: a JSON body that skipped the byte reader is refused (path spelt differently)", (await manager.post("/API/clearance/requests", { kind: "person", id: person.id, last4: OTHER })).status === 400
+  check("http: a JSON body that skipped the byte reader is refused (path spelled differently)", (await manager.post("/API/clearance/requests", { kind: "person", id: person.id, last4: OTHER })).status === 400
     && (await manager.post("/api/clearance/requests/", { kind: "person", id: person.id, last4: OTHER })).status === 400);
   check("http: digits sent as a number are refused", (await manager.post("/api/clearance/requests", `{"kind":"person","id":${person.id},"last4":${OTHER}}`)).status === 400);
   r = await manager.post("/api/clearance/requests", { kind: "person", id: person.id, last4: "60421" });
@@ -278,7 +278,7 @@ async function overHttp() {
   const p = (await manager.get(`/api/people/${person.id}`)).data.person;
   check("http: the person is validated, by whom and when", p.clearanceStatus === "validated" && p.clearanceLevelName === "TS" && p.clearanceValidatedBy === "sec" && p.clearanceValidatedAt > 0);
   check("http: Security limited to another site can't validate them", (await riverSecurity.post("/api/clearance/validate", { kind: "person", id: person.id, levelId: L.Secret.id })).status === 404);
-  check("http: cancelling is Security's too", (await manager.post(`/api/clearance/requests/${visitorReq.id}/cancel`)).status === 403);
+  check("http: canceling is Security's too", (await manager.post(`/api/clearance/requests/${visitorReq.id}/cancel`)).status === 403);
   check("http: Security cancels a request", (await security.post(`/api/clearance/requests/${visitorReq.id}/cancel`)).status === 200 && (await security.get("/api/clearance/requests")).data.requests.length === 0);
 
   // The re-check period is an administrator's setting.
@@ -291,7 +291,7 @@ async function overHttp() {
   check("overview: Security sees what was validated lately, with the level", r.status === 200 && r.data.recent.some((x) => x.name === "Pat Person" && x.levelName === "TS" && x.validatedBy === "sec"));
   check("overview: so do administrators", (await admin.get("/api/clearance/overview")).status === 200);
   check("overview: nobody else", (await manager.get("/api/clearance/overview")).status === 403 && (await desk.get("/api/clearance/overview")).status === 403 && (await viewer.get("/api/clearance/overview")).status === 403);
-  check("overview: Security at another site doesn't see Harbour Point's people", !(await riverSecurity.get("/api/clearance/overview")).data.recent.some((x) => x.name === "Pat Person"));
+  check("overview: Security at another site doesn't see Harbor Point's people", !(await riverSecurity.get("/api/clearance/overview")).data.recent.some((x) => x.name === "Pat Person"));
   const soon = new Date(Date.now() + 20 * 86400000).toISOString().slice(0, 10);
   await security.post("/api/clearance/validate", { kind: "visitor", id: visitor.id, levelId: L.Secret.id, expires: soon });
   r = await security.get("/api/clearance/overview?within=60");

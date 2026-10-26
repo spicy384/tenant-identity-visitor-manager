@@ -114,7 +114,7 @@
     <!-- Visitors -->
     <section id="view-visitors" class="view" data-title="Visitors" hidden>
       <div class="toolbar">
-        <input id="visitors-search" type="search" placeholder="Search name, organisation, company, email or phone" />
+        <input id="visitors-search" type="search" placeholder="Search name, organization, company, email or phone" />
         <select id="visitors-filter" aria-label="Show">
           <option value="">Everyone</option>
           <option value="review">To check</option>
@@ -275,6 +275,80 @@
       <div id="rates-body" class="stack"></div>
     </section>
 
+    <!-- Leases and charges (24-leases.js) -->
+    <section id="view-leases" class="view" data-title="Leases" hidden>
+      <div class="toolbar">
+        <input type="search" id="leases-search" placeholder="Search company, reference or office" aria-label="Search leases" />
+        <select id="leases-status" aria-label="Which leases">
+          <option value="current">Current</option>
+          <option value="ending">Ending within 90 days</option>
+          <option value="upcoming">Not started yet</option>
+          <option value="ended">Ended</option>
+          <option value="">All</option>
+        </select>
+        <span class="spacer"></span>
+        <button type="button" id="leases-add" class="primary">New lease</button>
+      </div>
+      <div class="table-wrap"><table class="table" id="leases-table"><thead></thead><tbody></tbody></table></div>
+    </section>
+
+    <section id="view-charges" class="view" data-title="Charges" hidden>
+      <div class="toolbar">
+        <input type="search" id="charges-search" placeholder="Search description, company or notes" aria-label="Search charges" />
+        <select id="charges-status" aria-label="Which charges">
+          <option value="unbilled">Not invoiced yet</option>
+          <option value="billed">Invoiced</option>
+          <option value="">All</option>
+        </select>
+        <select id="charges-company" aria-label="Company"><option value="">All companies</option></select>
+        <span class="spacer"></span>
+        <button type="button" id="charges-items" class="secondary">Price list</button>
+        <button type="button" id="charges-add" class="primary">Log a charge</button>
+      </div>
+      <p id="charges-total" class="muted small-text"></p>
+      <div class="table-wrap"><table class="table" id="charges-table"><thead></thead><tbody></tbody></table></div>
+    </section>
+
+    <!-- Finance: invoices, balances, payments, billing settings (25-finance.js) -->
+    <section id="view-invoices" class="view" data-title="Invoices" hidden>
+      <div class="toolbar">
+        <input type="search" id="invoices-search" placeholder="Search number or company" aria-label="Search invoices" />
+        <select id="invoices-state" aria-label="Which invoices">
+          <option value="unpaid">Unpaid</option>
+          <option value="overdue">Overdue</option>
+          <option value="draft">Drafts</option>
+          <option value="paid">Paid</option>
+          <option value="void">Void</option>
+          <option value="">All</option>
+        </select>
+        <input type="month" id="invoices-period" aria-label="For the month" />
+        <span class="spacer"></span>
+        <button type="button" id="invoices-export" class="secondary">Export</button>
+        <button type="button" id="invoices-new" class="secondary">New invoice</button>
+        <button type="button" id="invoices-generate" class="primary">Invoice a month</button>
+      </div>
+      <p id="invoices-total" class="muted small-text"></p>
+      <div class="table-wrap"><table class="table" id="invoices-table"><thead></thead><tbody></tbody></table></div>
+    </section>
+
+    <section id="view-balances" class="view" data-title="Balances" hidden>
+      <div id="balances-body" class="stack"></div>
+    </section>
+
+    <section id="view-payments" class="view" data-title="Payments" hidden>
+      <div class="toolbar">
+        <label class="inline-label">From <input type="date" id="payments-from" /></label>
+        <label class="inline-label">To <input type="date" id="payments-to" /></label>
+        <span class="spacer"></span>
+      </div>
+      <p id="payments-total" class="muted small-text"></p>
+      <div class="table-wrap"><table class="table" id="payments-table"><thead></thead><tbody></tbody></table></div>
+    </section>
+
+    <section id="view-finance-settings" class="view" data-title="Billing settings" hidden>
+      <div id="finance-settings-body" class="stack"></div>
+    </section>
+
     <!-- Settings (administrators; roles that manage custom fields see Fields only) -->
     <section id="view-settings" class="view" data-title="Settings" hidden>
       <div class="settings-layout">
@@ -333,7 +407,7 @@
 
       <form id="setup-form" class="stack" hidden>
         <p class="muted">No accounts exist yet. Create the first administrator. You can add more sites, Microsoft Entra ID sign-in and other users afterwards under Settings.</p>
-        <label>Building or site name <input name="siteName" autocomplete="off" maxlength="80" placeholder="Harbour Point" /></label>
+        <label>Building or site name <input name="siteName" autocomplete="off" maxlength="80" placeholder="Harbor Point" /></label>
         <label>Username <input name="username" autocomplete="username" required minlength="3" maxlength="32" /></label>
         <label>Password <input name="password" type="password" autocomplete="new-password" required minlength="12" /></label>
         <label>Confirm password <input name="confirm" type="password" autocomplete="new-password" required minlength="12" /></label>
@@ -398,6 +472,8 @@
   <script src="/js/21-bulk.js"></script>
   <script src="/js/22-facilities.js"></script>
   <script src="/js/23-checkin.js"></script>
+  <script src="/js/24-leases.js"></script>
+  <script src="/js/25-finance.js"></script>
   <script src="/js/13-app.js"></script>
 </body>
 </html>

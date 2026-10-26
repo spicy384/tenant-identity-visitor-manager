@@ -84,7 +84,7 @@ A site is a building (or a campus treated as one front desk).
 - **people**: company, site (or any), first and last name, preferred name, job title, email,
   work phone, mobile, can host visitors (yes/no), notes, active. People who leave are made
   inactive, never deleted, so Checkout's loan history keeps a name.
-- **visitors**: first and last name, email, phone, their own organisation, notes,
+- **visitors**: first and last name, email, phone, their own organization, notes,
   verified (staff have reviewed a kiosk self-registration), blocked, last visit
 - **visitor_links**: visitor ↔ company, with the usual point of contact (a person in that
   company) and notes. A visitor can have any number.
@@ -107,7 +107,7 @@ environment variables except the database key and network setup:
 |---|---|
 | Sites | Per site: name, kiosk name, logo, welcome line, address, time zone, end-of-day check-out time |
 | Visits | How many months of visits to keep (off = keep forever); applies to all sites |
-| Kiosks | Enrol, rename, move to another site, revoke; idle time before the kiosk resets |
+| Kiosks | Enroll, rename, move to another site, revoke; idle time before the kiosk resets |
 | Fields | Custom fields for companies, people and visitors |
 | Field access | The role × field grid |
 | API clients | Keys, their role, their sites, write allowed, and the fields they receive |
@@ -327,7 +327,7 @@ setup.sh seal reads the key straight from the volume.
 ## Badge images and who sees clearance levels (2026-10-14)
 
 Asked for by the user: a tenant and a visitor badge image per clearance level, shown to the
-front desk when giving a badge out, with clearance level names shown only to authorised
+front desk when giving a badge out, with clearance level names shown only to authorized
 roles (Security, Managers, Administrators). User decisions: images per level plus a pair for
 uncleared badges, personnel badges use the tenant image; a per-role "Sees clearance levels"
 switch (roles.clearances, schema 6), on for admin, manager and security (security always);
@@ -572,7 +572,7 @@ node's locale data, Kosovo added), visitors.reserved_badge_id; visits.visitor_ty
 checkin_stage (id, badge, done; null for older visits, counted as done), id_type,
 id_verified_at, id_verified_by; event_guests.badge_id. A one-time backfill puts open kiosk
 visits with no badge into stage id. The catalog has visitorType (choice) and citizenship (its
-own type, with a picker in 03-records.js); visitor organisation is labelled Company.
+own type, with a picker in 03-records.js); visitor organization is labeled Company.
 
 Flow: the kiosk check-in needs a purpose, and a new visitor's company and citizenship; it
 opens the visit at stage id. POST /api/checkins (the desk, ID already checked: idType required,
@@ -611,6 +611,46 @@ returns every badge a typed number could be (with a code: that one; without: all
 number, plus "101-12345" written together); the check-in badge step and the reserve dialog ask
 for the code when there are several. Imports match on code and number (findExact). Bulk change
 sets the code. Tests in checkin.test.js and import.test.js.
+
+## Leases, charges, invoices and a Finance role (2026-10-26)
+
+The user asked for managers to see and manage all leases and track billable items or hours,
+and for a Finance role that sees the financial details, makes invoices and tracks payments.
+Their decisions: a lease is its own record over offices; a price list plus one-off charges;
+monthly printable invoices with the option to connect or export to QuickBooks (which
+QuickBooks: not sure, so CSV for Online, IIF for Desktop, and the Online connection); managers
+read invoices and payments; no tax.
+
+roles.finance (none/read/edit; Finance role built in with directory read, facilities read,
+finance edit; Manager read; Administrator edit). Tables leases, charge_items, charges, invoices,
+invoice_lines, payments; office_assignments.lease_id (ADDED_COLUMNS; no schema bump: an older
+version just ignores them). leases.js: a lease's offices are its assignments; adoptAssignments
+gives each loose assignment a lease (same company and dates share one) at start-up and after
+Rooms or a company's page assigns; rent from the rates or fixed with yearly escalation, part
+months by days. billing.js: price list, charges, invoices (generate per month, drafts, lines,
+issue with gapless numbers, void), payments, aging, CSV and IIF exports. quickbooks.js: OAuth 2
+code flow, refresh, customers/items/invoices/payments, pulling payments; QBO_* env vars point it
+at a fake in tests. finance-routes.js; public/js/24-leases.js, 25-finance.js; Home modules
+leasesEnding and overdueInvoices; /api/invoices/:id/print (with public/print-invoice.js, as
+inline scripts aren't allowed). test/finance.test.js (18 suites).
+
+## Room rent, escalation, event contacts and repeating events (2026-10-26)
+
+The user asked: a yearly increase for every lease (both kinds: rent from the rates goes up
+too), rooms let for a fixed amount a month (offices.monthly_rent, which wins over every rate:
+facilities.rentOf, used by rooms, companies and leases), American spellings throughout (the
+visitors.organisation column renamed once, with the old key still accepted from older pages,
+kiosks and files), events' company picked by typing the point of contact's name (the old
+company list showed only the companies at the header's site), and repeating events.
+
+Repeating events, as the user chose: daily, weekdays, weekly on chosen days every week or
+every other week, monthly on the same date or the same weekday (the fifth counts as the
+last), until at most a year after the first date. Each date is its own visitor_events row
+sharing series_id (the first date's id) and series_rule (JSON). Guests added at creation go
+on every date; afterwards a guest, an edit or a cancellation applies to one date or to that
+date and the later ones (scope "following"; later dates keep their own dates).
+test/frontend.test.js also checks that no two page scripts declare the same top-level name
+(a second contactPicker had silently replaced the check-in one).
 
 ## Tests
 

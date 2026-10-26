@@ -1,4 +1,4 @@
-// 22-facilities.js: Facilities. Floor plans with the offices drawn on them (coloured by
+// 22-facilities.js: Facilities. Floor plans with the offices drawn on them (colored by
 // whether each is available, occupied, assigned from a later date or unavailable), the
 // offices as a table with their totals, rates, and each company's offices on its page.
 // Seeing any of it takes a role's facilities access; drawing, assigning and setting rates
@@ -41,7 +41,7 @@ function roomColor(o, colorBy = planColorBy()) {
 }
 
 const classificationText = (o) => (o.classification ? `Classified: ${o.classification.name}` : "Unclassified");
-const RATE_SOURCES = { company: "the company's rate", office: "the office's rate", site: "the site's default" };
+const RATE_SOURCES = { company: "the company's rate", office: "the office's rate", site: "the site's default", monthly: "a fixed amount a month" };
 
 const moneyFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const fmtMoney = (n) => (n === null || n === undefined ? "—" : moneyFormat.format(n));
@@ -1026,15 +1026,25 @@ async function editOffice(office, { floor = null, points = null } = {}) {
         options: [{ value: "", label: "Unclassified" }, ...kinds.classes.map((c) => ({ value: String(c.id), label: `Classified: ${c.name}` }))] },
       { name: "sqft", label: "Size (sq ft)", type: "number", value: office ? office.sqft ?? "" : measured ?? "", step: "any", min: "0", half: true,
         hint: measured ? `About ${measured.toLocaleString("en-US")} sq ft measured on the plan${office ? "" : ": change it to the real size if you know it"}.` : null },
+      { name: "pricing", label: "Priced", type: "select", half: true, value: office?.monthlyRent !== null && office?.monthlyRent !== undefined ? "monthly" : "sqft",
+        options: [{ value: "sqft", label: "By the square foot" }, { value: "monthly", label: "A fixed amount a month" }],
+        onChange: (input, inputs) => {
+          inputs.rate.closest("label").hidden = input.value !== "sqft";
+          inputs.monthlyRent.closest("label").hidden = input.value !== "monthly";
+        } },
       { name: "rate", label: "Rate ($ per sq ft a month)", type: "number", value: office?.rate ?? "", step: "0.01", min: "0", half: true,
         hint: "Empty to use the site's default. A company's own rate wins over both." },
+      { name: "monthlyRent", label: "Monthly rent ($)", type: "number", value: office?.monthlyRent ?? "", step: "0.01", min: "0", half: true,
+        hint: "What the room costs a month, whatever its size. Company and site rates don't apply." },
       { name: "unavailable", label: "Unavailable (can't be assigned, e.g. under renovation)", type: "checkbox", value: Boolean(office?.unavailable) },
       { name: "notes", label: "Notes", type: "textarea", value: office?.notes ?? "", rows: 2 }
     ].filter(Boolean),
     submitLabel: office ? "Save" : "Add room",
     onSubmit: async (v) => {
       const body = { name: v.name, roomTypeId: v.roomTypeId ? Number(v.roomTypeId) : null, classId: v.classId ? Number(v.classId) : null,
-        sqft: v.sqft === "" ? null : Number(v.sqft), rate: v.rate === "" ? null : Number(v.rate), unavailable: v.unavailable, notes: v.notes };
+        sqft: v.sqft === "" ? null : Number(v.sqft), rate: v.rate === "" ? null : Number(v.rate), unavailable: v.unavailable, notes: v.notes,
+        monthlyRent: v.pricing === "monthly" ? (v.monthlyRent === "" ? null : Number(v.monthlyRent)) : null };
+      if (v.pricing === "monthly" && body.monthlyRent === null) throw new Error("Enter the monthly rent, or price the room by the square foot.");
       if (office) return (await api(`/api/offices/${office.id}`, { method: "PUT", body })).office;
       return (await api("/api/offices", { method: "POST", body: { ...body, floorId: floor ? floor.id : Number(v.floorId), ...(points ? { points } : {}) } })).office;
     }
@@ -1077,7 +1087,7 @@ async function openOffice(id, onChange = () => {}) {
             h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: () => pick({ do: "remove", a }) })) : null));
       }))))
     : h("p", { class: "muted small-text", text: "Never assigned." });
-  const rateText = office.effectiveRate === null ? "No rate set" : `${fmtRate(office.effectiveRate)} a month, ${RATE_SOURCES[office.rateSource]}`;
+  const rateText = office.monthlyRent !== null ? "A fixed amount a month" : office.effectiveRate === null ? "No rate set" : `${fmtRate(office.effectiveRate)} a month, ${RATE_SOURCES[office.rateSource]}`;
   const body = h("div", { class: "stack" },
     h("dl", { class: "facts" },
       h("dt", { text: "Status" }), h("dd", {}, statusBadge(office.status), office.status === "unavailable" ? null : h("span", { text: ` ${officeHolder(office) || ""}` })),
@@ -1089,7 +1099,7 @@ async function openOffice(id, onChange = () => {}) {
       h("dt", { text: "Size" }), h("dd", {}, fmtSqft(office.sqft),
         office.measuredSqft && office.measuredSqft !== office.sqft ? h("span", { class: "muted small-text", text: ` (about ${fmtSqft(office.measuredSqft)} measured on the plan)` }) : null),
       h("dt", { text: "Rate" }), h("dd", { text: rateText }),
-      office.rate !== null && office.rateSource !== "office" ? [h("dt", { text: "Office's own rate" }), h("dd", { text: `${fmtRate(office.rate)} a month` })] : null,
+      office.rate !== null && office.monthlyRent === null && office.rateSource !== "office" ? [h("dt", { text: "Office's own rate" }), h("dd", { text: `${fmtRate(office.rate)} a month` })] : null,
       h("dt", { text: office.status === "occupied" ? "Monthly" : "Asking" }), h("dd", {}, h("strong", { text: office.monthly === null ? "—" : `${fmtMoney(office.monthly)} a month` })),
       office.notes ? [h("dt", { text: "Notes" }), h("dd", { class: "pre", text: office.notes })] : null),
     h("h4", { class: "form-heading", text: "Assignments" }),
@@ -1248,7 +1258,7 @@ async function loadOffices() {
       h("td", { class: "num", text: o.sqft === null ? "—" : Number(o.sqft).toLocaleString("en-US") }),
       h("td", {}, statusBadge(o.status)),
       h("td", { text: officeHolder(o) || "" }),
-      h("td", { class: "num", title: o.rateSource ? `From ${RATE_SOURCES[o.rateSource]}` : null, text: o.effectiveRate === null ? "—" : fmtRate(o.effectiveRate) }),
+      h("td", { class: "num", title: o.rateSource ? `From ${RATE_SOURCES[o.rateSource]}` : null, text: o.monthlyRent !== null ? "Fixed" : o.effectiveRate === null ? "—" : fmtRate(o.effectiveRate) }),
       h("td", { class: `num${o.status === "occupied" ? "" : " muted"}`, title: o.status === "occupied" ? null : "Asking", text: fmtMoney(o.monthly) }));
     row.addEventListener("click", () => openOffice(o.id, loadOffices));
     if (box) {
@@ -1526,11 +1536,13 @@ async function assignOfficesToCompany(company, companyRate) {
   const planBox = h("div", { class: "pick-plan" });
   const list = h("div", { class: "pick-offices" });
   const summary = h("p", { class: "pick-summary small-text" });
-  const rateOf = (o) => companyRate ?? o.askingRate;
-  const monthlyOf = (o) => (rateOf(o) !== null && o.sqft !== null ? o.sqft * rateOf(o) : null);
+  // A room let for a fixed amount a month costs that, whatever the company's rate.
+  const fixed = (o) => o.monthlyRent !== null && o.monthlyRent !== undefined;
+  const rateOf = (o) => (fixed(o) ? null : companyRate ?? o.askingRate);
+  const monthlyOf = (o) => (fixed(o) ? o.monthlyRent : rateOf(o) !== null && o.sqft !== null ? o.sqft * rateOf(o) : null);
   const floorLabel = (f) => (multiSite() && !state.site ? `${f.siteName}: ${f.name}` : f.name);
 
-  // The shapes on the plan shown, by office id, to recolour as offices are chosen; zoom per floor.
+  // The shapes on the plan shown, by office id, to recolor as offices are chosen; zoom per floor.
   let shapesById = new Map();
   const zooms = new Map();
   const toggle = (o) => {
@@ -1579,7 +1591,7 @@ async function assignOfficesToCompany(company, companyRate) {
         lastFloor = o.floorId;
       }
       const box = h("input", { type: "checkbox", checked: picked.has(o.id), onchange: () => toggle(o) });
-      const facts = [o.sqft !== null ? fmtSqft(o.sqft) : "no size", rateOf(o) !== null ? `${fmtRate(rateOf(o))}, ${fmtMoney(monthlyOf(o))} a month` : "no rate",
+      const facts = [o.sqft !== null ? fmtSqft(o.sqft) : "no size", fixed(o) ? `${fmtMoney(o.monthlyRent)} a month, fixed` : rateOf(o) !== null ? `${fmtRate(rateOf(o))}, ${fmtMoney(monthlyOf(o))} a month` : "no rate",
         o.current ? `${o.current.companyName} until ${fmtDay(o.current.endDate)}` : null].filter(Boolean).join(" · ");
       rows.push(h("label", { class: `check-row pick-office${picked.has(o.id) ? " is-picked" : ""}` }, box, h("span", {}, h("strong", { text: o.name }), h("span", { class: "muted small-text", text: ` ${facts}` }))));
     }

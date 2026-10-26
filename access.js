@@ -22,6 +22,8 @@ const AREA_LEVELS = ["none", "read", "edit"];
 // Badges: read to look, edit to issue and take back, manage to add, change and remove them too.
 const BADGE_LEVELS = ["none", "read", "edit", "manage"];
 // Facilities (floors, offices, assignments and rates) use the plain levels: none, read, edit.
+// So does finance: read sees invoices, payments and balances; edit creates invoices, records
+// payments and keeps the billing settings and the QuickBooks connection.
 const ROLE_KINDS = { user: "Staff accounts", kiosk: "Kiosk devices", api: "API clients" };
 
 const DEFAULT_ROLES = [
@@ -29,13 +31,15 @@ const DEFAULT_ROLES = [
   // facilities: floors, offices and who has them; Administrator and Manager by default, and any custom role given it.
   // fields: adds and changes custom fields for the records it can change, and badge fields when it issues or manages badges
   // (Manager and Security by default; deleting stays with administrators).
-  { id: "admin", name: "Administrator", kind: "user", directory: "edit", visitors: "edit", badges: "manage", clearances: true, facilities: "edit", position: 0 },
-  { id: "manager", name: "Manager", kind: "user", directory: "edit", visitors: "edit", badges: "edit", clearances: true, facilities: "edit", fields: true, position: 10 },
+  { id: "admin", name: "Administrator", kind: "user", directory: "edit", visitors: "edit", badges: "manage", clearances: true, facilities: "edit", finance: "edit", position: 0 },
+  { id: "manager", name: "Manager", kind: "user", directory: "edit", visitors: "edit", badges: "edit", clearances: true, facilities: "edit", finance: "read", fields: true, position: 10 },
   { id: "frontdesk", name: "Front desk", kind: "user", directory: "read", visitors: "edit", badges: "edit", position: 20 },
   // The only role that validates and sets clearances, and sees the validation queue.
   // Security also keeps the badge stock: only it (and administrators) add, change and remove badges.
   { id: "security", name: "Security", kind: "user", directory: "read", visitors: "read", badges: "manage", clearances: true, fields: true, position: 25 },
   { id: "viewer", name: "Viewer", kind: "user", directory: "read", visitors: "read", badges: "read", position: 30 },
+  // Sees every financial detail (leases, rates, charges) and keeps the books: invoices and payments.
+  { id: "finance", name: "Finance", kind: "user", directory: "read", visitors: "none", badges: "none", facilities: "read", finance: "edit", position: 28 },
   { id: "kiosk", name: "Kiosk", kind: "kiosk", directory: "read", visitors: "none", badges: "none", position: 90 },
   { id: "checkout", name: "Equipment Checkout", kind: "api", directory: "read", visitors: "none", badges: "none", position: 91 }
 ];
@@ -78,6 +82,7 @@ function createAccess({ db, fields }) {
     return r && { id: r.id, name: r.name, kind: r.kind, builtIn: Boolean(r.built_in), directory: r.directory, visitors: r.visitors, badges: r.badges || "none",
       clearances: r.id === "admin" || r.id === "security" || (r.kind === "user" && Boolean(r.clearances)),
       facilities: r.id === "admin" ? "edit" : r.kind === "user" ? r.facilities || "none" : "none",
+      finance: r.id === "admin" ? "edit" : r.kind === "user" ? r.finance || "none" : "none",
       fields: r.id === "admin" || (r.kind === "user" && Boolean(r.fields)), position: r.position };
   }
 
@@ -123,8 +128,8 @@ function createAccess({ db, fields }) {
     db.transaction(() => {
       for (const r of DEFAULT_ROLES) {
         if (getRole(r.id)) continue;
-        raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, clearances, facilities, fields, position, created_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(r.id, r.name, r.kind, r.directory, r.visitors, r.badges, r.clearances ? 1 : 0, r.facilities || "none", r.fields ? 1 : 0, r.position, now);
+        raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, clearances, facilities, finance, fields, position, created_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(r.id, r.name, r.kind, r.directory, r.visitors, r.badges, r.clearances ? 1 : 0, r.facilities || "none", r.finance || "none", r.fields ? 1 : 0, r.position, now);
         if (r.id === "admin") continue;
         for (const entity of ENTITIES) {
           for (const f of builtIn(entity)) putPolicy.run(r.id, entity, f.key, builtInDefault(r, entity, f.key));
@@ -164,6 +169,14 @@ function createAccess({ db, fields }) {
     });
   }
 
+  // And finance: once, Administrator and Manager get theirs (the Finance role is made with its own).
+  if (!db.getSetting("roles.finance_seeded")) {
+    db.transaction(() => {
+      for (const r of DEFAULT_ROLES) if (r.finance) raw.prepare("UPDATE roles SET finance = ? WHERE id = ? AND built_in = 1").run(r.finance, r.id);
+      db.setSetting("roles.finance_seeded", "1");
+    });
+  }
+
   // And adding custom fields: once, Manager gets it.
   if (!db.getSetting("roles.fields_seeded")) {
     db.transaction(() => {
@@ -192,7 +205,7 @@ function createAccess({ db, fields }) {
   }
 
   /** A new account role; its grid column starts as a copy of `copyFrom` (default: Viewer). */
-  function createRole({ name, directory = "read", visitors = "none", badges = "none", clearances = false, facilities = "none", fields: managesFields = false, copyFrom = "viewer" }) {
+  function createRole({ name, directory = "read", visitors = "none", badges = "none", clearances = false, facilities = "none", finance = "none", fields: managesFields = false, copyFrom = "viewer" }) {
     const clean = String(name || "").trim().slice(0, 40);
     if (!clean) throw fail(400, "Give the role a name.");
     if (raw.prepare("SELECT 1 FROM roles WHERE name = ?").get(clean)) throw fail(409, "A role with that name already exists.");
@@ -200,11 +213,12 @@ function createAccess({ db, fields }) {
     checkArea(visitors, "Visitor access");
     checkArea(badges, "Badge access", BADGE_LEVELS);
     checkArea(facilities, "Facilities access");
+    checkArea(finance, "Finance access");
     const source = getRole(copyFrom);
     if (!source || source.kind !== "user") throw fail(400, "Copy the field access of a staff role.");
     const id = roleId(clean);
     db.transaction(() => {
-      raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, clearances, facilities, fields, position, created_at) VALUES (?, ?, 'user', 0, ?, ?, ?, ?, ?, ?, 50, ?)").run(id, clean, directory, visitors, badges, clearances === true ? 1 : 0, facilities, managesFields === true ? 1 : 0, Date.now());
+      raw.prepare("INSERT INTO roles (id, name, kind, built_in, directory, visitors, badges, clearances, facilities, finance, fields, position, created_at) VALUES (?, ?, 'user', 0, ?, ?, ?, ?, ?, ?, ?, 50, ?)").run(id, clean, directory, visitors, badges, clearances === true ? 1 : 0, facilities, finance, managesFields === true ? 1 : 0, Date.now());
       if (source.id === "admin") {
         // Administrators have no stored column: everything is editable.
         for (const entity of ENTITIES) {
@@ -223,7 +237,7 @@ function createAccess({ db, fields }) {
     if (!role) throw fail(404, "No such role.");
     if (role.id === "admin") throw fail(400, "The Administrator role always has full access.");
     if (role.kind === "api" && !role.builtIn) throw fail(400, "An API client's fields are set under Settings > API clients.");
-    if (role.kind !== "user" && (patch.directory !== undefined || patch.visitors !== undefined || patch.badges !== undefined || patch.clearances !== undefined || patch.facilities !== undefined || patch.fields !== undefined)) throw fail(400, `What the ${role.name} role reaches is fixed; set which fields it sees in the field access grid.`);
+    if (role.kind !== "user" && (patch.directory !== undefined || patch.visitors !== undefined || patch.badges !== undefined || patch.clearances !== undefined || patch.facilities !== undefined || patch.finance !== undefined || patch.fields !== undefined)) throw fail(400, `What the ${role.name} role reaches is fixed; set which fields it sees in the field access grid.`);
     if (role.id === "security" && patch.clearances === false) throw fail(400, "The Security role validates clearances, so it always sees clearance levels.");
     const next = { ...role };
     if (patch.name !== undefined) {
@@ -239,8 +253,9 @@ function createAccess({ db, fields }) {
     if (patch.badges !== undefined) next.badges = checkArea(patch.badges, "Badge access", BADGE_LEVELS);
     if (patch.clearances !== undefined) next.clearances = patch.clearances === true;
     if (patch.facilities !== undefined) next.facilities = checkArea(patch.facilities, "Facilities access");
+    if (patch.finance !== undefined) next.finance = checkArea(patch.finance, "Finance access");
     if (patch.fields !== undefined) next.fields = patch.fields === true;
-    raw.prepare("UPDATE roles SET name = ?, directory = ?, visitors = ?, badges = ?, clearances = ?, facilities = ?, fields = ? WHERE id = ?").run(next.name, next.directory, next.visitors, next.badges, next.clearances ? 1 : 0, next.facilities, next.fields ? 1 : 0, id);
+    raw.prepare("UPDATE roles SET name = ?, directory = ?, visitors = ?, badges = ?, clearances = ?, facilities = ?, finance = ?, fields = ? WHERE id = ?").run(next.name, next.directory, next.visitors, next.badges, next.clearances ? 1 : 0, next.facilities, next.finance, next.fields ? 1 : 0, id);
     return getRole(id);
   }
 
@@ -441,6 +456,7 @@ function createAccess({ db, fields }) {
       // Sees clearance level names; everyone else sees badge template images instead.
       clearances: roles.some((r) => r.clearances),
       facilities: highestArea(roles.map((r) => r.facilities)),
+      finance: highestArea(roles.map((r) => r.finance)),
       // Adds and changes custom fields (for the records it can change).
       fields: roles.some((r) => r.fields),
       sites: limited ? new Set(principal.sites.map(Number)) : null,
@@ -468,6 +484,12 @@ function createAccess({ db, fields }) {
   const canReadFacilities = (ctx) => ctx.facilities === "read" || ctx.facilities === "edit";
   /** Draws floors and offices, assigns them and sets rates. */
   const canEditFacilities = (ctx) => ctx.facilities === "edit";
+  /** Sees invoices, payments and balances. */
+  const canReadFinance = (ctx) => ctx.finance === "read" || ctx.finance === "edit";
+  /** Creates and issues invoices, records payments, keeps the billing settings and the QuickBooks connection. */
+  const canEditFinance = (ctx) => ctx.finance === "edit";
+  /** Logs charges to tenants: those who change facilities (Managers) or keep the books (Finance). */
+  const canEditCharges = (ctx) => canEditFacilities(ctx) || canEditFinance(ctx);
   /**
    * The record types whose custom fields the caller may add and change: administrators every
    * one; a role with "manages custom fields" those that role itself can change, and badges when
@@ -537,7 +559,8 @@ function createAccess({ db, fields }) {
     if (!editsArea(ctx[areaOf(entity)], entity)) throw fail(403, { visitors: "This account can't change visitors.", badges: "Only Security adds and changes badges." }[areaOf(entity)] || "This account can't change the directory.");
     const byKey = new Map(fieldList.map((f) => [f.key, f]));
     const refused = [];
-    const alias = entity === "visitor" ? { links: "companies" } : { companyId: "company", siteId: "site", siteIds: "sites", sites: "sites" };
+    // The British spelling of organization is still taken (older pages), and checked as it.
+    const alias = entity === "visitor" ? { links: "companies", organisation: "organization" } : { companyId: "company", siteId: "site", siteIds: "sites", sites: "sites" };
     for (const key of Object.keys(patch)) {
       if (key === "custom" || key === "id") continue;
       const fieldKey = alias[key] || key;
@@ -594,7 +617,7 @@ function createAccess({ db, fields }) {
     canSeeClearances,
     canManageBadges,
     canReadFacilities,
-    canEditFacilities,
+    canEditFacilities, canReadFinance, canEditFinance, canEditCharges,
     fieldEntitiesFor,
     canManageFields,
     fieldsFor,

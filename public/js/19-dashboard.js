@@ -81,7 +81,7 @@ const DASHBOARD_MODULES = {
       return { count: total, attention: total > 0, body: dashList(visitors.map((v) => dashRow({
         href: `#visitor/${v.id}`,
         main: visitorName(v),
-        sub: [v.organisation, (v.companies || []).map((c) => c.companyName).join(", ")].filter(Boolean).join(" · ") || null,
+        sub: [v.organization, (v.companies || []).map((c) => c.companyName).join(", ")].filter(Boolean).join(" · ") || null,
         right: h("span", { class: "muted small-text", text: fmtDate(v.createdAt) })
       })), "Nobody to check.", { more: "#visitors" }) };
     }
@@ -136,7 +136,7 @@ const DASHBOARD_MODULES = {
       return { count: requests.length, attention: requests.length > 0, body: dashList(requests.map((q) => dashRow({
         href: "#clearance",
         main: q.name,
-        sub: [q.kind === "visitor" ? "Visitor" : q.organisation, q.requestedBy ? `asked by ${q.requestedBy}` : null].filter(Boolean).join(" · "),
+        sub: [q.kind === "visitor" ? "Visitor" : q.organization, q.requestedBy ? `asked by ${q.requestedBy}` : null].filter(Boolean).join(" · "),
         right: h("span", { class: "muted small-text", text: agoText(q.requestedAt) })
       })), "Nothing waiting.", { more: "#clearance" }) };
     }
@@ -150,7 +150,7 @@ const DASHBOARD_MODULES = {
       return { count: rechecks.length, attention: rechecks.some((x) => x.overdue), body: dashList(rechecks.map((x) => dashRow({
         href: holderHref(x),
         main: x.name,
-        sub: [x.levelName, x.organisation].filter(Boolean).join(" · "),
+        sub: [x.levelName, x.organization].filter(Boolean).join(" · "),
         right: x.overdue ? h("span", { class: "badge bad", text: "Overdue" }) : h("span", { class: "muted small-text", text: `due ${fmtDate(x.dueAt)}` })
       })), "No re-checks coming up.", { more: "#clearances" }) };
     }
@@ -164,7 +164,7 @@ const DASHBOARD_MODULES = {
       return { count: expiring.length, attention: expiring.some((x) => x.expired), body: dashList(expiring.map((x) => dashRow({
         href: holderHref(x),
         main: x.name,
-        sub: [x.levelName, x.kind === "visitor" ? "Visitor" : x.organisation].filter(Boolean).join(" · "),
+        sub: [x.levelName, x.kind === "visitor" ? "Visitor" : x.organization].filter(Boolean).join(" · "),
         right: x.expired ? h("span", { class: "badge bad", text: "Expired" }) : h("span", { class: "muted small-text", text: dateText(x.expires) })
       })), "Nothing expiring soon.", { more: "#clearances" }) };
     }
@@ -183,6 +183,39 @@ const DASHBOARD_MODULES = {
         h("div", { class: "dash-stats" }, Object.keys(OFFICE_STATUS).map((st) => stat(st, s[st]))),
         h("div", { class: "occupancy-bar", role: "img", "aria-label": `${let_}% of the space let` }, h("span", { style: `width: ${let_}%` })),
         h("p", { class: "small-text" }, h("strong", { text: `${let_}% let` }), h("span", { class: "muted", text: ` · ${fmtSqft(s.sqft.occupied)} of ${fmtSqft(s.sqft.total)} · ${fmtMoney(s.monthly)} a month` }))) };
+    }
+  },
+  leasesEnding: {
+    title: "Leases ending soon",
+    description: "Leases that end within 90 days, or ended in the last 30.",
+    href: "#leases",
+    async load() {
+      const { leases } = await api("/api/leases/ending");
+      const today = localToday();
+      return { count: leases.length, attention: leases.some((l) => l.endDate < today), body: dashList(leases.map((l) => dashRow({
+        href: `#lease/${l.id}`,
+        main: l.companyName,
+        sub: [l.reference, l.offices.map((o) => o.name).join(", ") || null].filter(Boolean).join(" · ") || null,
+        right: h("span", { class: `badge ${l.endDate < today ? "bad" : "warn"}`, text: l.endDate < today ? `Ended ${dateText(l.endDate)}` : `Ends ${dateText(l.endDate)}` })
+      })), "No lease ends in the next 90 days.", { more: "#leases" }) };
+    }
+  },
+  overdueInvoices: {
+    title: "Overdue invoices",
+    description: "Issued invoices past their due date with a balance, oldest first.",
+    href: "#invoices",
+    async load() {
+      const { invoices } = await api("/api/invoices?state=overdue");
+      invoices.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+      const owed = invoices.reduce((n, i) => n + i.balance, 0);
+      return { count: invoices.length, attention: invoices.length > 0, body: h("div", { class: "stack" },
+        invoices.length ? h("p", { class: "small-text" }, h("strong", { text: fmtMoney(owed) }), h("span", { class: "muted", text: " overdue" })) : "",
+        dashList(invoices.map((i) => dashRow({
+          href: `#invoice/${i.id}`,
+          main: `${i.number} · ${i.companyName}`,
+          sub: `Due ${dateText(i.dueDate)}, ${i.daysOverdue} day${i.daysOverdue === 1 ? "" : "s"} ago`,
+          right: h("span", { class: "badge bad", text: fmtMoney(i.balance) })
+        })), "Nothing is overdue.", { more: "#invoices" })) };
     }
   },
   validations: {

@@ -12,7 +12,7 @@
  * change a record can ask for validation, optionally with the last four digits of the
  * person's SSN. Those digits are held only in this process's memory, never in the database,
  * a log or a response other than the Security role's, and are wiped when the request is
- * validated or cancelled, after `digitsHours` (CLEARANCE_DIGITS_HOURS, 36 to start with), or
+ * validated or canceled, after `digitsHours` (CLEARANCE_DIGITS_HOURS, 36 to start with), or
  * when the process stops. They are kept and handed around as Buffers, never strings: a
  * string can't be overwritten and lingers until the garbage collector reuses its memory. A clearance
  * counts for badges only once validated; a visitor's only within the re-check period
@@ -286,11 +286,11 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
   function holderRow(kind, id) {
     if (kind === "person") {
       const r = raw.prepare("SELECT p.*, c.name AS company_name FROM people p JOIN companies c ON c.id = p.company_id WHERE p.id = ?").get(Number(id));
-      return r && { kind, id: r.id, name: `${r.first_name} ${r.last_name}`, organisation: r.company_name };
+      return r && { kind, id: r.id, name: `${r.first_name} ${r.last_name}`, organization: r.company_name };
     }
     if (kind === "visitor") {
       const r = raw.prepare("SELECT * FROM visitors WHERE id = ?").get(Number(id));
-      return r && { kind, id: r.id, name: `${r.first_name} ${r.last_name}`, organisation: r.organisation };
+      return r && { kind, id: r.id, name: `${r.first_name} ${r.last_name}`, organization: r.organization };
     }
     throw fail(400, "Clearances belong to people and visitors.");
   }
@@ -359,7 +359,7 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
         kind: r.holder_kind,
         holderId: r.holder_id,
         name: h ? h.name : "(removed)",
-        organisation: h ? h.organisation : null,
+        organization: h ? h.organization : null,
         currentLevel: current?.clearance_level_id ? level(current.clearance_level_id)?.name || null : null,
         lastValidatedAt: current?.clearance_validated_at || null,
         requestedBy: r.requested_by,
@@ -406,14 +406,14 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
   function cancelRequest(requestId, by) {
     const r = raw.prepare("SELECT * FROM clearance_requests WHERE id = ? AND status = 'open'").get(Number(requestId));
     if (!r) throw fail(404, "No such request waiting.");
-    raw.prepare("UPDATE clearance_requests SET status = 'cancelled', resolved_by = ?, resolved_at = ? WHERE id = ?").run(by, now(), r.id);
+    raw.prepare("UPDATE clearance_requests SET status = 'canceled', resolved_by = ?, resolved_at = ? WHERE id = ?").run(by, now(), r.id);
     wipeDigits(r.id);
     return { holder: holderRow(r.holder_kind, r.holder_id) };
   }
 
   /** Someone is being deleted: their waiting requests go, digits and all. */
   function forgetHolder(kind, id, by = null) {
-    closeOpen(kind, id, "cancelled", by);
+    closeOpen(kind, id, "canceled", by);
     sweepDigits();
   }
 
@@ -436,15 +436,15 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     const holders = (where, params = []) => [
       ...raw.prepare(`SELECT 'person' AS kind, p.id, p.first_name, p.last_name, c.name AS org, l.name AS level_name, p.clearance_expires, p.clearance_validated_at, p.clearance_validated_by
         FROM people p JOIN companies c ON c.id = p.company_id LEFT JOIN clearance_levels l ON l.id = p.clearance_level_id WHERE ${where.replace(/\bX\./g, "p.")}`).all(...params),
-      ...raw.prepare(`SELECT 'visitor' AS kind, v.id, v.first_name, v.last_name, v.organisation AS org, l.name AS level_name, v.clearance_expires, v.clearance_validated_at, v.clearance_validated_by
+      ...raw.prepare(`SELECT 'visitor' AS kind, v.id, v.first_name, v.last_name, v.organization AS org, l.name AS level_name, v.clearance_expires, v.clearance_validated_at, v.clearance_validated_by
         FROM visitors v LEFT JOIN clearance_levels l ON l.id = v.clearance_level_id WHERE ${where.replace(/\bX\./g, "v.")}`).all(...params)
     ];
     const item = (r, extra = {}) => ({
-      kind: r.kind, id: r.id, name: `${r.first_name} ${r.last_name}`, organisation: r.org || null, levelName: r.level_name || null,
+      kind: r.kind, id: r.id, name: `${r.first_name} ${r.last_name}`, organization: r.org || null, levelName: r.level_name || null,
       expires: r.clearance_expires || null, validatedAt: r.clearance_validated_at || null, validatedBy: r.clearance_validated_by || null, ...extra
     });
     const recheckBy = t + withinDays * DAY_MS;
-    const rechecks = raw.prepare(`SELECT 'visitor' AS kind, v.id, v.first_name, v.last_name, v.organisation AS org, l.name AS level_name, v.clearance_expires, v.clearance_validated_at, v.clearance_validated_by
+    const rechecks = raw.prepare(`SELECT 'visitor' AS kind, v.id, v.first_name, v.last_name, v.organization AS org, l.name AS level_name, v.clearance_expires, v.clearance_validated_at, v.clearance_validated_by
         FROM visitors v JOIN clearance_levels l ON l.id = v.clearance_level_id
         WHERE v.clearance_validated_at IS NOT NULL AND v.clearance_validated_at + ? <= ? ORDER BY v.clearance_validated_at`).all(days * DAY_MS, recheckBy)
       .map((r) => item(r, { dueAt: r.clearance_validated_at + days * DAY_MS, overdue: r.clearance_validated_at + days * DAY_MS < t }));

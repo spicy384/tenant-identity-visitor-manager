@@ -15,7 +15,7 @@ const IMPORT_FIELDS = {
   people: [
     { key: "first_name", field: "firstName", label: "First name", required: true, names: ["firstname", "first", "givenname", "forename", "fname"] },
     { key: "last_name", field: "lastName", label: "Last name", required: true, names: ["lastname", "surname", "familyname", "last", "lname"] },
-    { key: "company", field: "company", label: "Company", required: true, names: ["company", "companyname", "firm", "firmname", "organisation", "organization", "employer", "tenant", "business"] },
+    { key: "company", field: "company", label: "Company", required: true, names: ["company", "companyname", "firm", "firmname", "organization", "organization", "employer", "tenant", "business"] },
     { key: "preferred_name", field: "preferredName", label: "Preferred name", names: ["preferredname", "nickname", "knownas"] },
     { key: "job_title", field: "jobTitle", label: "Job title", names: ["jobtitle", "title", "position", "role"] },
     { key: "email", field: "email", label: "Email", names: ["email", "emailaddress", "mail", "workemail"] },
@@ -27,7 +27,7 @@ const IMPORT_FIELDS = {
     { key: "active", field: "active", label: "Active", hint: "yes or no", names: ["active", "current", "iscurrent", "enabled"] }
   ],
   companies: [
-    { key: "name", field: "name", label: "Name", required: true, names: ["name", "company", "companyname", "firm", "firmname", "organisation", "organization", "tenant"] },
+    { key: "name", field: "name", label: "Name", required: true, names: ["name", "company", "companyname", "firm", "firmname", "organization", "organization", "tenant"] },
     { key: "site", field: "sites", label: "Site", hint: "A site's name, as under Settings > Sites.", names: ["site", "building", "location"] },
     { key: "suite", field: "sites", label: "Suite or floor", names: ["suite", "unit", "floor", "suiteorfloor"] },
     { key: "phone", field: "phone", label: "Phone", names: ["phone", "mainphone", "telephone", "tel", "switchboard"] },
@@ -40,7 +40,7 @@ const IMPORT_FIELDS = {
   visitors: [
     { key: "first_name", field: "firstName", label: "First name", required: true, names: ["firstname", "first", "givenname", "forename", "fname"] },
     { key: "last_name", field: "lastName", label: "Last name", required: true, names: ["lastname", "surname", "familyname", "last", "lname"] },
-    { key: "organisation", field: "organisation", label: "Their company", names: ["organisation", "organization", "org", "employer", "theircompany", "from"] },
+    { key: "organization", field: "organization", label: "Their company", names: ["organization", "organisation", "org", "employer", "theircompany", "from"] },
     { key: "visitor_type", field: "visitorType", label: "Visitor type", hint: "Guest or Service Technician", names: ["visitortype", "type", "kind"] },
     { key: "citizenship", field: "citizenship", label: "Citizenship", hint: "The country, by name or code (US for a U.S. citizen)", names: ["citizenship", "nationality", "country", "citizen"] },
     { key: "email", field: "email", label: "Email", names: ["email", "emailaddress", "mail"] },
@@ -71,21 +71,21 @@ const IMPORT_KINDS = {
   badges: { label: "Badges", one: "badge", many: "badges", may: () => canManageBadges(), entity: null }
 };
 
-const normaliseName = (s) => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const normalizeName = (s) => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** The fields this account may import into: built-in ones it can change, and its custom fields. */
 function importTargets(kind) {
   // Badges have no field grid: every column, the level only for those who see clearance levels.
   if (kind === "badges") {
     const custom = (state.schema.badge || []).filter((f) => !f.builtIn && !f.recordOnly && f.access === "edit")
-      .map((f) => ({ key: f.key, label: f.label, custom: true, names: [normaliseName(f.key), normaliseName(f.label)] }));
+      .map((f) => ({ key: f.key, label: f.label, custom: true, names: [normalizeName(f.key), normalizeName(f.label)] }));
     return [...IMPORT_FIELDS.badges.filter((t) => !t.clearance || canSeeClearances()), ...custom];
   }
   const schema = state.schema[IMPORT_KINDS[kind].entity] || [];
   const editable = new Set(schema.filter((f) => f.access === "edit" && f.builtIn).map((f) => f.key));
   const builtIn = IMPORT_FIELDS[kind].filter((t) => editable.has(t.field) || t.required);
   const custom = schema.filter((f) => !f.builtIn && !f.recordOnly && f.access === "edit")
-    .map((f) => ({ key: f.key, label: f.label, custom: true, names: [normaliseName(f.key), normaliseName(f.label)] }));
+    .map((f) => ({ key: f.key, label: f.label, custom: true, names: [normalizeName(f.key), normalizeName(f.label)] }));
   return [...builtIn, ...custom];
 }
 
@@ -94,7 +94,7 @@ function suggestMapping(targets, columns) {
   const used = new Set();
   const mapping = {};
   for (const t of targets) {
-    const hit = columns.find((c) => !used.has(c.name) && (normaliseName(c.name) === normaliseName(t.key) || t.names.includes(normaliseName(c.name))));
+    const hit = columns.find((c) => !used.has(c.name) && (normalizeName(c.name) === normalizeName(t.key) || t.names.includes(normalizeName(c.name))));
     if (hit) {
       used.add(hit.name);
       mapping[t.key] = { column: hit.name };
@@ -173,7 +173,7 @@ async function importDialog(kind) {
   /** With several tables, the one whose columns best fit what is being imported. */
   function bestTable(tables) {
     const wanted = importTargets(target);
-    const score = (t) => wanted.filter((w) => t.columns.some((c) => w.names.includes(normaliseName(c.name)))).length;
+    const score = (t) => wanted.filter((w) => t.columns.some((c) => w.names.includes(normalizeName(c.name)))).length;
     return [...tables].sort((a, b) => score(b) - score(a) || b.rowCount - a.rowCount)[0].name;
   }
 

@@ -62,10 +62,10 @@ const salary = fields.create({ entity: "person", label: "Salary", type: "number"
 access.initCustomField(salary, "admins");
 const parking = fields.create({ entity: "person", label: "Parking space", type: "text" });
 access.initCustomField(parking, "all");
-const badge = fields.create({ entity: "company", label: "Badge colour", type: "choice", choices: ["Red", "Blue"] });
+const badge = fields.create({ entity: "company", label: "Badge color", type: "choice", choices: ["Red", "Blue"] });
 access.initCustomField(badge, "editors");
 
-const acme = createCompany(admin, { name: "Acme Corp", email: "hello@acme.example", sites: [{ siteId: A.id, suite: "Suite 100" }], custom: { badge_colour: "red" } });
+const acme = createCompany(admin, { name: "Acme Corp", email: "hello@acme.example", sites: [{ siteId: A.id, suite: "Suite 100" }], custom: { badge_color: "red" } });
 const beta = createCompany(admin, { name: "Beta LLC", sites: [{ siteId: B.id, suite: "Floor 3" }] });
 const both = createCompany(admin, { name: "Both Partners", sites: [{ siteId: A.id, suite: "Suite 200" }, { siteId: B.id, suite: "Suite 9" }] });
 
@@ -74,7 +74,7 @@ const bob = createPerson(admin, { firstName: "Bob", lastName: "Bee", companyId: 
 const cara = createPerson(admin, { firstName: "Cara", lastName: "Sea", companyId: both.id, email: "cara@both.example" });
 const dan = createPerson(admin, { firstName: "Dan", lastName: "Beta", companyId: beta.id });
 
-check("choice values are stored as the defined choice", companyAs(admin, acme.id).custom.badge_colour === "Red");
+check("choice values are stored as the defined choice", companyAs(admin, acme.id).custom.badge_color === "Red");
 
 // --- what each role sees ---------------------------------------------------------------------
 
@@ -86,8 +86,8 @@ check("a field made visible to administrators only is absent for a manager", !("
 check("a field visible to everyone is there for a manager", asManager.custom.parking_space === "P-12");
 check("a viewer sees built-in fields", personAs(viewer, jane.id).email === "jane@acme.example");
 check("a viewer doesn't see the administrators-only field", !("salary" in personAs(viewer, jane.id).custom));
-check("an editors-only company field is absent for a viewer", !("badge_colour" in companyAs(viewer, acme.id).custom));
-check("...and present for a manager", companyAs(manager, acme.id).custom.badge_colour === "Red");
+check("an editors-only company field is absent for a viewer", !("badge_color" in companyAs(viewer, acme.id).custom));
+check("...and present for a manager", companyAs(manager, acme.id).custom.badge_color === "Red");
 
 const asCheckout = personAs(checkout, jane.id);
 check("Equipment Checkout gets name, company, job title, email, work phone by default", asCheckout.firstName === "Jane" && asCheckout.companyName === "Acme Corp" && asCheckout.jobTitle === "Director" && asCheckout.email === "jane@acme.example");
@@ -182,18 +182,18 @@ check("one-record fields aren't searchable", !access.searchable(admin, "company"
 fields.update(dock.id, { promote: true });
 check("promoted, it shows on every record and keeps its value", access.fieldsFor(manager, "company", { recordId: beta.id }).some((f) => f.apiKey === "loading_dock") && companyAs(manager, acme.id).custom.loading_dock === "Dock 4");
 
-const centre = fields.create({ entity: "company", label: "Cost centre", type: "text", required: true });
-access.initCustomField(centre, "all");
+const center = fields.create({ entity: "company", label: "Cost center", type: "text", required: true });
+access.initCustomField(center, "all");
 check("a required field must be filled when adding a record", throwsStatus(() => createCompany(manager, { name: "Gamma", sites: [{ siteId: A.id }] }), 400) === true);
 check("...and can't be cleared later", (() => {
-  const g = createCompany(manager, { name: "Gamma", sites: [{ siteId: A.id }], custom: { cost_centre: "CC-1" } });
-  return throwsStatus(() => updateCompany(manager, g.id, { custom: { cost_centre: "" } }), 400) === true;
+  const g = createCompany(manager, { name: "Gamma", sites: [{ siteId: A.id }], custom: { cost_center: "CC-1" } });
+  return throwsStatus(() => updateCompany(manager, g.id, { custom: { cost_center: "" } }), 400) === true;
 })());
 check("...but records saved before it existed can still be edited", Boolean(updateCompany(manager, beta.id, { phone: "555-0199" })));
 check("a required field hidden from the caller doesn't block them", (() => {
   const secret = fields.create({ entity: "company", label: "Contract ref", type: "text", required: true });
   access.initCustomField(secret, "admins");
-  const g = createCompany(manager, { name: "Delta", sites: [{ siteId: A.id }], custom: { cost_centre: "CC-2" } });
+  const g = createCompany(manager, { name: "Delta", sites: [{ siteId: A.id }], custom: { cost_center: "CC-2" } });
   return Boolean(g);
 })());
 

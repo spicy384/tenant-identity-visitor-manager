@@ -30,7 +30,7 @@ function generateKey() {
 }
 
 /** Checks a key's shape and returns it lower-cased; throws with what is wrong. */
-function normaliseKey(value, source) {
+function normalizeKey(value, source) {
   const key = String(value || "").trim();
   if (!KEY_RE.test(key)) {
     throw fail(`${source} does not hold a database key: expected 64 hex characters, found ${key.length ? `${key.length} characters` : "nothing"}. Make one with "npm run new-key".`);
@@ -68,10 +68,10 @@ function loadKey({ env = process.env, dataDir = null, dbFile = "identity.db" } =
     } catch (error) {
       throw fail(`Could not read the database key from ${resolved}: ${error.message}`);
     }
-    return { key: normaliseKey(text, resolved), source: resolved };
+    return { key: normalizeKey(text, resolved), source: resolved };
   }
-  if (env.DB_KEY) return { key: normaliseKey(env.DB_KEY, "DB_KEY"), source: "DB_KEY" };
+  if (env.DB_KEY) return { key: normalizeKey(env.DB_KEY, "DB_KEY"), source: "DB_KEY" };
   throw fail("No database key. Set DB_KEY_FILE to a file holding the key (in Docker, a secret named db_key), or DB_KEY to the key itself. Make one with \"npm run new-key\" and keep a copy in your password manager: without it the data cannot be read.");
 }
 
-module.exports = { generateKey, loadKey, normaliseKey, KEY_RE };
+module.exports = { generateKey, loadKey, normalizeKey, KEY_RE };

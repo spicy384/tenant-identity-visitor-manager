@@ -48,7 +48,7 @@ function cleanChoices(choices) {
  * The stored text for `input` in field `def`, or null for "no value". Throws a 400
  * naming the field when the value does not fit its type.
  */
-function normaliseValue(def, input) {
+function normalizeValue(def, input) {
   if (input === null || input === undefined) return null;
   if (def.type === "boolean") {
     if (input === "") return null;
@@ -221,7 +221,7 @@ function createFields({ db }) {
     return out;
   }
 
-  /** Writes already-normalised values: Map or object of fieldId -> text or null. */
+  /** Writes already-normalized values: Map or object of fieldId -> text or null. */
   function writeValues(recordId, values) {
     const put = raw.prepare("INSERT INTO field_values (field_id, record_id, value) VALUES (?, ?, ?) ON CONFLICT(field_id, record_id) DO UPDATE SET value = excluded.value");
     const del = raw.prepare("DELETE FROM field_values WHERE field_id = ? AND record_id = ?");
@@ -242,4 +242,4 @@ function createFields({ db }) {
   return { list, get, create, update, remove, valuesFor, writeValues, forgetRecord };
 }
 
-module.exports = { createFields, normaliseValue, outputValue, slug, TYPES, TYPE_LABELS };
+module.exports = { createFields, normalizeValue, outputValue, slug, TYPES, TYPE_LABELS };

@@ -17,7 +17,7 @@ function visitsTable(visits, { showVisitor = true } = {}) {
       h("td", { class: "small-text" }, v.checkedOutAt
         ? [fmtDateTime(v.checkedOutAt), h("div", { class: "muted", text: CHECKOUT_LABELS[v.checkoutMethod] || "" })]
         : h("span", { class: "badge ok", text: "In the building" })),
-      showVisitor ? h("td", {}, h("a", { href: `#visitor/${v.visitorId}`, text: visitorName(v.visitor) }), v.visitor.organisation ? h("div", { class: "muted small-text", text: v.visitor.organisation }) : null) : null,
+      showVisitor ? h("td", {}, h("a", { href: `#visitor/${v.visitorId}`, text: visitorName(v.visitor) }), v.visitor.organization ? h("div", { class: "muted small-text", text: v.visitor.organization }) : null) : null,
       h("td", { text: v.companyName || "" }, v.purpose ? h("div", { class: "muted small-text", text: v.purpose }) : null),
       h("td", { text: v.hostName || "" }),
       allSites ? h("td", { class: "small-text", text: v.siteName }) : null)) : emptyRow(head.length, "No visits."))));

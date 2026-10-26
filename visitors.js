@@ -10,7 +10,7 @@
  * company it can see or have visited one of its sites, sees only those links, and only
  * the visits at its sites.
  */
-const { normaliseValue } = require("./fields");
+const { normalizeValue } = require("./fields");
 const { matchNames } = require("./names");
 const { likeWord } = require("./directory");
 const { cleanDate, today, statusFor, recheckDays } = require("./clearance");
@@ -119,7 +119,7 @@ function createVisitors({ db, fields }) {
       id: r.id,
       firstName: r.first_name,
       lastName: r.last_name,
-      organisation: r.organisation,
+      organization: r.organization,
       visitorType: r.visitor_type || "Guest",
       citizenship: r.citizenship ?? null,
       reservedBadge: r.reserved_badge_id && reserved.has(r.reserved_badge_id) ? reservedOut(reserved.get(r.reserved_badge_id)) : null,
@@ -198,7 +198,9 @@ function createVisitors({ db, fields }) {
         out[key] = v;
       }
     }
-    if (input.organisation !== undefined) out.organisation = text(input.organisation, 120);
+    // From a page or kiosk that hasn't reloaded since the British spelling was dropped.
+    if (input.organization === undefined && input.organisation !== undefined) input = { ...input, organization: input.organisation };
+    if (input.organization !== undefined) out.organization = text(input.organization, 120);
     if (input.visitorType !== undefined) {
       const t = VISITOR_TYPES.find((x) => x.toLowerCase() === String(input.visitorType || "").trim().toLowerCase());
       if (!t) throw fail(400, `Visitor type is ${VISITOR_TYPES.join(" or ")}.`);
@@ -234,7 +236,7 @@ function createVisitors({ db, fields }) {
 
   function customValues(custom, { creating = false, editable = [], current = new Map() } = {}) {
     const out = new Map();
-    for (const [def, value] of custom) out.set(def.id, normaliseValue(def, value));
+    for (const [def, value] of custom) out.set(def.id, normalizeValue(def, value));
     for (const def of editable) {
       if (!def.required || def.builtIn) continue;
       const after = out.has(def.id) ? out.get(def.id) : current.get(def.id) ?? null;
@@ -283,9 +285,9 @@ function createVisitors({ db, fields }) {
     const now = Date.now();
     let id;
     db.transaction(() => {
-      id = raw.prepare(`INSERT INTO visitors (first_name, last_name, organisation, visitor_type, citizenship, email, phone, notes, clearance_level_id, clearance_granted, clearance_expires, verified, blocked, source, created_at, updated_at)
+      id = raw.prepare(`INSERT INTO visitors (first_name, last_name, organization, visitor_type, citizenship, email, phone, notes, clearance_level_id, clearance_granted, clearance_expires, verified, blocked, source, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(v.firstName, v.lastName, v.organisation ?? null, v.visitorType || "Guest", v.citizenship ?? null, v.email ?? null, v.phone ?? null, v.notes ?? null, v.clearanceLevel ?? null, v.clearanceGranted ?? null, v.clearanceExpires ?? null,
+        .run(v.firstName, v.lastName, v.organization ?? null, v.visitorType || "Guest", v.citizenship ?? null, v.email ?? null, v.phone ?? null, v.notes ?? null, v.clearanceLevel ?? null, v.clearanceGranted ?? null, v.clearanceExpires ?? null,
           (v.verified ?? verified) ? 1 : 0, v.blocked ? 1 : 0, source, now, now).lastInsertRowid;
       for (const link of links) setLink(id, link, { sites });
       fields.writeValues(id, values);
@@ -301,9 +303,9 @@ function createVisitors({ db, fields }) {
     const values = customValues(custom, { editable, current: existing.values });
     const next = { ...existing, ...v };
     db.transaction(() => {
-      raw.prepare(`UPDATE visitors SET first_name = ?, last_name = ?, organisation = ?, visitor_type = ?, citizenship = ?, email = ?, phone = ?, notes = ?, clearance_level_id = ?, clearance_granted = ?, clearance_expires = ?,
+      raw.prepare(`UPDATE visitors SET first_name = ?, last_name = ?, organization = ?, visitor_type = ?, citizenship = ?, email = ?, phone = ?, notes = ?, clearance_level_id = ?, clearance_granted = ?, clearance_expires = ?,
         verified = ?, blocked = ?, updated_at = ? WHERE id = ?`)
-        .run(next.firstName, next.lastName, next.organisation, next.visitorType || "Guest", next.citizenship ?? null, next.email, next.phone, next.notes, next.clearanceLevel ?? null, next.clearanceGranted ?? null, next.clearanceExpires ?? null,
+        .run(next.firstName, next.lastName, next.organization, next.visitorType || "Guest", next.citizenship ?? null, next.email, next.phone, next.notes, next.clearanceLevel ?? null, next.clearanceGranted ?? null, next.clearanceExpires ?? null,
           next.verified ? 1 : 0, next.blocked ? 1 : 0, Date.now(), id);
       fields.writeValues(id, values);
     });
@@ -338,7 +340,7 @@ function createVisitors({ db, fields }) {
     if (!existing) throw fail(404, "No such visitor.");
     db.transaction(() => {
       fields.forgetRecord("visitor", id);
-      raw.prepare("UPDATE clearance_requests SET status = 'cancelled', resolved_at = ? WHERE holder_kind = 'visitor' AND holder_id = ? AND status = 'open'").run(Date.now(), id);
+      raw.prepare("UPDATE clearance_requests SET status = 'canceled', resolved_at = ? WHERE holder_kind = 'visitor' AND holder_id = ? AND status = 'open'").run(Date.now(), id);
       raw.prepare("DELETE FROM visitors WHERE id = ?").run(id);
     });
     nameCache = null;
@@ -364,8 +366,8 @@ function createVisitors({ db, fields }) {
       const fill = (a, b) => a ?? b ?? null;
       const reserved = raw.prepare("SELECT (SELECT reserved_badge_id FROM visitors WHERE id = ?) AS a, (SELECT reserved_badge_id FROM visitors WHERE id = ?) AS b").get(intoId, fromId);
       raw.prepare("UPDATE visitors SET reserved_badge_id = NULL WHERE id = ?").run(fromId);
-      raw.prepare("UPDATE visitors SET organisation = ?, citizenship = ?, reserved_badge_id = ?, email = ?, phone = ?, notes = ?, last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?), blocked = max(blocked, ?), updated_at = ? WHERE id = ?")
-        .run(fill(into.organisation, from.organisation), fill(into.citizenship, from.citizenship), fill(reserved.a, reserved.b), fill(into.email, from.email), fill(into.phone, from.phone),
+      raw.prepare("UPDATE visitors SET organization = ?, citizenship = ?, reserved_badge_id = ?, email = ?, phone = ?, notes = ?, last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?), blocked = max(blocked, ?), updated_at = ? WHERE id = ?")
+        .run(fill(into.organization, from.organization), fill(into.citizenship, from.citizenship), fill(reserved.a, reserved.b), fill(into.email, from.email), fill(into.phone, from.phone),
           [into.notes, from.notes].filter(Boolean).join("\n\n") || null, intoId, from.blocked ? 1 : 0, Date.now(), intoId);
       // A clearance only one of them has on record is kept.
       // A clearance only one of them has on record is kept, with when it was validated.
@@ -403,7 +405,7 @@ function createVisitors({ db, fields }) {
       siteId: r.site_id,
       siteName: r.site_name,
       visitorId: r.visitor_id,
-      visitor: { id: r.visitor_id, firstName: r.first_name, lastName: r.last_name, organisation: r.organisation, verified: Boolean(r.verified), blocked: Boolean(r.blocked), citizenship: r.citizenship ?? null },
+      visitor: { id: r.visitor_id, firstName: r.first_name, lastName: r.last_name, organization: r.organization, verified: Boolean(r.verified), blocked: Boolean(r.blocked), citizenship: r.citizenship ?? null },
       companyId: r.company_id,
       companyName: r.company_name,
       hostId: r.host_id,
@@ -424,7 +426,7 @@ function createVisitors({ db, fields }) {
     };
   }
 
-  const VISIT_SELECT = `SELECT x.*, s.name AS site_name, v.first_name, v.last_name, v.organisation, v.verified, v.blocked, v.citizenship, k.name AS kiosk_name
+  const VISIT_SELECT = `SELECT x.*, s.name AS site_name, v.first_name, v.last_name, v.organization, v.verified, v.blocked, v.citizenship, k.name AS kiosk_name
     FROM visits x JOIN sites s ON s.id = x.site_id JOIN visitors v ON v.id = x.visitor_id LEFT JOIN kiosks k ON k.id = x.kiosk_id`;
 
   function getVisit(id, { sites = null } = {}) {
@@ -455,7 +457,7 @@ function createVisitors({ db, fields }) {
     if (visitorId) { where.push("x.visitor_id = ?"); params.push(visitorId); }
     for (const word of String(q || "").trim().split(/\s+/).filter(Boolean).slice(0, 8)) {
       const p = likeWord(word);
-      where.push("(v.first_name LIKE ? ESCAPE '\\' OR v.last_name LIKE ? ESCAPE '\\' OR coalesce(v.organisation, '') LIKE ? ESCAPE '\\' OR coalesce(x.company_name, '') LIKE ? ESCAPE '\\' OR coalesce(x.host_name, '') LIKE ? ESCAPE '\\')");
+      where.push("(v.first_name LIKE ? ESCAPE '\\' OR v.last_name LIKE ? ESCAPE '\\' OR coalesce(v.organization, '') LIKE ? ESCAPE '\\' OR coalesce(x.company_name, '') LIKE ? ESCAPE '\\' OR coalesce(x.host_name, '') LIKE ? ESCAPE '\\')");
       params.push(p, p, p, p, p);
     }
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";

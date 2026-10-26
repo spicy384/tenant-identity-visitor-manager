@@ -11,7 +11,7 @@
  */
 const fs = require("fs");
 const path = require("path");
-const { loadKey, normaliseKey } = require("../db-key");
+const { loadKey, normalizeKey } = require("../db-key");
 const { rekeyDatabase, DB_FILE } = require("../db");
 
 const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "..", "data");
@@ -22,7 +22,7 @@ try {
   if (!newKeyFile) throw new Error("Name the file holding the new key: npm run rekey -- /path/to/new-key");
   if (!fs.existsSync(file)) throw new Error(`There is no database at ${file}. Set DATA_DIR.`);
   const { key: oldKey, source } = loadKey({ dataDir });
-  const newKey = normaliseKey(fs.readFileSync(path.resolve(newKeyFile), "utf8"), path.resolve(newKeyFile));
+  const newKey = normalizeKey(fs.readFileSync(path.resolve(newKeyFile), "utf8"), path.resolve(newKeyFile));
   if (newKey === oldKey) throw new Error("The new key is the same as the current one.");
   rekeyDatabase(file, oldKey, newKey);
   console.log(`The database at ${file} now opens with the key in ${path.resolve(newKeyFile)} (it used the one from ${source}).`);

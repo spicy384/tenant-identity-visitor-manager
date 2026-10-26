@@ -88,4 +88,20 @@ for (const file of scripts(PUBLIC)) {
 }
 check("no null or undefined is handed straight to append or replaceChildren", problems.length === 0, problems.join(", "));
 
+// The page's scripts (public/js) share one global scope: a second top-level function of the
+// same name silently replaces the first, and a second const stops its whole file loading.
+const TOP_LEVEL = /^(?:async\s+)?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm;
+const seen = new Map();
+const clashes = [];
+for (const file of scripts(path.join(PUBLIC, "js"))) {
+  const name = path.basename(file);
+  // The raw source: declarations start a line, which comments here never do.
+  for (const m of fs.readFileSync(file, "utf8").matchAll(TOP_LEVEL)) {
+    if (seen.has(m[1])) clashes.push(`${m[1]} (${seen.get(m[1])} and ${name})`);
+    else seen.set(m[1], name);
+  }
+}
+check("scan: top-level names are found", seen.has("formDialog") && seen.has("eventContactPicker"));
+check("no two page scripts declare the same top-level name", clashes.length === 0, clashes.join(", "));
+
 process.exit(report() ? 0 : 1);

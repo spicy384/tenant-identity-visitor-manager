@@ -873,7 +873,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     if (!ctx || !expectedChallenge || !response || typeof response.id !== "string") {
       return res.status(401).json({ error: "Passkey sign-in expired. Try again." });
     }
-    const refuse = () => res.status(401).json({ error: "That passkey is not recognised here." });
+    const refuse = () => res.status(401).json({ error: "That passkey is not recognized here." });
     const found = findUserByPasskey(response.id);
     if (!found) return refuse();
     const { user, passkey } = found;

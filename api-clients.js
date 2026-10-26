@@ -46,7 +46,7 @@ function createApiClients({ db, access, sites, now = Date.now }) {
 
   function cleanName(name, exceptId = null) {
     const s = String(name || "").trim().replace(/\s+/g, " ").slice(0, 60);
-    if (!s) throw fail(400, "Give the client a name, such as \"Equipment Checkout, Harbour Point\".");
+    if (!s) throw fail(400, "Give the client a name, such as \"Equipment Checkout, Harbor Point\".");
     const clash = raw.prepare("SELECT id FROM api_clients WHERE name = ?").get(s);
     if (clash && clash.id !== exceptId) throw fail(409, "An API client with that name already exists.");
     return s;

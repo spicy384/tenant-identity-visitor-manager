@@ -143,17 +143,17 @@ async function main() {
   const headers = (await anon.get("/", { raw: true })).headers;
   check("kiosk: without KIOSK_PORT the kiosk lives at /kiosk/ on this port", (await anon.get("/kiosk/", { raw: true })).status === 200 && (await anon.get("/kiosk/api/config")).status === 401);
   check("headers: CSP self-only scripts, no framing", /script-src 'self'/.test(headers.get("content-security-policy")) && headers.get("x-frame-options") === "DENY");
-  r = await admin.post("/api/auth/setup", { username: "admin", password: adminPassword, siteName: "Harbour Point" });
+  r = await admin.post("/api/auth/setup", { username: "admin", password: adminPassword, siteName: "Harbor Point" });
   check("setup: first administrator created and signed in", r.status === 200 && r.data.user.role === "admin");
   r = await admin.get("/api/config");
-  check("setup: the building's name becomes the first site's", r.data.siteCount === 1 && r.data.sites[0].name === "Harbour Point");
-  const harbour = r.data.sites[0];
+  check("setup: the building's name becomes the first site's", r.data.siteCount === 1 && r.data.sites[0].name === "Harbor Point");
+  const harbor = r.data.sites[0];
 
   check("csrf: a change without the token is refused", (await admin.post("/api/companies", { name: "No token" }, { headers: { "x-csrf-token": "" } })).status === 403);
 
   // --- one site: nothing to choose -----------------------------------------------------------
   r = await admin.post("/api/companies", { name: "Solo Ltd" });
-  check("companies: with one site, a new company is placed there", r.status === 200 && r.data.company.sites.length === 1 && r.data.company.sites[0].siteName === "Harbour Point", JSON.stringify(r.data));
+  check("companies: with one site, a new company is placed there", r.status === 200 && r.data.company.sites.length === 1 && r.data.company.sites[0].siteName === "Harbor Point", JSON.stringify(r.data));
 
   // --- sites -------------------------------------------------------------------------------------
   r = await admin.post("/api/sites", { name: "Riverside", timeZone: "Europe/London", endOfDay: "18:00", kioskName: "Welcome to Riverside" });
@@ -177,15 +177,15 @@ async function main() {
   const emergency = r.data.field;
   check("fields: an unknown type is refused", (await admin.post("/api/fields", { entity: "person", label: "X", type: "blob" })).status === 400);
 
-  r = await admin.post("/api/companies", { name: "Acme Corp", email: "hello@acme.example", website: "acme.example", sites: [{ siteId: harbour.id, suite: "Suite 100" }] });
+  r = await admin.post("/api/companies", { name: "Acme Corp", email: "hello@acme.example", website: "acme.example", sites: [{ siteId: harbor.id, suite: "Suite 100" }] });
   check("companies: added, website given a scheme", r.status === 200 && r.data.company.website === "https://acme.example");
   const acme = r.data.company;
   r = await admin.post("/api/companies", { name: "River Co", sites: [{ siteId: riverside.id, suite: "Floor 2" }] });
   const river = r.data.company;
-  check("companies: a duplicate name is refused", (await admin.post("/api/companies", { name: "ACME corp", sites: [{ siteId: harbour.id }] })).status === 409);
-  check("companies: a bad email is refused", (await admin.post("/api/companies", { name: "Bad", email: "nope", sites: [{ siteId: harbour.id }] })).status === 400);
+  check("companies: a duplicate name is refused", (await admin.post("/api/companies", { name: "ACME corp", sites: [{ siteId: harbor.id }] })).status === 409);
+  check("companies: a bad email is refused", (await admin.post("/api/companies", { name: "Bad", email: "nope", sites: [{ siteId: harbor.id }] })).status === 400);
 
-  r = await admin.post("/api/people", { firstName: "Jane", lastName: "Doe", companyId: acme.id, siteId: harbour.id, jobTitle: "Director", email: "jane@acme.example", mobile: "555-0100", custom: { badge_number: "B-77", emergency_contact: "John Doe 555-0199" } });
+  r = await admin.post("/api/people", { firstName: "Jane", lastName: "Doe", companyId: acme.id, siteId: harbor.id, jobTitle: "Director", email: "jane@acme.example", mobile: "555-0100", custom: { badge_number: "B-77", emergency_contact: "John Doe 555-0199" } });
   check("people: added with custom values", r.status === 200 && r.data.person.custom.badge_number === "B-77" && r.data.person.custom.emergency_contact === "John Doe 555-0199");
   const jane = r.data.person;
   r = await admin.post("/api/people", { firstName: "Rita", lastName: "River", companyId: river.id, email: "rita@river.example" });
@@ -235,7 +235,7 @@ async function main() {
 
   // --- what each role may change ---------------------------------------------------------------------------
   check("roles: a viewer can't change a person", (await viewer.put(`/api/people/${jane.id}`, { jobTitle: "CEO" })).status === 403);
-  check("roles: front desk can't change the directory", (await frontdesk.post("/api/companies", { name: "FD Inc", sites: [{ siteId: harbour.id }] })).status === 403);
+  check("roles: front desk can't change the directory", (await frontdesk.post("/api/companies", { name: "FD Inc", sites: [{ siteId: harbor.id }] })).status === 403);
   check("roles: front desk can read it", (await frontdesk.get("/api/companies")).status === 200);
   r = await manager.put(`/api/people/${jane.id}`, { jobTitle: "Managing Director", custom: { badge_number: "B-78" } });
   check("roles: a manager changes a person", r.status === 200 && r.data.person.jobTitle === "Managing Director" && r.data.person.custom.badge_number === "B-78");
@@ -248,10 +248,10 @@ async function main() {
   check("sites: ...can't open one elsewhere", (await riverMgr.get(`/api/companies/${acme.id}`)).status === 404);
   check("sites: ...or its people", (await riverMgr.get(`/api/people/${jane.id}`)).status === 404);
   check("sites: ...or change them", (await riverMgr.put(`/api/people/${jane.id}`, { jobTitle: "x" })).status === 404);
-  check("sites: ...or filter by another site", (await riverMgr.get(`/api/companies?site=${harbour.id}`)).status === 403);
+  check("sites: ...or filter by another site", (await riverMgr.get(`/api/companies?site=${harbor.id}`)).status === 403);
   r = await riverMgr.get("/api/config");
   check("sites: ...and is only told about Riverside", r.data.sites.length === 1 && r.data.sites[0].id === riverside.id && r.data.access.sitesLimited === true);
-  check("sites: ...can't put a company at Harbour Point", (await riverMgr.post("/api/companies", { name: "Sneaky", sites: [{ siteId: harbour.id }] })).status === 403);
+  check("sites: ...can't put a company at Harbor Point", (await riverMgr.post("/api/companies", { name: "Sneaky", sites: [{ siteId: harbor.id }] })).status === 403);
   r = await riverMgr.post("/api/people", { firstName: "Ray", lastName: "Banks", companyId: river.id });
   check("sites: ...adds people at Riverside", r.status === 200 && r.data.person.siteId === riverside.id);
   r = await admin.get(`/api/companies?site=${riverside.id}`);
@@ -264,7 +264,7 @@ async function main() {
   r = await admin.get("/api/audit?action=export");
   check("csv: an export is audited", r.data.entries.some((e) => e.action === "export.people"));
 
-  const goodCsv = "first_name,last_name,company,email,job_title,badge_number,site\nAmy,Adams,Acme Corp,amy@acme.example,Engineer,B-01,Harbour Point\nJane,Doe,Acme Corp,jane@acme.example,CEO,,\nNew,Person,Brand New Co,new@brand.example,,,Riverside\n";
+  const goodCsv = "first_name,last_name,company,email,job_title,badge_number,site\nAmy,Adams,Acme Corp,amy@acme.example,Engineer,B-01,Harbor Point\nJane,Doe,Acme Corp,jane@acme.example,CEO,,\nNew,Person,Brand New Co,new@brand.example,,,Riverside\n";
   r = await manager.post("/api/people/import", { csv: goodCsv });
   check("import: an unknown company is refused unless asked to add it", r.status === 400 && /Brand New Co/.test(r.data.error) && /Nothing was imported/.test(r.data.error));
   check("import: ...and nothing was imported", (await admin.get("/api/people?q=Amy")).data.people.length === 0);
@@ -282,7 +282,7 @@ async function main() {
   check("import: a column the importer can't see is ignored, not written", r.status === 200 && r.data.ignored.includes("emergency_contact"));
   r = await admin.get("/api/people?q=Amy");
   check("import: ...and the hidden field is untouched", !("emergency_contact" in r.data.people[0].custom));
-  r = await admin.post("/api/companies/import", { csv: "name,phone,sites\nAcme Corp,555-1000,Harbour Point: Suite 101\nNorth Ltd,,Riverside; Harbour Point: Suite 5\n" });
+  r = await admin.post("/api/companies/import", { csv: "name,phone,sites\nAcme Corp,555-1000,Harbor Point: Suite 101\nNorth Ltd,,Riverside; Harbor Point: Suite 5\n" });
   check("import: companies are added and updated, with sites and suites", r.status === 200 && r.data.added === 1 && r.data.updated === 1);
   r = await admin.get(`/api/companies/${acme.id}`);
   check("import: ...the suite was changed", r.data.company.sites[0].suite === "Suite 101" && r.data.company.phone === "555-1000");

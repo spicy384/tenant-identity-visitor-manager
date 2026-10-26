@@ -293,7 +293,7 @@ async function assignBadgeDialog(badge) {
           message.hidden = false;
         }
       } }, h("strong", { text: kind === "visitor" ? visitorName(x) : personName(x) }), " ",
-      h("span", { class: "muted small-text", text: kind === "visitor" ? [x.organisation, x.clearanceLevelName].filter(Boolean).join(" · ") : [x.companyName, x.jobTitle, x.clearanceLevelName].filter(Boolean).join(" · ") })));
+      h("span", { class: "muted small-text", text: kind === "visitor" ? [x.organization, x.clearanceLevelName].filter(Boolean).join(" · ") : [x.companyName, x.jobTitle, x.clearanceLevelName].filter(Boolean).join(" · ") })));
     }
     if (!list.length) results.append(h("p", { class: "muted", text: "Nobody matches." }));
   }, 250);

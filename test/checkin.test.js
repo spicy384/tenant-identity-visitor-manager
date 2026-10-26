@@ -71,12 +71,12 @@ async function main() {
   }
 
   const admin = client();
-  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbour Point" });
+  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbor Point" });
   const site = (await admin.get("/api/config")).data.sites[0];
   await admin.put(`/api/sites/${site.id}`, { timeZone: "UTC" });
   const other = (await admin.post("/api/sites", { name: "Riverside", timeZone: "UTC" })).data.site;
   const acme = (await admin.post("/api/companies", { name: "Acme Corp", sites: [{ siteId: site.id }] })).data.company;
-  const mgmt = (await admin.post("/api/companies", { name: "Harbour Management", buildingStaff: true, sites: [{ siteId: site.id }] })).data.company;
+  const mgmt = (await admin.post("/api/companies", { name: "Harbor Management", buildingStaff: true, sites: [{ siteId: site.id }] })).data.company;
   const host = (await admin.post("/api/people", { firstName: "Hana", lastName: "Host", companyId: acme.id, phone: "555-0100" })).data.person;
   const facilities = (await admin.post("/api/people", { firstName: "Fred", lastName: "Fixit", companyId: mgmt.id, canHost: false })).data.person;
   const { classifications } = (await admin.get("/api/clearance")).data;
@@ -96,10 +96,10 @@ async function main() {
   check("config: the countries and the IDs the desk checks", r.data.checkin.countries.length > 200 && r.data.checkin.countries.some((c) => c.code === "US") && r.data.checkin.idTypes.includes("Passport"));
   check("record: citizenship must be a country", (await desk.post("/api/visitors", { firstName: "A", lastName: "B", citizenship: "Narnia" })).status === 400);
   check("record: the visitor type is Guest or Service Technician", (await desk.post("/api/visitors", { firstName: "A", lastName: "B", visitorType: "Plumber" })).status === 400);
-  r = await desk.post("/api/visitors", { firstName: "Ann", lastName: "Arrival", organisation: "Arrival Ltd", citizenship: "united kingdom" });
+  r = await desk.post("/api/visitors", { firstName: "Ann", lastName: "Arrival", organization: "Arrival Ltd", citizenship: "united kingdom" });
   const ann = r.data.visitor;
   check("record: a country by name is kept as its code, and the type starts as Guest", r.status === 200 && ann.citizenship === "GB" && ann.visitorType === "Guest", JSON.stringify(r.data));
-  const tech = (await desk.post("/api/visitors", { firstName: "Tom", lastName: "Tech", organisation: "Lift Co", citizenship: "US", visitorType: "Service Technician" })).data.visitor;
+  const tech = (await desk.post("/api/visitors", { firstName: "Tom", lastName: "Tech", organization: "Lift Co", citizenship: "US", visitorType: "Service Technician" })).data.visitor;
   check("record: a service technician", tech.visitorType === "Service Technician" && tech.citizenship === "US");
   const bare = (await desk.post("/api/visitors", { firstName: "Ben", lastName: "Bare" })).data.visitor;
 
@@ -123,7 +123,7 @@ async function main() {
   // A service technician: the point of contact can be anyone in the directory, not only hosts.
   r = await desk.post("/api/checkins", { visitorId: tech.id, siteId: site.id, hostId: facilities.id, purpose: "Lift service", idType: "State ID" });
   const techVisit = r.data.visit;
-  check("technician: anyone in the directory can be their contact, the visit going to that company", r.status === 200 && techVisit.companyName === "Harbour Management" && techVisit.visitorType === "Service Technician", JSON.stringify(r.data));
+  check("technician: anyone in the directory can be their contact, the visit going to that company", r.status === 200 && techVisit.companyName === "Harbor Management" && techVisit.visitorType === "Service Technician", JSON.stringify(r.data));
 
   // --- the badge step ---------------------------------------------------------------------------
   const v1 = (await security.post("/api/badges", { number: "V-1", type: "visitor", classificationId: uncleared.id })).data.badge;
@@ -169,7 +169,7 @@ async function main() {
   // --- a badge picked for an expected guest --------------------------------------------------------
   const day = new Date().toISOString().slice(0, 10);
   const event = (await desk.post("/api/events", { siteId: site.id, title: "Board meeting", date: day, companyId: acme.id, hostId: host.id })).data.event;
-  r = await desk.post(`/api/events/${event.id}/guests`, { visitor: { firstName: "Gail", lastName: "Guest", organisation: "Guest Co", citizenship: "CA" } });
+  r = await desk.post(`/api/events/${event.id}/guests`, { visitor: { firstName: "Gail", lastName: "Guest", organization: "Guest Co", citizenship: "CA" } });
   const gail = r.data.event.guests.find((g) => g.lastName === "Guest");
   check("event: a new guest with their citizenship", (await desk.get(`/api/visitors/${gail.visitorId}`)).data.visitor.citizenship === "CA");
   check("event: a badge valid at another site can't be picked", (await desk.put(`/api/events/${event.id}/guests/${gail.visitorId}/badge`, { badgeId: vRiver.id })).status === 400);
@@ -183,7 +183,7 @@ async function main() {
   const kiosk = client({ kiosk: true });
   await kiosk.post("/kiosk/api/pair", { code: (await admin.post("/api/kiosks", { name: "Lobby", siteId: site.id })).data.code });
   r = await kiosk.post("/kiosk/api/lookup", { name: "Gail Guest" });
-  check("kiosk: Gail's record has what check-in needs", r.data.matches[0].needs.organisation === false && r.data.matches[0].needs.citizenship === false);
+  check("kiosk: Gail's record has what check-in needs", r.data.matches[0].needs.organization === false && r.data.matches[0].needs.citizenship === false);
   await kiosk.post("/kiosk/api/checkin", { ref: r.data.matches[0].ref, companyId: acme.id, hostId: host.id, purpose: "Board meeting" });
   const gailWaiting = (await desk.get("/api/visits/badge-needed")).data.visits.find((v) => v.name === "Gail Guest");
   check("kiosk: she's waiting for the desk to check her ID", gailWaiting && gailWaiting.stage === "id");
@@ -223,7 +223,7 @@ async function main() {
   await security.post("/api/badges", { number: "VC-1", type: "visitor", classificationId: clearedClass.id, clearanceLevelId: secret.id });
   // The only uncleared visitor badge left is retired: just the cleared one is in stock.
   await security.put(`/api/badges/${v2.id}`, { status: "retired" });
-  const val = (await desk.post("/api/visitors", { firstName: "Val", lastName: "Idated", organisation: "Clear Co", citizenship: "US" })).data.visitor;
+  const val = (await desk.post("/api/visitors", { firstName: "Val", lastName: "Idated", organization: "Clear Co", citizenship: "US" })).data.visitor;
   const valVisit = (await desk.post("/api/checkins", { visitorId: val.id, siteId: site.id, hostId: host.id, purpose: "Briefing", idType: "CAC" })).data.visit;
   r = await desk.get(`/api/visits/${valVisit.id}/badge-plan`);
   check("image: not validated, the uncleared visitor badge is shown, even with none free", r.data.uncleared === true && r.data.suggested === unclearedImage && r.data.available.length === 0, JSON.stringify(r.data));
@@ -253,14 +253,14 @@ async function main() {
   check("code: set on several at once", r.status === 200 && (await desk.get(`/api/badges/${fc205.id}`)).data.badge.label === "301-777");
 
   // At check-in, a number under several codes needs its code.
-  const tia = (await desk.post("/api/visitors", { firstName: "Tia", lastName: "Typed", organisation: "Code Co", citizenship: "US" })).data.visitor;
+  const tia = (await desk.post("/api/visitors", { firstName: "Tia", lastName: "Typed", organization: "Code Co", citizenship: "US" })).data.visitor;
   const tiaVisit = (await desk.post("/api/checkins", { visitorId: tia.id, siteId: site.id, hostId: host.id, purpose: "Audit", idType: "Passport" })).data.visit;
   r = await desk.post(`/api/visits/${tiaVisit.id}/badge`, { number: "777" });
   check("check-in: a number under several codes asks for the code, naming them", r.status === 409 && /101-777/.test(r.data.error) && /301-777/.test(r.data.error) && /facility code/.test(r.data.error), r.data.error);
   check("check-in: a code with no badge of that number", (await desk.post(`/api/visits/${tiaVisit.id}/badge`, { number: "777", facilityCode: "999" })).status === 404);
   r = await desk.post(`/api/visits/${tiaVisit.id}/badge`, { number: "777", facilityCode: "301" });
   check("check-in: with its code, that badge", r.status === 200 && r.data.badge.label === "301-777");
-  const tim = (await desk.post("/api/visitors", { firstName: "Tim", lastName: "Typed", organisation: "Code Co", citizenship: "US" })).data.visitor;
+  const tim = (await desk.post("/api/visitors", { firstName: "Tim", lastName: "Typed", organization: "Code Co", citizenship: "US" })).data.visitor;
   const timVisit = (await desk.post("/api/checkins", { visitorId: tim.id, siteId: site.id, hostId: host.id, purpose: "Audit", idType: "Passport" })).data.visit;
   r = await desk.post(`/api/visits/${timVisit.id}/badge`, { number: "101-777" });
   check("check-in: or written together", r.status === 200 && r.data.badge.label === "101-777");

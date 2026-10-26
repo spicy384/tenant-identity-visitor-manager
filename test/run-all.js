@@ -18,6 +18,7 @@ const SUITES = [
   "import.test.js",
   "bulk.test.js",
   "facilities.test.js",
+  "finance.test.js",
   "roles.test.js",
   "frontend.test.js"
 ];

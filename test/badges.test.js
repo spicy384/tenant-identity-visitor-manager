@@ -51,9 +51,9 @@ check("levels: a new one can go anywhere in the order", clearance.levels()[0].na
 clearance.removeLevel(conf.id);
 
 // --- the building ---------------------------------------------------------------------------
-const site = sites.create({ name: "Harbour Point", timeZone: "America/New_York" });
+const site = sites.create({ name: "Harbor Point", timeZone: "America/New_York" });
 const other = sites.create({ name: "Riverside", timeZone: "America/New_York" });
-const security = directory.createCompany({ name: "Harbour Security", buildingStaff: true, sites: [{ siteId: site.id }] });
+const security = directory.createCompany({ name: "Harbor Security", buildingStaff: true, sites: [{ siteId: site.id }] });
 const acme = directory.createCompany({ name: "Acme Corp", sites: [{ siteId: site.id }] });
 check("companies: building staff is stored", directory.getCompany(security.id).buildingStaff === true && directory.getCompany(acme.id).buildingStaff === false);
 const guard = directory.createPerson({ firstName: "Gail", lastName: "Guard", companyId: security.id, clearanceLevel: L.TS.id, clearanceGranted: "2024-01-10" });

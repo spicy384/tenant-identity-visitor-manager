@@ -311,9 +311,9 @@ async function settingsRoles(body) {
   const staff = roles.filter((r) => r.kind === "user");
   body.append(h("div", { class: "panel" },
     h("div", { class: "panel-head" }, h("h3", { text: "Roles" }), h("button", { type: "button", class: "primary small", text: "Add role", onclick: () => editRole(null, staff) })),
-    h("p", { class: "muted", text: "A role sets how far an account reaches: whether it can see or change the directory (companies and people), visitors (visitors, visits, checking in and out), badges, and facilities (floors, offices and rates). Which fields each role sees is set under Field access; clearance details only ever reach roles that see clearance levels, and the rest see badge images instead. Administrators can do everything. The kiosk only ever shows names; Equipment Checkout's fields are set under Field access." }),
+    h("p", { class: "muted", text: "A role sets how far an account reaches: whether it can see or change the directory (companies and people), visitors (visitors, visits, checking in and out), badges, facilities (floors, offices, rates, leases and charges) and finance (invoices, payments and balances). Which fields each role sees is set under Field access; clearance details only ever reach roles that see clearance levels, and the rest see badge images instead. Administrators can do everything. The kiosk only ever shows names; Equipment Checkout's fields are set under Field access." }),
     h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-      h("thead", {}, h("tr", {}, ["Role", "For", "Directory", "Visitors", "Badges", "Facilities", "Clearance levels", "Custom fields", "Accounts", ""].map((t) => h("th", { text: t })))),
+      h("thead", {}, h("tr", {}, ["Role", "For", "Directory", "Visitors", "Badges", "Facilities", "Finance", "Clearance levels", "Custom fields", "Accounts", ""].map((t) => h("th", { text: t })))),
       h("tbody", {}, roles.map((r) => h("tr", {},
         h("td", {}, h("strong", { text: r.name }), r.builtIn ? h("span", { class: "badge muted", text: "Built in" }) : null),
         h("td", { class: "small-text", text: r.kind === "api" && r.builtIn ? "Template for new API clients" : KIND_LABELS[r.kind] }),
@@ -321,6 +321,7 @@ async function settingsRoles(body) {
         h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.visitors] : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? BADGE_LABELS[r.badges] : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.facilities] : "—" }),
+        h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.finance || "none"] : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? (r.clearances ? "Sees them" : "Badge images") : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? (r.id === "admin" ? "Adds, changes, deletes" : r.fields ? "Adds and changes" : "—") : "—" }),
         h("td", { text: r.kind === "user" ? String(r.accounts) : "—" }),
@@ -338,7 +339,8 @@ async function editRole(role, staff) {
       { name: "directory", label: "Companies and people", type: "select", value: role?.directory || "read", options: levels, half: true },
       { name: "visitors", label: "Visitors and visits", type: "select", value: role?.visitors || "none", options: levels, half: true },
       { name: "badges", label: "Badges", type: "select", value: role?.badges || "none", options: Object.entries(BADGE_LABELS).map(([value, label]) => ({ value, label })), half: true, hint: "Read to look; issue and return to give badges out and take them back; manage also adds, changes and removes badges (Security)." },
-      { name: "facilities", label: "Facilities", type: "select", value: role?.facilities || "none", options: levels, half: true, hint: "Floor plans, offices, who has them and what they cost. Read and change also draws offices, assigns them and sets rates." },
+      { name: "facilities", label: "Facilities", type: "select", value: role?.facilities || "none", options: levels, half: true, hint: "Floor plans, offices, who has them, what they cost, leases and charges. Read and change also draws offices, assigns them, sets rates, makes leases and logs charges." },
+      { name: "finance", label: "Finance", type: "select", value: role?.finance || "none", options: levels, half: true, hint: "Invoices, payments and balances. Read and change also makes and issues invoices, records payments, logs charges and keeps the billing settings and QuickBooks." },
       { name: "fields", label: "Manages custom fields", type: "checkbox", value: Boolean(role?.fields),
         hint: "Adds custom fields, and changes their names, choices and whether they're required, for the records this role can change, and badge fields if it issues or manages badges (Settings > Fields). Filling in a badge's fields stays with roles that manage badges; deleting a field and Field access stay with administrators." },
       { name: "clearances", label: "Sees clearance levels", type: "checkbox", value: Boolean(role?.clearances), disabled: role?.id === "security",
@@ -347,7 +349,7 @@ async function editRole(role, staff) {
     ],
     submitLabel: role ? "Save" : "Add role",
     onSubmit: async (v) => (role
-      ? await api(`/api/roles/${role.id}`, { method: "PUT", body: role.builtIn ? { directory: v.directory, visitors: v.visitors, badges: v.badges, facilities: v.facilities, fields: v.fields, ...(role.id === "security" ? {} : { clearances: v.clearances }) } : v })
+      ? await api(`/api/roles/${role.id}`, { method: "PUT", body: role.builtIn ? { directory: v.directory, visitors: v.visitors, badges: v.badges, facilities: v.facilities, finance: v.finance, fields: v.fields, ...(role.id === "security" ? {} : { clearances: v.clearances }) } : v })
       : await api("/api/roles", { method: "POST", body: v })).role
   });
   if (saved) {
@@ -443,7 +445,7 @@ function rolePicker(staffRoles, current = ["viewer"]) {
   };
   admin?.tick.addEventListener("change", sync);
   sync();
-  const describe = (r) => [`directory ${AREA_LABELS[r.directory].toLowerCase()}`, `visitors ${AREA_LABELS[r.visitors].toLowerCase()}`, `badges ${BADGE_LABELS[r.badges].toLowerCase()}`, `facilities ${AREA_LABELS[r.facilities].toLowerCase()}`].join(", ");
+  const describe = (r) => [`directory ${AREA_LABELS[r.directory].toLowerCase()}`, `visitors ${AREA_LABELS[r.visitors].toLowerCase()}`, `badges ${BADGE_LABELS[r.badges].toLowerCase()}`, `facilities ${AREA_LABELS[r.facilities].toLowerCase()}`, `finance ${AREA_LABELS[r.finance || "none"].toLowerCase()}`].join(", ");
   return {
     node: h("div", { class: "full-row" },
       h("span", { class: "label", text: "Roles" }),
@@ -505,7 +507,7 @@ async function settingsEntra(body) {
   const steps = h("div", { class: "panel" },
     h("h3", { text: "Setting up the app registration" }),
     h("ol", { class: "plain-list numbered" },
-      h("li", {}, "In the Entra admin center: App registrations > New registration. Supported account types: this organisational directory only."),
+      h("li", {}, "In the Entra admin center: App registrations > New registration. Supported account types: this organizational directory only."),
       h("li", {}, "Redirect URI: platform Web, ", h("code", { class: "copy", text: redirectUri }), appUrlSet ? null : h("span", { class: "muted", text: " (taken from the address you are using now; set APP_URL to fix it)" })),
       h("li", {}, "Certificates & secrets: either Certificates > Upload certificate, with the .cer file from Certificates below (recommended: nothing secret leaves this server), or Client secrets > New client secret, copying the value (not the ID) into the form below."),
       h("li", {}, `Optional: App roles whose value is a role's name without spaces (${roles.map((r) => r.name.replace(/\s+/g, "")).join(", ")}), assigned to users or groups under Enterprise applications. Roles in the sign-in (every one that matches) replace the roles stored here.`),

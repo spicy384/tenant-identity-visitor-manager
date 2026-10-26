@@ -21,8 +21,8 @@ async function loadVisitors() {
   const q = $("visitors-search").value.trim();
   const filter = $("visitors-filter").value;
   const table = $("visitors-table");
-  const showOrg = Boolean(visitorField("organisation"));
-  const head = ["Name", ...(showOrg ? ["Organisation"] : []), "Visits", "Last visit"];
+  const showOrg = Boolean(visitorField("organization"));
+  const head = ["Name", ...(showOrg ? ["Company"] : []), "Visits", "Last visit"];
   table.tHead.replaceChildren(h("tr", {}, head.map((t) => h("th", { text: t }))));
   let data;
   try {
@@ -34,7 +34,7 @@ async function loadVisitors() {
   const rows = data.visitors.map((v) => {
     const row = h("tr", { class: "clickable" },
       h("td", {}, h("strong", { text: visitorName(v) }), visitorBadges(v)),
-      showOrg ? h("td", { text: v.organisation || "" }) : null,
+      showOrg ? h("td", { text: v.organization || "" }) : null,
       h("td", { class: "small-text", text: (v.companies || []).map((c) => c.companyName).join(", ") }),
       h("td", { class: "small-text nowrap", text: v.lastVisitAt ? fmtDateTime(v.lastVisitAt) : "Never" }));
     row.addEventListener("click", () => { location.hash = `#visitor/${v.id}`; });
@@ -150,7 +150,7 @@ async function mergeVisitor(visitor) {
     if (q.length < 2) return;
     const { visitors } = await api(`/api/visitors?${new URLSearchParams({ q, limit: "20" })}`);
     for (const v of visitors.filter((x) => x.id !== visitor.id)) {
-      const b = h("button", { type: "button", class: "pick-row" }, h("strong", { text: visitorName(v) }), " ", h("span", { class: "muted small-text", text: [v.organisation, (v.companies || []).map((c) => c.companyName).join(", "), v.lastVisitAt ? `last visit ${fmtDate(v.lastVisitAt)}` : null].filter(Boolean).join(" · ") }));
+      const b = h("button", { type: "button", class: "pick-row" }, h("strong", { text: visitorName(v) }), " ", h("span", { class: "muted small-text", text: [v.organization, (v.companies || []).map((c) => c.companyName).join(", "), v.lastVisitAt ? `last visit ${fmtDate(v.lastVisitAt)}` : null].filter(Boolean).join(" · ") }));
       b.addEventListener("click", () => {
         target = v;
         for (const x of results.children) x.classList.toggle("is-active", x === b);

@@ -94,12 +94,12 @@ async function main() {
 
   // --- a building to visit ---------------------------------------------------------------------
   const admin = client();
-  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbour Point" });
-  const harbour = (await admin.get("/api/config")).data.sites[0];
+  await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbor Point" });
+  const harbor = (await admin.get("/api/config")).data.sites[0];
   const river = (await admin.post("/api/sites", { name: "Riverside", timeZone: "Europe/London" })).data.site;
-  await admin.put(`/api/sites/${harbour.id}`, { kioskName: "Welcome to Harbour Point", welcome: "Please sign in" });
-  const acme = (await admin.post("/api/companies", { name: "Acme Corp", sites: [{ siteId: harbour.id }] })).data.company;
-  const both = (await admin.post("/api/companies", { name: "Both Partners", sites: [{ siteId: harbour.id }, { siteId: river.id }] })).data.company;
+  await admin.put(`/api/sites/${harbor.id}`, { kioskName: "Welcome to Harbor Point", welcome: "Please sign in" });
+  const acme = (await admin.post("/api/companies", { name: "Acme Corp", sites: [{ siteId: harbor.id }] })).data.company;
+  const both = (await admin.post("/api/companies", { name: "Both Partners", sites: [{ siteId: harbor.id }, { siteId: river.id }] })).data.company;
   const riverCo = (await admin.post("/api/companies", { name: "River Co", sites: [{ siteId: river.id }] })).data.company;
   const bob = (await admin.post("/api/people", { firstName: "Bob", lastName: "Host", preferredName: "Bobby", companyId: acme.id, email: "bob@acme.example" })).data.person;
   await admin.post("/api/people", { firstName: "Nora", lastName: "Nohost", companyId: acme.id, canHost: false });
@@ -122,7 +122,7 @@ async function main() {
   check("main port: no kiosk page", (await fetch(`${BASE}/kiosk/`)).status === 404 && (await fetch(`${BASE}/kiosk/kiosk.js`)).status === 404);
   check("main port: no kiosk API", (await fetch(`${BASE}/kiosk/api/config`)).status === 404 && (await fetch(`${BASE}/kiosk/api/pair`, { method: "POST", headers: { "content-type": "application/json", "x-kiosk-request": "1" }, body: "{}" })).status === 404);
   check("main port: the staff pages are still there", (await fetch(`${BASE}/`)).ok);
-  r = await admin.post("/api/kiosks", { name: "Lobby iPad", siteId: harbour.id });
+  r = await admin.post("/api/kiosks", { name: "Lobby iPad", siteId: harbor.id });
   check("kiosks: an administrator adds one and gets a code", r.status === 200 && /^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(r.data.code));
   const lobby = r.data.kiosk;
   const lobbyCode = r.data.code;
@@ -132,7 +132,7 @@ async function main() {
   check("kiosk: the right code pairs it, with an HttpOnly, SameSite=Strict cookie", r.status === 200 && /HttpOnly/.test(r.headers.get("set-cookie")) && /SameSite=Strict/.test(r.headers.get("set-cookie")) && /Path=\/kiosk/.test(r.headers.get("set-cookie")));
   check("kiosk: the code can't pair a second iPad", (await client({ kiosk: true }).post("/kiosk/api/pair", { code: lobbyCode })).status === 401);
   r = await kiosk.get("/kiosk/api/config");
-  check("kiosk: config gives the site's kiosk name, welcome line and idle time", r.status === 200 && r.data.site.name === "Welcome to Harbour Point" && r.data.site.welcome === "Please sign in" && r.data.idleSeconds === 45);
+  check("kiosk: config gives the site's kiosk name, welcome line and idle time", r.status === 200 && r.data.site.name === "Welcome to Harbor Point" && r.data.site.welcome === "Please sign in" && r.data.idleSeconds === 45);
   check("kiosk: a kiosk cookie is not a staff session", (await fetch(`${BASE}/api/companies`, { headers: { cookie: Object.entries(kiosk.jar).map(([k, v]) => `${k}=${v}`).join("; ") } })).status === 401);
   r = await admin.get("/api/kiosks");
   check("settings: the kiosk address shown is on the kiosk port", r.data.separatePort === true && r.data.kioskUrl === `http://127.0.0.1:${KIOSK_PORT}/kiosk/`);
@@ -150,31 +150,31 @@ async function main() {
 
   // --- a new visitor ------------------------------------------------------------------------------------
   check("kiosk: a check-in needs a company at this site", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper" }, companyId: riverCo.id })).status === 400);
-  check("kiosk: a host who can't host is refused", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organisation: "US Navy", citizenship: "US" }, companyId: acme.id, hostId: riverHost.id, purpose: "Meeting" })).status === 400);
-  check("kiosk: what the visit is for is needed", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organisation: "US Navy", citizenship: "US" }, companyId: acme.id, hostId: bob.id, purpose: " " })).status === 400);
+  check("kiosk: a host who can't host is refused", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organization: "US Navy", citizenship: "US" }, companyId: acme.id, hostId: riverHost.id, purpose: "Meeting" })).status === 400);
+  check("kiosk: what the visit is for is needed", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organization: "US Navy", citizenship: "US" }, companyId: acme.id, hostId: bob.id, purpose: " " })).status === 400);
   check("kiosk: so is a new visitor's company", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", citizenship: "US" }, companyId: acme.id, hostId: bob.id, purpose: "Meeting" })).status === 400);
-  check("kiosk: and their citizenship, a country on the list", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organisation: "US Navy" }, companyId: acme.id, hostId: bob.id, purpose: "Meeting" })).status === 400
-    && (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organisation: "US Navy", citizenship: "Atlantis" }, companyId: acme.id, hostId: bob.id, purpose: "Meeting" })).status === 400
+  check("kiosk: and their citizenship, a country on the list", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organization: "US Navy" }, companyId: acme.id, hostId: bob.id, purpose: "Meeting" })).status === 400
+    && (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organization: "US Navy", citizenship: "Atlantis" }, companyId: acme.id, hostId: bob.id, purpose: "Meeting" })).status === 400
     && (await admin.get("/api/visitors?q=Hopper")).data.visitors.length === 0);
   check("kiosk: the countries come with its config", (await kiosk.get("/kiosk/api/config")).data.countries.some((c) => c.code === "CA" && c.name === "Canada"));
-  r = await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organisation: "US Navy", citizenship: "US", contact: "grace@navy.example" }, companyId: acme.id, hostId: bob.id, purpose: "Meeting" });
+  r = await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organization: "US Navy", citizenship: "US", contact: "grace@navy.example" }, companyId: acme.id, hostId: bob.id, purpose: "Meeting" });
   check("kiosk: a new visitor checks in", r.status === 200 && r.data.ok && r.data.firstName === "Grace" && r.data.companyName === "Acme Corp" && r.data.hostName === "Bobby Host");
   r = await admin.get("/api/visitors?filter=review");
   const grace = r.data.visitors.find((v) => v.firstName === "Grace");
-  check("kiosk: they're on record, to be checked by staff, with their email", grace && grace.verified === false && grace.source === "kiosk" && grace.email === "grace@navy.example" && grace.organisation === "US Navy"
+  check("kiosk: they're on record, to be checked by staff, with their email", grace && grace.verified === false && grace.source === "kiosk" && grace.email === "grace@navy.example" && grace.organization === "US Navy"
     && grace.citizenship === "US" && grace.visitorType === "Guest");
   r = await admin.get("/api/visits?status=open");
-  check("visits: the visit is open, at the kiosk's site, by the kiosk", r.data.visits.length === 1 && r.data.visits[0].siteId === harbour.id && r.data.visits[0].kioskName === "Lobby iPad" && r.data.visits[0].hostName === "Bobby Host");
+  check("visits: the visit is open, at the kiosk's site, by the kiosk", r.data.visits.length === 1 && r.data.visits[0].siteId === harbor.id && r.data.visits[0].kioskName === "Lobby iPad" && r.data.visits[0].hostName === "Bobby Host");
   check("visits: waiting for the desk to check their ID, with what it's for", r.data.visits[0].checkinStage === "id" && r.data.visits[0].purpose === "Meeting" && r.data.visits[0].visitorType === "Guest");
-  check("kiosk: a bad email is refused", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "X", lastName: "Y", organisation: "Z", citizenship: "US", contact: "not@mail" }, companyId: acme.id, purpose: "x" })).status === 400);
+  check("kiosk: a bad email is refused", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "X", lastName: "Y", organization: "Z", citizenship: "US", contact: "not@mail" }, companyId: acme.id, purpose: "x" })).status === 400);
 
   // --- returning -------------------------------------------------------------------------------------------
   r = await kiosk.post("/kiosk/api/lookup", { name: "grace hoper" });
   const match = r.data.matches[0];
   check("kiosk: found again, typo and all", r.data.matches.length === 1 && match.firstName === "Grace" && match.companies[0].companyName === "Acme Corp" && match.companies[0].hostName === "Bobby Host", JSON.stringify(r));
   const keys = [...allKeys(r.data)].sort().join();
-  check("kiosk: a lookup reveals only first name, companies and hosts, and what check-in still needs", keys === "citizenship,companies,companyId,companyName,firstName,hostId,hostName,matches,needs,organisation,ref", keys);
-  check("kiosk: ...which for Grace is nothing", match.needs.organisation === false && match.needs.citizenship === false);
+  check("kiosk: a lookup reveals only first name, companies and hosts, and what check-in still needs", keys === "citizenship,companies,companyId,companyName,firstName,hostId,hostName,matches,needs,organization,ref", keys);
+  check("kiosk: ...which for Grace is nothing", match.needs.organization === false && match.needs.citizenship === false);
   check("kiosk: no surname, email or record id in it", !JSON.stringify(r.data).includes("Hopper") && !JSON.stringify(r.data).includes("navy") && !("id" in match));
   r = await kiosk.post("/kiosk/api/checkin", { ref: match.ref, companyId: acme.id, hostId: bob.id, purpose: "Meeting" });
   check("kiosk: checking in while already in says so", r.data.ok && r.data.already === true);
@@ -218,29 +218,29 @@ async function main() {
   check("staff: config carries who is in the building and how many to check", r.data.visits.here[river.id] === 1 && r.data.visits.review === 1);
 
   // --- kiosk visitors waiting for a badge (the banner) -------------------------------------------------
-  pw.harbourDesk = password();
-  await admin.post("/api/users", { username: "harbourdesk", password: pw.harbourDesk, role: "frontdesk", sites: [harbour.id] });
-  const harbourDesk = client();
-  await harbourDesk.post("/api/auth/login", { username: "harbourdesk", password: pw.harbourDesk });
+  pw.harborDesk = password();
+  await admin.post("/api/users", { username: "harbordesk", password: pw.harborDesk, role: "frontdesk", sites: [harbor.id] });
+  const harborDesk = client();
+  await harborDesk.post("/api/auth/login", { username: "harbordesk", password: pw.harborDesk });
   r = await desk.get("/api/visits/badge-needed");
   check("badge banner: a visitor who checked in at a kiosk is waiting for a badge", r.data.visits.length === 1 && r.data.visits[0].name === "Grace Hopper" && r.data.visits[0].kioskName === "River iPad" && r.data.visits[0].siteId === river.id && r.data.visits[0].companyName === "Both Partners");
   check("badge banner: shown to staff at that site", (await riverDesk.get("/api/visits/badge-needed")).data.visits.length === 1);
-  check("badge banner: not to staff only at another site", (await harbourDesk.get("/api/visits/badge-needed")).data.visits.length === 0);
-  check("badge banner: nor for another site chosen in the picker", (await desk.get(`/api/visits/badge-needed?site=${harbour.id}`)).data.visits.length === 0);
+  check("badge banner: not to staff only at another site", (await harborDesk.get("/api/visits/badge-needed")).data.visits.length === 0);
+  check("badge banner: nor for another site chosen in the picker", (await desk.get(`/api/visits/badge-needed?site=${harbor.id}`)).data.visits.length === 0);
   check("badge banner: nor to anyone who can't give badges out", (await viewer.get("/api/visits/badge-needed")).status === 403);
   const walkIn = (await desk.post("/api/visitors", { firstName: "Wally", lastName: "Walkin" })).data.visitor;
   await desk.post("/api/visits", { visitorId: walkIn.id, siteId: river.id, companyId: both.id });
   check("badge banner: a desk check-in that skipped the ID check waits for one too", (await desk.get("/api/visits/badge-needed")).data.visits.some((v) => v.name === "Wally Walkin" && v.stage === "id"));
   const uncleared = (await admin.get("/api/clearance")).data.classifications.find((c) => !c.requiresClearance);
-  const harbourBadge = (await admin.post("/api/badges", { number: "VH-1", type: "visitor", classificationId: uncleared.id, siteIds: [harbour.id] })).data.badge;
+  const harborBadge = (await admin.post("/api/badges", { number: "VH-1", type: "visitor", classificationId: uncleared.id, siteIds: [harbor.id] })).data.badge;
   const riverBadge = (await admin.post("/api/badges", { number: "VR-1", type: "visitor", classificationId: uncleared.id, siteIds: [river.id] })).data.badge;
   const graceWaiting = (await desk.get("/api/visits/badge-needed")).data.visits[0];
   r = await desk.get(`/api/badge-holders/visitor/${graceWaiting.visitorId}?site=${river.id}`);
-  check("badge banner: the badges offered are those valid where they checked in", r.data.available.map((b) => b.number).join() === "VR-1" && harbourBadge.id);
+  check("badge banner: the badges offered are those valid where they checked in", r.data.available.map((b) => b.number).join() === "VR-1" && harborBadge.id);
   r = await desk.post(`/api/badges/${riverBadge.id}/assign`, { kind: "visitor", holderId: graceWaiting.visitorId, visitId: graceWaiting.visitId });
   check("badge banner: given a badge, they leave it", r.status === 200 && !(await desk.get("/api/visits/badge-needed")).data.visits.some((v) => v.name === "Grace Hopper"));
   await desk.post(`/api/badges/${riverBadge.id}/return`);
-  await riverKiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Kay", lastName: "Kiosk", organisation: "Kiosk Co", citizenship: "Canada", visitorType: "Service Technician" }, companyId: both.id, purpose: "Fix the lift" });
+  await riverKiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Kay", lastName: "Kiosk", organization: "Kiosk Co", citizenship: "Canada", visitorType: "Service Technician" }, companyId: both.id, purpose: "Fix the lift" });
   const kay = (await desk.get("/api/visits/badge-needed")).data.visits.find((v) => v.name === "Kay Kiosk");
   check("badge banner: a new kiosk visitor appears, waiting for their ID to be checked", Boolean(kay) && kay.stage === "id" && kay.visitorType === "Service Technician" && kay.purpose === "Fix the lift");
   check("badge banner: no badge is waived before their ID is checked", (await riverDesk.post(`/api/visits/${kay.visitId}/badge-not-needed`)).status === 409);
@@ -249,7 +249,7 @@ async function main() {
   r = await riverDesk.post(`/api/visits/${kay.visitId}/verify-id`, { idType: "Passport", hostId: riverHost.id });
   check("id: checked, the visit goes on to its badge, with the contact filled in", r.status === 200 && r.data.visit.checkinStage === "badge" && r.data.visit.idType === "Passport" && r.data.visit.idVerifiedBy === "riverdesk" && r.data.visit.hostName === "Rae River", JSON.stringify(r.data));
   check("id: can be checked again before the badge", (await riverDesk.post(`/api/visits/${kay.visitId}/verify-id`, { idType: "State ID" })).data.visit?.idType === "State ID");
-  check("badge banner: staff at another site can't mark them", (await harbourDesk.post(`/api/visits/${kay.visitId}/badge-not-needed`)).status === 404);
+  check("badge banner: staff at another site can't mark them", (await harborDesk.post(`/api/visits/${kay.visitId}/badge-not-needed`)).status === 404);
   check("badge banner: nor can someone who doesn't give badges out", (await viewer.post(`/api/visits/${kay.visitId}/badge-not-needed`)).status === 403);
   r = await riverDesk.post(`/api/visits/${kay.visitId}/badge-not-needed`);
   check("badge banner: marked as needing no badge, they leave it", r.status === 200 && !(await desk.get("/api/visits/badge-needed")).data.visits.some((v) => v.name === "Kay Kiosk"));
@@ -260,16 +260,16 @@ async function main() {
   const alan = r.data.visitor;
   check("staff: a viewer can't add visitors", (await viewer.post("/api/visitors", { firstName: "X", lastName: "Y" })).status === 403);
   check("staff: a viewer can read them", (await viewer.get(`/api/visitors/${alan.id}`)).status === 200);
-  r = await desk.post("/api/visits", { visitorId: alan.id, siteId: harbour.id, companyId: acme.id, hostId: bob.id, purpose: "Interview" });
+  r = await desk.post("/api/visits", { visitorId: alan.id, siteId: harbor.id, companyId: acme.id, hostId: bob.id, purpose: "Interview" });
   check("staff: checks a visitor in from the desk", r.status === 200 && r.data.visit.purpose === "Interview" && r.data.visit.checkedInBy === "desk");
   const alanVisit = r.data.visit;
   check("staff: a viewer can't check anyone out", (await viewer.post(`/api/visits/${alanVisit.id}/checkout`)).status === 403);
-  check("staff: front desk at Riverside can't see Harbour Point's visits", !(await riverDesk.get("/api/visits?status=open")).data.visits.some((v) => v.siteId === harbour.id));
+  check("staff: front desk at Riverside can't see Harbor Point's visits", !(await riverDesk.get("/api/visits?status=open")).data.visits.some((v) => v.siteId === harbor.id));
   check("staff: ...or check them out", (await riverDesk.post(`/api/visits/${alanVisit.id}/checkout`)).status === 404);
-  check("staff: ...or see Alan, who has only been to Harbour Point", (await riverDesk.get(`/api/visitors/${alan.id}`)).status === 404);
+  check("staff: ...or see Alan, who has only been to Harbor Point", (await riverDesk.get(`/api/visitors/${alan.id}`)).status === 404);
   r = await riverDesk.get(`/api/visitors/${grace.id}`);
-  check("staff: ...but sees Grace, who visited Riverside, without her Harbour Point company", r.status === 200 && r.data.visitor.companies.map((c) => c.companyName).join() === "Both Partners" && r.data.visits.every((v) => v.siteId === river.id));
-  check("staff: ...and can't filter by a site it can't see", (await riverDesk.get(`/api/visits?site=${harbour.id}`)).status === 403);
+  check("staff: ...but sees Grace, who visited Riverside, without her Harbor Point company", r.status === 200 && r.data.visitor.companies.map((c) => c.companyName).join() === "Both Partners" && r.data.visits.every((v) => v.siteId === river.id));
+  check("staff: ...and can't filter by a site it can't see", (await riverDesk.get(`/api/visits?site=${harbor.id}`)).status === 403);
   r = await desk.post(`/api/visits/${alanVisit.id}/checkout`);
   check("staff: checks a visitor out", r.data.visit.checkoutMethod === "staff" && r.data.visit.checkedOutBy === "desk");
 
@@ -288,12 +288,12 @@ async function main() {
   await desk.put(`/api/visitors/${grace.id}`, { blocked: true });
   r = await kiosk.post("/kiosk/api/lookup", { name: "Grace Hopper" });
   r = await kiosk.post("/kiosk/api/checkin", { ref: r.data.matches[0].ref, companyId: acme.id, purpose: "Meeting" });
-  check("blocked: the kiosk sends a blocked visitor to reception, without a visit", r.data.ok === false && r.data.seeReception === true && !(await admin.get("/api/visits?status=open&site=" + harbour.id)).data.visits.some((v) => v.visitor.firstName === "Grace"));
-  check("blocked: the desk is stopped too, unless a manager agreed", (await desk.post("/api/visits", { visitorId: grace.id, siteId: harbour.id, companyId: acme.id })).status === 409 && (await desk.post("/api/visits", { visitorId: grace.id, siteId: harbour.id, companyId: acme.id, overrideBlock: true })).status === 200);
+  check("blocked: the kiosk sends a blocked visitor to reception, without a visit", r.data.ok === false && r.data.seeReception === true && !(await admin.get("/api/visits?status=open&site=" + harbor.id)).data.visits.some((v) => v.visitor.firstName === "Grace"));
+  check("blocked: the desk is stopped too, unless a manager agreed", (await desk.post("/api/visits", { visitorId: grace.id, siteId: harbor.id, companyId: acme.id })).status === 409 && (await desk.post("/api/visits", { visitorId: grace.id, siteId: harbor.id, companyId: acme.id, overrideBlock: true })).status === 200);
   r = await admin.get("/api/audit?action=kiosk.blocked");
   check("blocked: the attempt is in the audit log", r.data.entries.length === 1);
 
-  const dupe = (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Alan", lastName: "Turing", organisation: "Bletchley", citizenship: "GB", contact: "555-0199" }, companyId: acme.id, purpose: "Interview" })).data;
+  const dupe = (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Alan", lastName: "Turing", organization: "Bletchley", citizenship: "GB", contact: "555-0199" }, companyId: acme.id, purpose: "Interview" })).data;
   r = await desk.get("/api/visitors?filter=review&q=Turing");
   const dupeId = r.data.visitors[0].id;
   r = await desk.post(`/api/visitors/${dupeId}/merge`, { intoId: alan.id });
@@ -314,7 +314,7 @@ async function main() {
   check("revoke: removing a kiosk signs it out", (await admin.del(`/api/kiosks/${(await admin.get("/api/kiosks")).data.kiosks.find((k) => k.name === "River iPad").id}`)).status === 200 && (await riverKiosk.get("/kiosk/api/config")).status === 401);
 
   const busy = client({ kiosk: true });
-  r = await admin.post("/api/kiosks", { name: "Busy iPad", siteId: harbour.id });
+  r = await admin.post("/api/kiosks", { name: "Busy iPad", siteId: harbor.id });
   await busy.post("/kiosk/api/pair", { code: r.data.code });
   let limited = false;
   for (let i = 0; i < 35 && !limited; i += 1) limited = (await busy.post("/kiosk/api/lookup", { name: `Someone Number${i}` })).status === 429;

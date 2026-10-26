@@ -5,7 +5,7 @@ const express = require("express");
 
 const { loadKey } = require("./db-key");
 const { openDatabase } = require("./db");
-const { createFields, normaliseValue: normaliseFieldValue, TYPES: FIELD_TYPES, TYPE_LABELS: FIELD_TYPE_LABELS } = require("./fields");
+const { createFields, normalizeValue: normalizeFieldValue, TYPES: FIELD_TYPES, TYPE_LABELS: FIELD_TYPE_LABELS } = require("./fields");
 const { createAccess, AREA_LEVELS, BADGE_LEVELS, NEW_FIELD_VISIBILITY } = require("./access");
 const { createSites } = require("./sites");
 const { createDirectory } = require("./directory");
@@ -24,6 +24,10 @@ const { createEvents } = require("./events");
 const { createBadgeRoutes } = require("./badge-routes");
 const { createFacilities } = require("./facilities");
 const { createFacilityRoutes } = require("./facility-routes");
+const { createLeases } = require("./leases");
+const { createBilling } = require("./billing");
+const { createQuickBooks } = require("./quickbooks");
+const { createFinanceRoutes } = require("./finance-routes");
 const { createClearanceRoutes } = require("./clearance-routes");
 const { createBadgeTemplates } = require("./badge-templates");
 const { createPrefs } = require("./prefs");
@@ -69,7 +73,7 @@ const KIOSK_PORT = (() => {
   return n;
 })();
 // How long the SSN digits given with a clearance validation request are held in memory
-// before they are wiped, if Security hasn't validated or cancelled by then.
+// before they are wiped, if Security hasn't validated or canceled by then.
 const CLEARANCE_DIGITS_HOURS = (() => {
   const raw = String(process.env.CLEARANCE_DIGITS_HOURS || "").trim();
   if (!raw) return DEFAULT_DIGITS_HOURS;
@@ -137,7 +141,7 @@ if (KIOSK_PORT) app.use("/kiosk", notFound);
 
 // A clearance validation request may carry the last four of an SSN. Its body stays bytes,
 // never a string, so clearance-routes.js can take the digits out and wipe them; every other
-// body is JSON as usual. (The route refuses a body that arrives parsed, so a path spelt
+// body is JSON as usual. (The route refuses a body that arrives parsed, so a path spelled
 // differently can't slip past this.)
 const rawClearanceRequest = express.raw({ type: () => true, limit: "8kb" });
 app.use((req, res, next) => {
@@ -211,6 +215,9 @@ const sites = createSites({ db });
 sites.ensureDefault();
 const directory = createDirectory({ db, fields });
 const facilities = createFacilities({ db, sites, directory });
+const leases = createLeases({ db, facilities, directory });
+const billing = createBilling({ db, leases, directory });
+const quickbooks = createQuickBooks({ db, billing });
 const visitors = createVisitors({ db, fields });
 const kiosks = createKiosks({ db });
 const clock = createVisitClock({ db, visitors, log: (message) => console.error(message) });
@@ -333,7 +340,7 @@ app.get("/api/config", (req, res) => {
   const ctx = req.ctx;
   res.json({
     version: pkg.version,
-    access: { role: ctx.role?.id || null, roles: ctx.roles.map((r) => r.id), roleName: ctx.roles.map((r) => r.name).join(", ") || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), facilities: ctx.facilities, fieldEntities: access.fieldEntitiesFor(ctx), sitesLimited: Boolean(ctx.sites) },
+    access: { role: ctx.role?.id || null, roles: ctx.roles.map((r) => r.id), roleName: ctx.roles.map((r) => r.name).join(", ") || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), facilities: ctx.facilities, finance: ctx.finance, fieldEntities: access.fieldEntitiesFor(ctx), sitesLimited: Boolean(ctx.sites) },
     branding: branding(),
     visits: access.canReadVisitors(ctx) ? { here: visitors.hereNow(ctx.sites), review: visitors.reviewCount(ctx.sites), expected: events.expectedCount(ctx.sites), badgesLeft: access.canReadBadges(ctx) ? badges.leftCount(ctx.sites) : 0, tempOverdue: access.canReadBadges(ctx) ? badges.overdueCount(ctx.sites) : 0 } : null,
     // Level names only for roles that see them; the rest see badge template images.
@@ -658,7 +665,8 @@ app.get("/api/people.csv", admin, (req, res) => {
 
 const COMPANY_COLUMNS = { name: "name", phone: "phone", email: "email", website: "website", address: "address", notes: "notes", active: "active" };
 const PERSON_COLUMNS = { first_name: "firstName", last_name: "lastName", preferred_name: "preferredName", job_title: "jobTitle", email: "email", work_phone: "workPhone", mobile: "mobile", can_host: "canHost", notes: "notes", active: "active" };
-const VISITOR_COLUMNS = { first_name: "firstName", last_name: "lastName", organisation: "organisation", visitor_type: "visitorType", citizenship: "citizenship", email: "email", phone: "phone", notes: "notes", blocked: "blocked" };
+// A file's "organisation" column (the British spelling) counts as organization.
+const VISITOR_COLUMNS = { first_name: "firstName", last_name: "lastName", organization: "organization", organisation: "organization", visitor_type: "visitorType", citizenship: "citizenship", email: "email", phone: "phone", notes: "notes", blocked: "blocked" };
 const BOOLEAN_KEYS = new Set(["active", "canHost", "blocked"]);
 
 function parseYesNo(value, label) {
@@ -863,7 +871,7 @@ function personInCompanyByName(companyId, name) {
 }
 
 /**
- * Imports visitors from rows keyed by column (first_name, last_name, organisation,
+ * Imports visitors from rows keyed by column (first_name, last_name, organization,
  * visitor_type, citizenship, email, phone, notes, blocked, company and host they visit,
  * custom field keys). A visitor with the
  * same email, else exactly the same name, is updated. Imported visitors count as checked by
@@ -925,7 +933,7 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
   const counts = importRows(rows, (row) => {
     const input = { number: row.number, facilityCode: row.facility_code || null };
     const values = new Map();
-    for (const [key, def] of customDefs) if (row[key] !== undefined && row[key] !== "") values.set(def.id, normaliseFieldValue(def, row[key]));
+    for (const [key, def] of customDefs) if (row[key] !== undefined && row[key] !== "") values.set(def.id, normalizeFieldValue(def, row[key]));
     const type = BADGE_TYPE_NAMES[String(row.type || "").trim().toLowerCase()];
     if (!type) throw fail(400, `"${row.type}" isn't a badge type: personnel, tenant or visitor.`);
     input.type = type;
@@ -1057,13 +1065,13 @@ app.get("/api/roles", admin, (req, res) => {
 
 app.post("/api/roles", admin, (req, res) => {
   const role = access.createRole(req.body || {});
-  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}${role.clearances ? ", sees clearance levels" : ""}${role.fields ? ", manages custom fields" : ""}; fields copied from ${req.body?.copyFrom || "viewer"}`);
+  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}, finance ${role.finance}${role.clearances ? ", sees clearance levels" : ""}${role.fields ? ", manages custom fields" : ""}; fields copied from ${req.body?.copyFrom || "viewer"}`);
   res.json({ ok: true, role });
 });
 
 app.put("/api/roles/:id", admin, (req, res) => {
   const role = access.updateRole(String(req.params.id), req.body || {});
-  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}${role.clearances ? ", sees clearance levels" : ""}${role.fields ? ", manages custom fields" : ""}`);
+  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}, finance ${role.finance}${role.clearances ? ", sees clearance levels" : ""}${role.fields ? ", manages custom fields" : ""}`);
   res.json({ ok: true, role });
 });
 
@@ -1258,7 +1266,8 @@ app.use(createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom,
 // The clearance routes first: they mark everything under /api/clearance no-store, the
 // level list the badge routes answer included.
 app.use(clearanceRoutes.router);
-app.use(createFacilityRoutes({ access, facilities, directory, sites, auditFrom }));
+app.use(createFacilityRoutes({ access, facilities, leases, directory, sites, auditFrom }));
+app.use(createFinanceRoutes({ access, leases, billing, quickbooks, directory, auditFrom, appUrl: APP_URL, branding }));
 app.use(createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, fields, admin, auditFrom, transaction: (fn) => db.transaction(fn) }));
 
 app.use("/api", (req, res) => {

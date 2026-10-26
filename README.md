@@ -13,14 +13,16 @@ The design and decisions are in [PLAN.md](PLAN.md).
 
 - **Sections.** The header has Home, Tenants (companies, people, their badges), Visitors (in
   the building, expected, visitors, the visit log, visitor badges), Facilities (floor plans,
-  offices and rates: for roles given facilities access), Security (the clearance queue,
+  offices, rates, leases and charges: for roles given facilities access, and Finance), Finance
+  (invoices, balances, payments, billing settings: for roles given finance access), Security (the clearance queue,
   re-checks and expiry, all badges: for Security and administrators) and Settings
   (administrators). The pages of the chosen section are in the bar under the header; a
   section or page the account can't open isn't shown.
 - **Home** is each person's dashboard. **Customize** adds, removes and reorders modules: who
   is in the building, who is expected today, visitors whose check-in the desk must finish, visitors to
   check, badges out past their time, a quick list of tenants, offices by status with the space
-  let and the monthly rent (for those who see facilities), and for Security the clearance
+  let and the monthly rent (for those who see facilities), leases ending soon, overdue invoices
+  (for those who see the books), and for Security the clearance
   queue, visitor re-checks, clearances expiring and recent validations (administrators get
   all but the queue). Only modules the role can see are offered, every role starts with a
   layout that suits it, and the choice is kept with the account, on any device.
@@ -120,8 +122,10 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Checking in at the desk** (Check in a visitor, on Home and In the building; Check in
   beside an expected guest) walks through one step per page:
   1. **Find** them in the visitor list, or add them: name, company, type, citizenship, the
-     tenant they're visiting and their point of contact. A service technician's point of
-     contact can be anyone in the directory, found by name.
+     point of contact they're visiting, picked by typing their name (their tenant comes with
+     them, and the site too when it can only be one). A service technician's point of
+     contact can be anyone in the directory. Changing the site keeps the point of contact
+     when their company is there.
   2. **Confirm** their details, the point of contact's (job title, phones, email, as the
      role's field access shows them) and the purpose of the visit.
   3. **ID**: which ID they showed (driver's license, passport, CAC, state ID or another
@@ -232,7 +236,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
   to 1 MB (other formats are converted in the browser), served under a random address that
   changes with each upload and says nothing about the level.
 - **Custom badge fields.** Settings > Fields has Badge fields alongside the others (a lanyard
-  colour, a locker number, a cost centre). They show on the badge's dialog, in the add, range
+  color, a locker number, a cost center). They show on the badge's dialog, in the add, range
   and edit forms, in Change for several badges and in the badge import. Like the badges
   themselves, only roles that manage badges (Security and Administrator to start with) change
   them; roles that issue or read badges can be given read-only or hidden under Field access.
@@ -286,7 +290,8 @@ Home.
 - **Size and cost.** Each office has its size in square feet. Rates are dollars per square
   foot a month: a **company's** own rate wins, else the **office's**, else the **site's**
   default (Facilities > Rates, and Change rate on a company's page). An office's monthly cost
-  is its size times that rate; a free office shows what it would cost.
+  is its size times that rate; a free office shows what it would cost. A room can instead be
+  priced at a **fixed amount a month** (Priced on its form), which then wins over every rate.
 - **Rooms** lists every room at the chosen site with its floor, type, classification, size,
   status, company, rate and monthly cost, totals underneath; filter by type or status, or search.
 - **Several rooms at once.** Tick rooms on the Rooms page, or choose **Select rooms** on a
@@ -301,6 +306,51 @@ Home.
   assigned, or none if one can't be. A company that has an office now or later can't be deleted until those
   assignments end; merging companies moves their offices and history to the one kept.
 
+## Leases, charges and invoices
+
+- **Who does what.** Managers keep leases and charges, and read invoices, payments and
+  balances. The built-in **Finance** role sees every financial detail (leases, rates, charges)
+  and keeps the books: it logs charges, makes and issues invoices, records payments, and keeps
+  the billing settings and the QuickBooks connection. Administrators can do it all. Settings >
+  Roles gives any role finance access (none, read, or read and change).
+- **Leases** (Facilities > Leases): a company's agreement for offices, from a start date to an
+  end date (none: month to month), with a reference, a deposit and notes. Rent comes from the
+  rates (each office's size times the rate that applies, or the office's own fixed monthly
+  rent) or is a fixed amount a month; either can go up by a percentage on each anniversary. Making a lease assigns its offices to the
+  company for its dates, and changing its dates or offices changes those assignments, so an
+  office still has one company at a time. Offices assigned from Rooms or a company's page get
+  a lease of their own (the ones assigned together share one); the assignments made before
+  leases became leases the same way. Moving one office of several to other dates on Rooms gives
+  it a lease of its own (not for a fixed rent: change that on the lease). A lease that has been
+  invoiced can't be deleted, only ended; Home shows the leases ending within 90 days.
+- **Charges** (Facilities > Charges): billable items and hours logged against a company: from
+  the **price list** (say After-hours HVAC at $75 an hour, its rate filled in) or one-off. A
+  charge can be changed or deleted until it is on an invoice.
+- **Invoices** (Finance > Invoices): **Invoice a month** drafts an invoice for each company
+  with its leases' rent for that month (a part month for the days the lease covers) and its
+  charges not invoiced yet up to the month's end. A month's rent is invoiced once; running it
+  again adds only what is new. A draft can take more lines (anything else, or a credit as a
+  negative amount; a charge; another month's rent) and lose lines; **Issue** gives it the next
+  number (Billing settings sets the prefix and where numbers start), and its lines are then
+  fixed. **Void** keeps an issued invoice's number on record and frees its charges and rent to
+  be invoiced again (not once it has payments). **Print** opens the invoice as a page to print
+  or save as PDF, with who to pay and the footer from Billing settings. No tax.
+- **Payments** are recorded against issued invoices (date, amount, method, reference), in
+  part or in full but never more than is owed: an invoice is open, partly paid, paid, or
+  overdue past its due date (the payment terms in Billing settings). **Balances** shows what
+  each company owes, by how late: not due yet, 1-30, 31-60, 61-90 and over 90 days.
+- **QuickBooks.** **Export** downloads issued invoices or payments for a date range: CSV in
+  QuickBooks Online's import layout, or IIF for QuickBooks Desktop (with the customers and items
+  they use). Billing settings names the QuickBooks accounts and items. Or connect **QuickBooks
+  Online** directly (Billing settings): register an app at developer.intuit.com (Accounting
+  scope), add the redirect URI shown to it, enter its client ID and secret, and Connect. Then
+  **Sync now** sends issued invoices (making their customers and items when missing) and
+  payments recorded here, and brings back payments made in QuickBooks against those invoices.
+  The secret and tokens stay in the encrypted database. Intuit wants https:// for a real
+  company, so set `APP_URL`.
+- Merging companies moves their leases, charges and invoices too; an issued invoice keeps the
+  name it was billed to.
+
 ## Expected visitors
 
 **Expected** lists a day's visitor events: a name, time, site, company and host, and the guests
@@ -308,10 +358,21 @@ expected. Each guest shows as expected, arrived but not yet through the desk, he
 when) or left. Staff who give badges out can pick the visitor badge to hand each guest
 (Badge column): check-in then shows that badge. Guests are picked from
 visitors on record or added as new ones (the app says when someone of that name is already
-on record), and are linked to the event's company and host, so the kiosk recognises them.
+on record), and are linked to the event's company and host, so the kiosk recognizes them.
 At the kiosk an expected guest is offered their event's company and host first; checking
 in, at the kiosk or the desk, marks them arrived. The navigation counts guests expected
 today who haven't arrived.
+
+An event's **point of contact** is picked by typing their name: the person comes with their
+company (type a company's name instead for no one in particular), across every site the
+account sees, and the site list follows that company's sites.
+
+An event can **repeat**: every day, every weekday, weekly on chosen days (every week or every
+other week), or monthly (on the same date, or the same weekday such as the second Tuesday;
+a month without the date is skipped), until a date at most a year after the first. Each date
+is an event of its own. Guests added when it's made are expected on every date; later, a
+guest can be added to or taken off one date, or that date and the later ones. Editing or
+canceling works the same way (later dates keep their own dates).
 
 ## The kiosk
 
@@ -595,12 +656,12 @@ level (Security).
    nothing behind.
 
 The file is read on the server and held in its memory only, for 15 minutes or until the
-import is done or cancelled, by the account that sent it; it is never written to disk. Yes/no
+import is done or canceled, by the account that sent it; it is never written to disk. Yes/no
 columns become yes or no, and dates become YYYY-MM-DD. At most 20,000 rows at a time.
 
 A company's site can come from one column (a site's name) and its suite from another.
 
-- **Visitors**: first and last name (required), their organisation, email, phone, notes,
+- **Visitors**: first and last name (required), their organization, email, phone, notes,
   blocked (yes/no), the company they visit and their host there (by name), and custom fields.
   A visitor with the same email, else exactly the same name, is updated. Imported visitors
   count as checked by staff. Clearances aren't imported: only Security sets them, by validating.
@@ -618,7 +679,7 @@ People: `first_name`, `last_name`, `company` (required); `preferred_name`, `job_
 (shown under Settings > Fields). Someone in the same company with the same email (or, without
 one, the same name) is updated.
 
-Companies: `name` (required); `sites` (`Harbour Point: Suite 100; Riverside`), `phone`,
+Companies: `name` (required); `sites` (`Harbor Point: Suite 100; Riverside`), `phone`,
 `email`, `website`, `address`, `notes`, `active`, and custom field keys. A company with the same
 name is updated.
 
@@ -657,3 +718,5 @@ database in test/fixtures, made by make-access-fixture.ps1), merging and bulk ch
   mouse (touch has larger points to grab, but right-click to remove a point needs the Delete key
   or a mouse there)
 - A large directory: lists are paged, but nothing has been measured beyond a few hundred people
+- QuickBooks Online against a real company (only a fake QuickBooks), and the CSV and IIF
+  exports imported into real QuickBooks Online and Desktop

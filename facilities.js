@@ -17,7 +17,8 @@
  * others show as "shared", with no rent.
  *
  * Rates are per square foot per month. A company's own rate wins; otherwise the office's,
- * otherwise its site's default. An office's monthly cost is its square feet times that rate.
+ * otherwise its site's default. An office's monthly cost is its square feet times that rate,
+ * unless it is let for a fixed amount a month (monthly_rent), which then wins over every rate.
  *
  * Plans are PNG or JPEG, checked by their first bytes. Each has a random `ref` that changes
  * with every upload, so a browser may cache one for as long as it lasts.
@@ -29,6 +30,7 @@ const MAX_PLAN_BYTES = 2.75 * 1024 * 1024;
 const REF_RE = /^[A-Za-z0-9_-]{16}$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MAX_RATE = 100000;
+const MAX_MONTHLY = 100000000;
 const MAX_SQFT = 10000000;
 const STATUSES = ["available", "occupied", "upcoming", "shared", "unavailable"];
 const COLOR_RE = /^#[0-9a-f]{6}$/i;
@@ -259,6 +261,17 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return site !== null ? { rate: site, source: "site" } : { rate: null, source: null };
   }
 
+  /**
+   * What an office costs a company a month (with no company: what it is offered at): its fixed
+   * monthly rent when it has one, else its size times the rate that applies. { rate, source, monthly };
+   * source "monthly" for a fixed amount.
+   */
+  function rentOf(office, siteId, companyId) {
+    if (office.monthlyRent !== null && office.monthlyRent !== undefined) return { rate: null, source: "monthly", monthly: money(office.monthlyRent) };
+    const { rate, source } = effectiveRate(office, siteId, companyId);
+    return { rate, source, monthly: rate !== null && office.sqft !== null && office.sqft !== undefined ? money(office.sqft * rate) : null };
+  }
+
   /** Every site's default rate and every company that has its own, for the caller's sites. */
   function rates({ scope = null } = {}) {
     const siteList = sites.list({ includeInactive: false }).filter((s) => !scope || scope.has(s.id)).map((s) => ({ siteId: s.id, name: s.name, rate: siteRate(s.id) }));
@@ -453,10 +466,12 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     // A room of a type that isn't assigned to companies (a conference room, say) is shared.
     const assignable = r.room_type_id ? Boolean(r.type_assignable) : true;
     const status = r.unavailable ? "unavailable" : current ? "occupied" : next ? "upcoming" : assignable ? "available" : "shared";
-    // Occupied: what its company pays. Otherwise what it would cost (the office's or site's rate); a shared room costs nothing.
-    const { rate, source } = assignable || current ? effectiveRate(r, r.site_id, current?.companyId ?? null) : { rate: null, source: null };
-    // What it costs a company without a rate of its own: the office's rate, else the site's.
-    const askingRate = assignable ? effectiveRate(r, r.site_id, null).rate : null;
+    // Occupied: what its company pays. Otherwise what it would cost (its fixed rent, or the office's or site's rate); a shared room costs nothing.
+    const priced = { rate: r.rate, sqft: r.sqft, monthlyRent: r.monthly_rent };
+    const { rate, source, monthly } = assignable || current ? rentOf(priced, r.site_id, current?.companyId ?? null) : { rate: null, source: null, monthly: null };
+    // What it costs a company without a rate of its own: its fixed rent, else the office's rate, else the site's.
+    const asking = assignable ? rentOf(priced, r.site_id, null) : { rate: null, monthly: null };
+    const askingRate = asking.rate;
     // Drawn before outlines: its rectangle's corners.
     const points = r.points ? JSON.parse(r.points) : r.x !== null && r.x !== undefined ? rectPoints(r.x, r.y, r.w, r.h) : null;
     // Its area from the plan, when the floor has a scale: the plan is scale_feet wide and as tall as its shape says.
@@ -472,6 +487,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       name: r.name,
       sqft: r.sqft ?? null,
       rate: r.rate ?? null,
+      // A fixed amount a month instead of by the square foot (null: by the square foot).
+      monthlyRent: r.monthly_rent ?? null,
       unavailable: Boolean(r.unavailable),
       roomTypeId: r.room_type_id || null,
       roomType: r.room_type_id ? { id: r.room_type_id, name: r.type_name, color: r.type_color, assignable } : null,
@@ -492,7 +509,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       effectiveRate: rate,
       rateSource: source,
       askingRate,
-      monthly: rate !== null && r.sqft !== null && r.sqft !== undefined ? money(r.sqft * rate) : null,
+      askingMonthly: asking.monthly,
+      monthly,
       ...(history ? { assignments: list } : {}),
       createdAt: r.created_at,
       updatedAt: r.updated_at
@@ -544,6 +562,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     if (!out.name) throw fail(400, "Give the office a name or number.");
     out.sqft = input.sqft !== undefined ? amountInput(input.sqft, "square footage", MAX_SQFT) : existing?.sqft ?? null;
     out.rate = input.rate !== undefined ? amountInput(input.rate, "rate", MAX_RATE) : existing?.rate ?? null;
+    out.monthlyRent = input.monthlyRent !== undefined ? amountInput(input.monthlyRent, "monthly rent", MAX_MONTHLY) : existing?.monthlyRent ?? null;
     out.unavailable = input.unavailable !== undefined ? input.unavailable === true : Boolean(existing?.unavailable);
     out.notes = input.notes !== undefined ? text(input.notes, 1000) : existing?.notes ?? null;
     // A new room is an office unless it says otherwise.
@@ -560,8 +579,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     const v = officeInput(input);
     if (raw.prepare("SELECT 1 FROM offices WHERE floor_id = ? AND name = ? COLLATE NOCASE").get(floor.id, v.name)) throw fail(409, `${floor.name} already has an office called ${v.name}.`);
     const t = now();
-    const id = raw.prepare("INSERT INTO offices (floor_id, name, sqft, rate, unavailable, room_type_id, class_id, x, y, w, h, points, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(floor.id, v.name, v.sqft, v.rate, v.unavailable ? 1 : 0, v.roomTypeId, v.classId, v.x, v.y, v.w, v.h, v.points, v.notes, t, t).lastInsertRowid;
+    const id = raw.prepare("INSERT INTO offices (floor_id, name, sqft, rate, monthly_rent, unavailable, room_type_id, class_id, x, y, w, h, points, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(floor.id, v.name, v.sqft, v.rate, v.monthlyRent, v.unavailable ? 1 : 0, v.roomTypeId, v.classId, v.x, v.y, v.w, v.h, v.points, v.notes, t, t).lastInsertRowid;
     return getOffice(Number(id));
   }
 
@@ -576,8 +595,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     if (v.roomTypeId !== existing.roomTypeId && v.roomTypeId && !mustRoomType(v.roomTypeId).assignable && (existing.current || existing.next)) {
       throw fail(409, `${existing.name} is assigned to ${(existing.current || existing.next).companyName}, and a ${mustRoomType(v.roomTypeId).name} isn't assigned to companies. End that assignment first.`);
     }
-    raw.prepare("UPDATE offices SET name = ?, sqft = ?, rate = ?, unavailable = ?, room_type_id = ?, class_id = ?, x = ?, y = ?, w = ?, h = ?, points = ?, notes = ?, updated_at = ? WHERE id = ?")
-      .run(v.name, v.sqft, v.rate, v.unavailable ? 1 : 0, v.roomTypeId, v.classId, v.x, v.y, v.w, v.h, v.points, v.notes, now(), id);
+    raw.prepare("UPDATE offices SET name = ?, sqft = ?, rate = ?, monthly_rent = ?, unavailable = ?, room_type_id = ?, class_id = ?, x = ?, y = ?, w = ?, h = ?, points = ?, notes = ?, updated_at = ? WHERE id = ?")
+      .run(v.name, v.sqft, v.rate, v.monthlyRent, v.unavailable ? 1 : 0, v.roomTypeId, v.classId, v.x, v.y, v.w, v.h, v.points, v.notes, now(), id);
     return getOffice(id);
   }
 
@@ -592,7 +611,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
   // --- several rooms at once ---------------------------------------------------------------------
 
   // What may be set on several rooms together (names, sizes and places stay one at a time).
-  const BULK_KEYS = ["roomTypeId", "classId", "rate", "unavailable", "notes"];
+  const BULK_KEYS = ["roomTypeId", "classId", "rate", "monthlyRent", "unavailable", "notes"];
 
   /** The ids of several rooms: distinct positive whole numbers, at most 500. */
   function roomIds(list) {
@@ -726,10 +745,10 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       for (const a of full.assignments.filter((x) => x.companyId === companyId)) {
         const day = today(o.siteId);
         const when = a.startDate > day ? "upcoming" : a.endDate && a.endDate < day ? "ended" : "current";
-        const { rate, source } = effectiveRate(full, full.siteId, companyId);
+        const { rate, source, monthly } = rentOf(full, full.siteId, companyId);
         rows.push({
           assignment: a, when, officeId: o.id, officeName: o.name, floorId: o.floorId, floorName: o.floorName, siteId: o.siteId, siteName: o.siteName,
-          sqft: o.sqft, rate, rateSource: source, monthly: rate !== null && o.sqft !== null ? money(o.sqft * rate) : null
+          sqft: o.sqft, rate, rateSource: source, monthly
         });
       }
     }
@@ -873,7 +892,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
   }
 
   return {
-    todayAt, rates, siteRate, companyRate, setSiteRate, setCompanyRate,
+    todayAt, rates, siteRate, companyRate, effectiveRate, rentOf, setSiteRate, setCompanyRate,
     listFloors, getFloor, createFloor, updateFloor, removeFloor, setPlan, clearPlan, setScale, planImage,
     listOffices, getOffice, createOffice, updateOffice, removeOffice, updateMany, removeMany,
     getAssignment, assign, assignMany, updateAssignment, removeAssignment,

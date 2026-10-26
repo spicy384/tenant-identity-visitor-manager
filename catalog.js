@@ -64,7 +64,7 @@ const BUILT_IN = {
   visitor: [
     { key: "firstName", label: "First name", type: "text", locked: true, required: true },
     { key: "lastName", label: "Last name", type: "text", locked: true, required: true },
-    { key: "organisation", label: "Company", type: "text" },
+    { key: "organization", label: "Company", type: "text" },
     { key: "visitorType", label: "Visitor type", type: "choice", choices: ["Guest", "Service Technician"] },
     { key: "citizenship", label: "Citizenship", type: "citizenship" },
     { key: "email", label: "Email", type: "email" },
@@ -102,7 +102,7 @@ const SEARCH_COLUMNS = {
   visitor: {
     firstName: ["v.first_name"],
     lastName: ["v.last_name"],
-    organisation: ["v.organisation"],
+    organization: ["v.organization"],
     email: ["v.email"],
     phone: ["v.phone"],
     notes: ["v.notes"],

@@ -14,8 +14,8 @@ const { createSites } = require("../sites");
 const { createDirectory } = require("../directory");
 const { createVisitors } = require("../visitors");
 const { createVisitClock, endOfDayFor, zonedTime } = require("../visit-clock");
-const { matchNames, isFullName, normaliseName } = require("../names");
-const { createKiosks, normaliseCode } = require("../kiosks");
+const { matchNames, isFullName, normalizeName } = require("../names");
+const { createKiosks, normalizeCode } = require("../kiosks");
 
 const { check, report } = createChecker("Visitors: names, end of day, retention, merge, site limits");
 const throwsStatus = (fn, status) => {
@@ -46,7 +46,7 @@ check("names: two typos in one part is too many", ids("Jmae Deo") === "");
 check("names: short names must be exact", ids("Al Wu") === "7" && ids("Ai Wu") === "");
 check("names: one word finds nobody", ids("Jane") === "" && !isFullName("Jane"));
 check("names: initials find nobody", ids("J D") === "" && !isFullName("J D"));
-check("names: normalised form", normaliseName("  Zoë  O'Brien-Smith ") === "zoe obrien smith");
+check("names: normalized form", normalizeName("  Zoë  O'Brien-Smith ") === "zoe obrien smith");
 
 // --- end of day -----------------------------------------------------------------------------
 
@@ -170,7 +170,7 @@ check("access: visitor fields follow the visitors area, not the directory", thro
 const kiosks = createKiosks({ db });
 const { kiosk, code } = kiosks.create({ name: "Lobby", siteId: ny.id });
 check("kiosks: a pairing code looks like XXXX-XXXX with no look-alike letters", /^[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}$/.test(code));
-check("kiosks: codes are forgiving about case and dashes", normaliseCode(` ${code.toLowerCase().replace("-", "")} `) === code);
+check("kiosks: codes are forgiving about case and dashes", normalizeCode(` ${code.toLowerCase().replace("-", "")} `) === code);
 check("kiosks: a wrong code pairs nothing", kiosks.pair("AAAA-AAAA") === null);
 const paired = kiosks.pair(code.toLowerCase());
 check("kiosks: the right code gives a token", paired && paired.token.length > 30 && kiosks.authenticate(paired.token).id === kiosk.id);

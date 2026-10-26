@@ -64,6 +64,14 @@ const canSeeClearances = () => Boolean(state.config?.access?.clearances);
 const canReadFacilities = () => ["read", "edit"].includes(state.config?.access?.facilities);
 /** Draws floors and offices, assigns them and sets rates. */
 const canEditFacilities = () => state.config?.access?.facilities === "edit";
+/** Sees invoices, payments and balances (Settings > Roles). */
+const canReadFinance = () => ["read", "edit"].includes(state.config?.access?.finance);
+/** Makes and issues invoices, records payments, keeps the billing settings and QuickBooks (Finance). */
+const canEditFinance = () => state.config?.access?.finance === "edit";
+/** Sees leases and charges: those who see facilities or the books. */
+const canSeeLeases = () => canReadFacilities() || canReadFinance();
+/** Logs charges and keeps the price list: those who change facilities (Managers) or keep the books (Finance). */
+const canEditCharges = () => canEditFacilities() || canEditFinance();
 /** Adds and changes custom fields: for one kind of record, or (no argument) for any. */
 const canManageFields = (entity = null) => {
   const mine = state.config?.access?.fieldEntities || [];
