@@ -33,6 +33,7 @@ function displayValue(f, value, record = null) {
   if (f.type === "links") return (value || []).map((l) => (l.hostName ? `${l.companyName} (host: ${l.hostName})` : l.companyName)).join("; ") || null;
   if (f.type === "datetime") return fmtDateTime(value) || null;
   if (f.type === "clearance") return clearanceText(record);
+  if (f.type === "citizenship") return citizenshipText(value);
   if (f.type === "clearanceStatus") return CLEARANCE_STATUS[value]?.label || null;
   if (f.type === "boolean") return value ? "Yes" : "No";
   if (f.type === "date") return fmtDate(Date.parse(`${value}T12:00:00`));
@@ -102,6 +103,81 @@ function sitesEditor(current = []) {
   };
 }
 
+/** A citizenship (a country code) as text: "U.S. citizen", or the country. */
+function citizenshipText(code) {
+  if (!code) return null;
+  if (code === "US") return "U.S. citizen";
+  return (state.config.checkin?.countries || []).find((c) => c.code === code)?.name || code;
+}
+
+/**
+ * A citizenship picker: U.S. citizen, yes or no, and for no the country, found by typing.
+ * Returns { node, value() (the country code, or null when not answered), check() (a message
+ * when it isn't answered properly, else null) }.
+ */
+function citizenshipControl(code = null, { required = false, label = "Citizenship" } = {}) {
+  const countries = (state.config.checkin?.countries || []).filter((c) => c.code !== "US");
+  const name = `citizen-${Math.random().toString(36).slice(2, 8)}`;
+  const radio = (value, text) => {
+    const input = h("input", { type: "radio", name, value });
+    input.checked = value === "yes" ? code === "US" : value === "no" ? Boolean(code) && code !== "US" : false;
+    return h("label", { class: "check-row inline" }, input, h("span", { text }));
+  };
+  const yes = radio("yes", "Yes");
+  const no = radio("no", "No");
+  let country = code && code !== "US" ? countries.find((c) => c.code === code) || null : null;
+  // The country: typed to filter the list, then picked from it.
+  const search = h("input", { type: "search", placeholder: "Type to find the country", autocomplete: "off", "aria-label": "Country of citizenship" });
+  const matches = h("div", { class: "choices-list short country-list" });
+  const picked = h("div", { class: "chosen-row" });
+  const fold = (t) => String(t || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const renderMatches = () => {
+    const q = fold(search.value.trim());
+    const shown = q ? countries.filter((c) => fold(c.name).split(/[\s,()-]+/).some((w) => w.startsWith(q)) || fold(c.name).includes(q) || c.code.toLowerCase() === q).slice(0, 8) : [];
+    matches.replaceChildren(...(q && !shown.length
+      ? [h("p", { class: "muted small-text", text: "No country by that name." })]
+      : shown.map((c) => h("button", { type: "button", class: "pick-row", onclick: () => choose(c) }, c.name))));
+  };
+  function choose(c) {
+    country = c;
+    picked.replaceChildren(h("strong", { text: c ? c.name : "" }), h("button", { type: "button", class: "link-btn", text: "Change", onclick: () => { choose(null); search.focus(); } }));
+    picked.hidden = !c;
+    search.hidden = Boolean(c);
+    search.value = "";
+    renderMatches();
+  }
+  search.addEventListener("input", renderMatches);
+  // Enter picks the only match, rather than submitting the form.
+  search.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const first = matches.querySelectorAll(".pick-row");
+    if (first.length === 1) first[0].click();
+  });
+  choose(country);
+  const countryRow = h("div", { class: "citizen-country" }, h("span", { class: "label", text: "Country of citizenship" }), picked, search, matches);
+  const answer = () => (yes.querySelector("input").checked ? "yes" : no.querySelector("input").checked ? "no" : "");
+  const sync = () => {
+    countryRow.hidden = answer() !== "no";
+    if (answer() === "no" && !country) setTimeout(() => search.focus(), 0);
+  };
+  for (const r of [yes, no]) r.querySelector("input").addEventListener("change", sync);
+  countryRow.hidden = answer() !== "no";
+  const node = h("div", { class: "full-row citizenship-field" },
+    h("span", { class: "label", text: `${label}${required ? " *" : ""}` }),
+    h("div", { class: "btn-row" }, h("span", { text: "U.S. citizen?" }), yes, no),
+    countryRow);
+  return {
+    node,
+    value: () => (answer() === "yes" ? "US" : answer() === "no" ? country?.code || null : null),
+    check: () => {
+      if (answer() === "no" && !country) return "Choose the country they're a citizen of from the list.";
+      if (required && !answer()) return "Say whether they're a U.S. citizen.";
+      return null;
+    }
+  };
+}
+
 /** Options for a person's site: "Any site" plus the sites their company is at. */
 function siteOptionsFor(company) {
   return [{ value: "", label: "Any site" }, ...(company?.sites || []).map((s) => ({ value: String(s.siteId), label: s.siteName }))];
@@ -116,6 +192,7 @@ function siteOptionsFor(company) {
 function recordForm(fields, record = null, { companies = [], fixedCompanyId = null } = {}) {
   const specs = [];
   let sites = null;
+  let citizenship = null;
   const editable = [];
   for (const f of fields) {
     // With one site (or an account that sees one), a person's site is not a choice:
@@ -156,8 +233,12 @@ function recordForm(fields, record = null, { companies = [], fixedCompanyId = nu
       else specs.push({ ...base, type: "select", value: value === true ? "yes" : value === false ? "no" : "", options: [{ value: "", label: "—" }, { value: "yes", label: "Yes" }, { value: "no", label: "No" }], half: true });
     } else if (f.type === "clearance") {
       specs.push({ ...base, type: "select", value: value ? String(value) : "", half: true, options: [{ value: "", label: "None" }, ...(state.config.clearanceLevels || []).map((l) => ({ value: String(l.id), label: l.name }))] });
+    } else if (f.type === "citizenship") {
+      citizenship = citizenshipControl(value, { required: f.required, label: base.label });
+      specs.push({ node: citizenship.node });
     } else if (f.type === "choice") {
-      specs.push({ ...base, type: "select", value: value ?? "", options: [{ value: "", label: "—" }, ...f.choices.map((c) => ({ value: c, label: c }))], half: true });
+      // A built-in choice (a visitor's type) always has one of its choices.
+      specs.push({ ...base, type: "select", value: value ?? (f.builtIn ? f.choices[0] : ""), options: [...(f.builtIn ? [] : [{ value: "", label: "—" }]), ...f.choices.map((c) => ({ value: c, label: c }))], half: true });
     } else if (f.type === "longtext") {
       specs.push({ ...base, type: "textarea", value: value ?? "", rows: 2 });
     } else {
@@ -177,7 +258,12 @@ function recordForm(fields, record = null, { companies = [], fixedCompanyId = nu
         continue;
       }
       let after = values[formName(f)];
-      if (f.type === "company") after = after ? Number(after) : null;
+      if (f.type === "citizenship") {
+        const problem = citizenship.check();
+        if (problem) throw new Error(problem);
+        after = citizenship.value();
+      }
+      else if (f.type === "company") after = after ? Number(after) : null;
       else if (f.type === "site") after = after ? Number(after) : null;
       else if (f.type === "clearance") after = after ? Number(after) : null;
       else if (f.type === "boolean" && !f.builtIn) after = after === "yes" ? true : after === "no" ? false : null;

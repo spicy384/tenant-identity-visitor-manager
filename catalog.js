@@ -64,7 +64,9 @@ const BUILT_IN = {
   visitor: [
     { key: "firstName", label: "First name", type: "text", locked: true, required: true },
     { key: "lastName", label: "Last name", type: "text", locked: true, required: true },
-    { key: "organisation", label: "Their organisation", type: "text" },
+    { key: "organisation", label: "Company", type: "text" },
+    { key: "visitorType", label: "Visitor type", type: "choice", choices: ["Guest", "Service Technician"] },
+    { key: "citizenship", label: "Citizenship", type: "citizenship" },
     { key: "email", label: "Email", type: "email" },
     { key: "phone", label: "Phone", type: "phone" },
     { key: "companies", label: "Companies they visit", type: "links", locked: true },

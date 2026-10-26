@@ -27,16 +27,17 @@ function dashList(items, empty, { more = null } = {}) {
  */
 const DASHBOARD_MODULES = {
   badgeNeeded: {
-    title: "Waiting for a badge",
-    description: "Visitors who checked in at a kiosk and still need a badge, with a button to give one.",
+    title: "Complete check-in",
+    description: "Visitors who checked in at a kiosk and wait for the desk to check their ID and give them a badge.",
     href: "#here",
     async load() {
       const { visits } = await api(`/api/visits/badge-needed?${siteParams()}`);
-      return { count: visits.length, attention: visits.length > 0, body: dashList(visits.map((a) => dashRow({
+      return { count: visits.length, attention: visits.length > 0, body: dashList(visits.map((a) => h("div", { class: `checkin-row stage-${a.stage}` }, dashRow({
+        onclick: () => continueCheckIn(a.visitId),
         main: a.name,
-        sub: `${a.kioskName || "Kiosk"}${multiSite() && !state.site ? `, ${a.siteName}` : ""} · ${agoText(a.checkedInAt)}`,
-        right: h("button", { type: "button", class: "primary small", text: "Assign badge", onclick: (e) => { e.stopPropagation(); giveKioskBadge(a); } })
-      })), "Nobody is waiting for a badge.") };
+        sub: [a.stage === "id" ? "Check their ID" : "Needs a badge", a.companyName, multiSite() && !state.site ? a.siteName : null, agoText(a.checkedInAt)].filter(Boolean).join(" · "),
+        right: h("button", { type: "button", class: "primary small", text: checkinNext(a), onclick: (e) => { e.stopPropagation(); continueCheckIn(a.visitId); } })
+      }))), "Nobody is waiting at the desk.") };
     }
   },
   here: {
@@ -301,6 +302,10 @@ async function saveDashboard(list) {
     toast(error.message, "error");
   }
 }
+
+$("home-checkin").addEventListener("click", async () => {
+  if (await checkInWizard()) loadDashboard();
+});
 
 $("home-customize").addEventListener("click", () => {
   dashboard.editing = true;

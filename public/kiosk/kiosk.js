@@ -13,6 +13,10 @@ const k = {
   flow: null,          // "new" or "change" on the details screen
   company: null,       // { id, name } chosen on the details screen
   hostId: null,        // chosen host, or null for "not sure"
+  visitorType: "Guest", // a new visitor: visiting someone, or a service technician
+  pending: null,       // the check-in waiting on the visit screen: { body, needs }
+  citizen: null,       // "yes" or "no" (a U.S. citizen) on the visit screen
+  country: null,       // { code, name } chosen for "no"
   outMatch: null,      // the visit found for check-out
   idleTimer: null,
   doneTimer: null
@@ -161,8 +165,9 @@ function home() {
   k.company = null;
   k.hostId = null;
   k.outMatch = null;
+  k.pending = null;
   for (const input of document.querySelectorAll("input")) if (input.id !== "pair-code") input.value = "";
-  for (const id of ["name-error", "details-error"]) setError(id, "");
+  for (const id of ["name-error", "details-error", "info-error"]) setError(id, "");
   show("welcome");
   loadConfig().catch(() => {});
 }
@@ -242,7 +247,7 @@ function chooseVisitor(match) {
   $("pick-company-title").textContent = `Welcome back, ${match.firstName}`;
   const list = $("pick-company-list");
   list.replaceChildren(
-    ...match.companies.map((c) => el("button", { type: "button", class: "choice", onclick: () => checkIn({ ref: match.ref, companyId: c.companyId, hostId: c.hostId }, c) },
+    ...match.companies.map((c) => el("button", { type: "button", class: "choice", onclick: () => askVisitInfo({ ref: match.ref, companyId: c.companyId, hostId: c.hostId }, match.needs) },
       el("strong", { text: c.companyName }), c.hostName ? el("span", { text: `Host: ${c.hostName}` }) : null)),
     el("button", { type: "button", class: "choice", onclick: () => openDetails("change") }, el("strong", { text: "Someone else" }), el("span", { text: "A different company or host" })));
   show("pick-company");
@@ -252,7 +257,7 @@ function showConfirm(link) {
   $("confirm-title").textContent = `Welcome back, ${k.match.firstName}`;
   $("confirm-company").textContent = link.companyName;
   $("confirm-host").textContent = link.hostName || "Not given";
-  $("confirm-yes").onclick = () => checkIn({ ref: k.match.ref, companyId: link.companyId, hostId: link.hostId }, link);
+  $("confirm-yes").onclick = () => askVisitInfo({ ref: k.match.ref, companyId: link.companyId, hostId: link.hostId }, k.match.needs);
   show("confirm");
 }
 
@@ -343,6 +348,7 @@ async function openDetails(flow) {
     $("last-name").value = words.slice(1).join(" ");
     $("organisation").value = "";
     $("contact").value = "";
+    pickType("Guest");
   }
   $("company-chosen").hidden = true;
   $("company-search").hidden = false;
@@ -360,11 +366,23 @@ async function openDetails(flow) {
   }
 }
 
+function pickType(type) {
+  k.visitorType = type;
+  for (const b of $("type-list").querySelectorAll("button")) b.classList.toggle("selected", b.dataset.type === type);
+}
+
+for (const b of $("type-list").querySelectorAll("button")) b.addEventListener("click", () => pickType(b.dataset.type));
+
 $("details-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   setError("details-error", "");
   if (k.flow === "new" && (!$("first-name").value.trim() || !$("last-name").value.trim())) {
     setError("details-error", "Please enter your first and last name.");
+    return;
+  }
+  if (k.flow === "new" && !$("organisation").value.trim()) {
+    setError("details-error", "Please enter your company.");
+    $("organisation").focus();
     return;
   }
   if (!k.company) {
@@ -374,11 +392,111 @@ $("details-form").addEventListener("submit", async (e) => {
   }
   const body = { companyId: k.company.id, hostId: k.hostId };
   if (k.flow === "new") {
-    body.visitor = { firstName: $("first-name").value.trim(), lastName: $("last-name").value.trim(), organisation: $("organisation").value.trim(), contact: $("contact").value.trim() };
+    body.visitor = { firstName: $("first-name").value.trim(), lastName: $("last-name").value.trim(), organisation: $("organisation").value.trim(), contact: $("contact").value.trim(), visitorType: k.visitorType };
+    askVisitInfo(body, { organisation: false, citizenship: true });
   } else {
     body.ref = k.match.ref;
+    askVisitInfo(body, k.match.needs);
   }
-  await checkIn(body, null, $("details-submit"));
+});
+
+// --- the visit screen: what it's for, and their company and citizenship if we don't have them ---
+
+function askVisitInfo(body, needs = {}) {
+  k.pending = { body, needs: { organisation: Boolean(needs.organisation), citizenship: Boolean(needs.citizenship) } };
+  k.citizen = null;
+  k.country = null;
+  $("purpose").value = "";
+  $("info-organisation").value = "";
+  $("info-org").hidden = !k.pending.needs.organisation;
+  $("info-citizen").hidden = !k.pending.needs.citizenship;
+  pickCitizen(null);
+  setError("info-error", "");
+  show("visit-info");
+}
+
+function pickCitizen(answer) {
+  k.citizen = answer;
+  for (const b of $("citizen-list").querySelectorAll("button")) b.classList.toggle("selected", b.dataset.citizen === answer);
+  $("country-picker").hidden = answer !== "no";
+  if (answer === "no" && !k.country) {
+    clearCountry();
+    setTimeout(() => $("country-search").focus(), 60);
+  }
+}
+
+for (const b of $("citizen-list").querySelectorAll("button")) b.addEventListener("click", () => pickCitizen(b.dataset.citizen));
+
+function renderCountries() {
+  const q = fold($("country-search").value.trim());
+  const list = $("country-list");
+  if (!q) {
+    list.replaceChildren(el("p", { class: "empty", text: "Type a few letters of the country's name." }));
+    return;
+  }
+  const all = (k.config?.countries || []).filter((c) => c.code !== "US");
+  const shown = all.filter((c) => fold(c.name).split(/[\s,()-]+/).some((w) => w.startsWith(q)) || fold(c.name).includes(q)).slice(0, 12);
+  list.replaceChildren(...(shown.length
+    ? shown.map((c) => el("button", { type: "button", class: "choice", onclick: () => chooseCountry(c) }, el("strong", { text: c.name })))
+    : [el("p", { class: "empty", text: "No country by that name. Please check the spelling." })]));
+}
+
+$("country-search").addEventListener("input", renderCountries);
+
+function chooseCountry(country) {
+  k.country = country;
+  $("country-chosen-name").textContent = country.name;
+  $("country-chosen").hidden = false;
+  $("country-search").hidden = true;
+  $("country-list").hidden = true;
+  setError("info-error", "");
+}
+
+function clearCountry() {
+  k.country = null;
+  $("country-chosen").hidden = true;
+  $("country-search").hidden = false;
+  $("country-list").hidden = false;
+  $("country-search").value = "";
+  renderCountries();
+}
+
+$("country-clear").addEventListener("click", () => {
+  clearCountry();
+  $("country-search").focus();
+});
+
+$("info-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setError("info-error", "");
+  const { body, needs } = k.pending || {};
+  if (!body) return home();
+  const purpose = $("purpose").value.trim();
+  if (!purpose) {
+    setError("info-error", "Please tell us what brings you in today.");
+    $("purpose").focus();
+    return;
+  }
+  const organisation = $("info-organisation").value.trim();
+  if (needs.organisation && !organisation) {
+    setError("info-error", "Please enter your company.");
+    $("info-organisation").focus();
+    return;
+  }
+  let citizenship = null;
+  if (needs.citizenship) {
+    if (!k.citizen) return setError("info-error", "Please tell us whether you're a U.S. citizen.");
+    if (k.citizen === "no" && !k.country) {
+      setError("info-error", "Please choose your country of citizenship.");
+      $("country-search").focus();
+      return;
+    }
+    citizenship = k.citizen === "yes" ? "US" : k.country.code;
+  }
+  const send = { ...body, purpose };
+  if (send.visitor) send.visitor = { ...send.visitor, citizenship };
+  else send.details = { ...(needs.organisation ? { organisation } : {}), ...(citizenship ? { citizenship } : {}) };
+  await checkIn(send, null, $("info-submit"));
 });
 
 // --- checking in and out ---------------------------------------------------------------------
@@ -394,7 +512,7 @@ async function checkIn(body, link, button = null) {
     const host = result.hostName;
     showDone(
       result.already ? `You're already checked in, ${result.firstName}` : `You're checked in, ${result.firstName}`,
-      host ? `Take a seat and the front desk will let ${host} know you're here.` : "Take a seat; the front desk will be with you shortly."
+      `Please show your photo ID to the front desk, and they'll give you your visitor badge${host ? ` and let ${host} know you're here` : ""}.`
     );
   } catch (error) {
     if (error.status === 401) return;
@@ -402,7 +520,8 @@ async function checkIn(body, link, button = null) {
       showReception("Let's try that again", error.message);
       return;
     }
-    if (!$("details").hidden) setError("details-error", error.message);
+    if (!$("visit-info").hidden) setError("info-error", error.message);
+    else if (!$("details").hidden) setError("details-error", error.message);
     else showReception("Something went wrong", error.message);
   } finally {
     done();

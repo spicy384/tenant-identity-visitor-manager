@@ -14,6 +14,8 @@ const { createKiosks } = require("./kiosks");
 const { createVisitClock } = require("./visit-clock");
 const { createKioskRoutes } = require("./kiosk-routes");
 const { createVisitorRoutes } = require("./visitor-routes");
+const { COUNTRIES } = require("./countries");
+const { ID_TYPES } = require("./visitors");
 const { createApiClients } = require("./api-clients");
 const { createApiV1 } = require("./api-v1");
 const { createClearance, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS } = require("./clearance");
@@ -338,7 +340,9 @@ app.get("/api/config", (req, res) => {
     clearanceLevels: access.canSeeClearances(ctx) ? clearance.levels().map((l) => ({ id: l.id, name: l.name, rank: l.rank })) : [],
     clearance: { security: access.isSecurity(ctx), queue: clearanceRoutes.queueCount(req), digitsHeldHours: clearance.DIGITS_TTL_HOURS, ...clearance.settings() },
     sites: visibleSites(ctx).map((s) => ({ id: s.id, name: s.name, active: s.active, hasLogo: s.hasLogo, logoUpdatedAt: s.logoUpdatedAt })),
-    siteCount: sites.count()
+    siteCount: sites.count(),
+    // For a visitor's citizenship, and the IDs the desk checks at check-in.
+    checkin: access.canReadVisitors(ctx) ? { countries: COUNTRIES, idTypes: ID_TYPES } : null
   });
 });
 
@@ -654,7 +658,7 @@ app.get("/api/people.csv", admin, (req, res) => {
 
 const COMPANY_COLUMNS = { name: "name", phone: "phone", email: "email", website: "website", address: "address", notes: "notes", active: "active" };
 const PERSON_COLUMNS = { first_name: "firstName", last_name: "lastName", preferred_name: "preferredName", job_title: "jobTitle", email: "email", work_phone: "workPhone", mobile: "mobile", can_host: "canHost", notes: "notes", active: "active" };
-const VISITOR_COLUMNS = { first_name: "firstName", last_name: "lastName", organisation: "organisation", email: "email", phone: "phone", notes: "notes", blocked: "blocked" };
+const VISITOR_COLUMNS = { first_name: "firstName", last_name: "lastName", organisation: "organisation", visitor_type: "visitorType", citizenship: "citizenship", email: "email", phone: "phone", notes: "notes", blocked: "blocked" };
 const BOOLEAN_KEYS = new Set(["active", "canHost", "blocked"]);
 
 function parseYesNo(value, label) {
@@ -859,8 +863,9 @@ function personInCompanyByName(companyId, name) {
 }
 
 /**
- * Imports visitors from rows keyed by column (first_name, last_name, organisation, email,
- * phone, notes, blocked, company and host they visit, custom field keys). A visitor with the
+ * Imports visitors from rows keyed by column (first_name, last_name, organisation,
+ * visitor_type, citizenship, email, phone, notes, blocked, company and host they visit,
+ * custom field keys). A visitor with the
  * same email, else exactly the same name, is updated. Imported visitors count as checked by
  * staff. Clearances aren't imported: only the Security role sets them, by validating.
  */

@@ -554,6 +554,41 @@ and the CSV import routes take skipProblems; the audit entry counts the skipped.
 a Skip rows with problems tick box, an Import the rest button on an all-or-nothing failure, and
 a dialog of skipped rows with a CSV download (app column names plus a problem column).
 
+## Checking visitors in, step by step (2026-10-26)
+
+The user asked for check-in at the desk to walk through one step per page, with ID
+verification and two ways of badging, and for a Service Technician visitor type. Their
+decisions: a service technician's point of contact can be anyone in the directory (the visit
+goes to that person's company); the ID record is its type and who checked it, never its
+number; a badge permanently assigned to a visitor is reserved for them (back in stock when
+they leave, still theirs); citizenship is U.S. citizen yes or no, and for no a country picked
+from a list. Defaults chosen: first and last name stay separate boxes; the purpose is stored
+per visit (prefilled from an event's title); the kiosk shows no more than before (first name,
+company, host) and asks only for missing company or citizenship, plus the purpose.
+
+Columns (ADDED_COLUMNS, no schema bump): visitors.visitor_type (Guest or Service Technician),
+visitors.citizenship (ISO 3166 code, US for a U.S. citizen; countries.js names 243 from
+node's locale data, Kosovo added), visitors.reserved_badge_id; visits.visitor_type,
+checkin_stage (id, badge, done; null for older visits, counted as done), id_type,
+id_verified_at, id_verified_by; event_guests.badge_id. A one-time backfill puts open kiosk
+visits with no badge into stage id. The catalog has visitorType (choice) and citizenship (its
+own type, with a picker in 03-records.js); visitor organisation is labelled Company.
+
+Flow: the kiosk check-in needs a purpose, and a new visitor's company and citizenship; it
+opens the visit at stage id. POST /api/checkins (the desk, ID already checked: idType required,
+with the point of contact and purpose; company and citizenship must be on record) opens it at
+stage badge. POST /api/visits/:id/verify-id moves id to badge, filling in the contact and
+purpose. GET /api/visits/:id/badge-plan gives the badge kept for them (event pick first, then
+reserved), why it can't be given if so, any badge they hold, and the visitor badges valid
+there they may hold. POST /api/visits/:id/badge takes { badgeId } or { number } (a visitor
+badge, valid at the site; one they hold already is confirmed), and assign sets the stage to
+done. badge-not-needed works only after the ID check. PUT /api/visitors/:id/reserved-badge and
+PUT /api/events/:id/guests/:visitorId/badge need badge edit access; a reserved badge is
+refused to anyone else (badges.refusal). The old POST /api/visits stays for the API but its
+visits wait at the ID step. The banner and the Home module (badgeNeeded, now "Complete
+check-in") list stage id and badge visits, brightly, and open the wizard (23-checkin.js) at
+the right step. test/checkin.test.js (16 suites).
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

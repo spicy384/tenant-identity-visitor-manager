@@ -11,6 +11,8 @@
  */
 const crypto = require("crypto");
 const express = require("express");
+const { COUNTRIES, countryCode } = require("./countries");
+const { VISITOR_TYPES } = require("./visitors");
 const { createRateLimiter } = require("./rate-limit");
 const { isFullName } = require("./names");
 
@@ -103,7 +105,10 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
     res.json({
       kiosk: { name: req.kiosk.name },
       site: { name: req.site.kioskName || req.site.name, welcome: req.site.welcome, hasLogo: req.site.hasLogo, logoVersion: req.site.logoUpdatedAt },
-      idleSeconds: clock.settings().kioskIdleSeconds
+      idleSeconds: clock.settings().kioskIdleSeconds,
+      // For a visitor's citizenship (U.S. citizen, or which country).
+      countries: COUNTRIES,
+      visitorTypes: VISITOR_TYPES
     });
   });
 
@@ -151,7 +156,8 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
 
   /**
    * Check-in lookup: visitors with this name, each with the companies at this site they
-   * are linked to (and their usual host there). First names only.
+   * are linked to (and their usual host there). First names only, and which of their company
+   * and citizenship check-in still needs (not what they are).
    */
   router.post("/lookup", (req, res) => {
     const name = String(req.body?.name || "").slice(0, 120);
@@ -159,7 +165,7 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
     countLookup(req);
     const ids = visitors.findByName(name).slice(0, 5);
     const matches = ids.map((id) => {
-      const v = raw.prepare("SELECT id, first_name FROM visitors WHERE id = ?").get(id);
+      const v = raw.prepare("SELECT id, first_name, organisation, citizenship FROM visitors WHERE id = ?").get(id);
       const links = raw.prepare(`SELECT l.company_id, c.name AS company_name, p.id AS host_id, p.first_name, p.last_name, p.preferred_name, p.active AS host_active
         FROM visitor_links l JOIN companies c ON c.id = l.company_id JOIN company_sites cs ON cs.company_id = c.id AND cs.site_id = ?
         LEFT JOIN people p ON p.id = l.host_id WHERE l.visitor_id = ? AND c.active = 1 ORDER BY c.name`).all(req.site.id, id);
@@ -169,6 +175,7 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
       return {
         ref: makeRef(req.kiosk.id, "visitor", id),
         firstName: v.first_name,
+        needs: { organisation: !v.organisation, citizenship: !v.citizenship },
         companies: [...expected.filter((e, i) => expected.findIndex((x) => x.companyId === e.companyId) === i), ...links.filter((l) => !seen.has(l.company_id)).map((l) => ({
           companyId: l.company_id,
           companyName: l.company_name,
@@ -181,13 +188,23 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
   });
 
   /**
-   * Checks someone in. Either `ref` (from a lookup) or `visitor` { firstName, lastName,
-   * organisation, contact } for someone new, plus `companyId` and optional `hostId`.
+   * Checks someone in, for the front desk to check their ID and give them a badge. Either
+   * `ref` (from a lookup), with `details` { organisation, citizenship } filling in what their
+   * record lacks (never changing what it has), or `visitor` { firstName, lastName,
+   * organisation, citizenship, visitorType, contact } for someone new; plus `companyId`,
+   * optional `hostId`, and `purpose`.
    */
   router.post("/checkin", (req, res) => {
     const body = req.body || {};
     const company = companyAtSite(body.companyId, req.site.id);
     if (!company) throw fail(400, "Please choose who you are visiting.");
+    const purpose = String(body.purpose || "").trim().slice(0, 200);
+    if (!purpose) throw fail(400, "Please tell us what brings you in today.");
+    const citizenshipOf = (value) => {
+      const code = countryCode(value);
+      if (!code) throw fail(400, "Please tell us your citizenship.");
+      return code;
+    };
     // Everything is checked before anyone new is saved, so a refused check-in leaves nothing behind.
     let hostId = null;
     if (body.hostId !== undefined && body.hostId !== null && body.hostId !== "") {
@@ -199,16 +216,28 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
     if (body.ref) {
       visitorId = takeRef(req.kiosk.id, "visitor", body.ref);
       if (!visitorId) throw fail(409, "That took a little long. Please start again.");
+      const known = raw.prepare("SELECT organisation, citizenship FROM visitors WHERE id = ?").get(visitorId);
+      const d = body.details || {};
+      const fill = {};
+      if (!known.organisation) {
+        fill.organisation = String(d.organisation || "").trim().slice(0, 120);
+        if (!fill.organisation) throw fail(400, "Please enter your company.");
+      }
+      if (!known.citizenship) fill.citizenship = citizenshipOf(d.citizenship);
+      if (Object.keys(fill).length) visitors.update(visitorId, fill, {});
     } else {
       const v = body.visitor || {};
       if (!String(v.firstName || "").trim() || !String(v.lastName || "").trim()) throw fail(400, "Please enter your first and last name.");
       const contact = String(v.contact || "").trim().slice(0, 254);
       const isEmail = contact.includes("@");
       if (isEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) throw fail(400, "That email address doesn't look right.");
+      if (!String(v.organisation || "").trim()) throw fail(400, "Please enter your company.");
       const visitor = visitors.create({
         firstName: v.firstName,
         lastName: v.lastName,
         organisation: v.organisation,
+        citizenship: citizenshipOf(v.citizenship),
+        visitorType: VISITOR_TYPES.includes(v.visitorType) ? v.visitorType : "Guest",
         email: isEmail ? contact : undefined,
         phone: !isEmail && contact ? contact : undefined
       }, { source: "kiosk", verified: false });
@@ -221,7 +250,7 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
       audit(req, "kiosk.blocked", `${blocked.first_name} ${blocked.last_name}`, `tried to check in to see ${company.name}`);
       return res.json({ ok: false, seeReception: true });
     }
-    const { visit, already } = visitors.checkIn({ visitorId, siteId: req.site.id, companyId: company.id, hostId, by: `kiosk:${req.kiosk.name}`, kioskId: req.kiosk.id });
+    const { visit, already } = visitors.checkIn({ visitorId, siteId: req.site.id, companyId: company.id, hostId, purpose, by: `kiosk:${req.kiosk.name}`, kioskId: req.kiosk.id });
     if (!already) audit(req, "visit.checkin", `${visit.visitor.firstName} ${visit.visitor.lastName}`, `${visit.companyName}${visit.hostName ? `, host ${visit.hostName}` : ""}${created ? "; new visitor" : ""}`);
     res.json({ ok: true, already, firstName: visit.visitor.firstName, companyName: visit.companyName, hostName: visit.hostName });
   });

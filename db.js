@@ -485,7 +485,20 @@ const ADDED_COLUMNS = [
   ["roles", "fields", "INTEGER NOT NULL DEFAULT 0"],
   // A room's type and, when classified, its subcategory.
   ["offices", "room_type_id", "INTEGER REFERENCES room_types(id)"],
-  ["offices", "class_id", "INTEGER REFERENCES room_classes(id)"]
+  ["offices", "class_id", "INTEGER REFERENCES room_classes(id)"],
+  // Checking visitors in: their type, citizenship (an ISO country code; US for a U.S.
+  // citizen) and a visitor badge reserved for a regular; each visit's stage (id: waiting for
+  // the desk to check their ID; badge: waiting for a badge; done) and the ID check; and a
+  // badge picked for an expected guest.
+  ["visitors", "visitor_type", "TEXT NOT NULL DEFAULT 'Guest'"],
+  ["visitors", "citizenship", "TEXT"],
+  ["visitors", "reserved_badge_id", "INTEGER REFERENCES badges(id) ON DELETE SET NULL"],
+  ["visits", "visitor_type", "TEXT"],
+  ["visits", "checkin_stage", "TEXT"],
+  ["visits", "id_type", "TEXT"],
+  ["visits", "id_verified_at", "INTEGER"],
+  ["visits", "id_verified_by", "TEXT"],
+  ["event_guests", "badge_id", "INTEGER REFERENCES badges(id) ON DELETE SET NULL"]
 ];
 
 function addColumns(db) {

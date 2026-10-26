@@ -183,7 +183,7 @@ async function main() {
   const match = r.data.matches[0];
   check("kiosk: an expected guest is offered their event's company and host first", match.companies[0].expected === true && match.companies[0].companyName === "Acme Corp" && match.companies[0].hostName === "Hana Host");
   check("kiosk: listed once, not twice", match.companies.filter((c) => c.companyId === acme.id).length === 1 && match.companies.length === 2);
-  r = await kiosk.post("/kiosk/api/checkin", { ref: match.ref, companyId: acme.id, hostId: host.id });
+  r = await kiosk.post("/kiosk/api/checkin", { ref: match.ref, companyId: acme.id, hostId: host.id, purpose: "Meeting", details: { organisation: "Navy", citizenship: "US" } });
   check("kiosk: checks in", r.data.ok);
   r = await desk.get(`/api/events?date=${day}`);
   check("expected: the guest shows as here", r.data.events[0].guests[0].status === "here");

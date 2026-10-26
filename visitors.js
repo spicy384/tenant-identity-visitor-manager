@@ -14,6 +14,15 @@ const { normaliseValue } = require("./fields");
 const { matchNames } = require("./names");
 const { likeWord } = require("./directory");
 const { cleanDate, today, statusFor, recheckDays } = require("./clearance");
+const { countryCode } = require("./countries");
+
+// Guests of a tenant, and people who come to do work or maintenance (not tied to a tenant).
+const VISITOR_TYPES = ["Guest", "Service Technician"];
+// What the front desk may check a visitor's identity with.
+const ID_TYPES = ["Driver's license", "Passport", "CAC", "State ID", "Other government ID"];
+// A visit's check-in: waiting for the desk to check their ID, then for a badge, then done.
+// Visits from before this have none (they count as done).
+const STAGES = ["id", "badge", "done"];
 
 const VISITOR_SELECT = `SELECT v.*, (SELECT name FROM clearance_levels WHERE id = v.clearance_level_id) AS clearance_level_name,
   EXISTS (SELECT 1 FROM clearance_requests q WHERE q.holder_kind = 'visitor' AND q.holder_id = v.id AND q.status = 'open') AS clearance_requested FROM visitors v`;
@@ -61,6 +70,15 @@ function createVisitors({ db, fields }) {
     };
   }
 
+  // Kiosk visits from before check-in stages, still in the building without a badge: waiting for the desk.
+  if (!db.getSetting("visits.stages_seeded")) {
+    db.transaction(() => {
+      raw.prepare(`UPDATE visits SET checkin_stage = 'id' WHERE checkin_stage IS NULL AND kiosk_id IS NOT NULL AND checked_out_at IS NULL AND badge_waived_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM badge_assignments a WHERE a.holder_kind = 'visitor' AND a.holder_id = visits.visitor_id AND a.returned_at IS NULL)`).run();
+      db.setSetting("visits.stages_seeded", "1");
+    });
+  }
+
   function companyVisible(companyId, sites) {
     if (!sites) return true;
     const ids = [...sites];
@@ -89,6 +107,9 @@ function createVisitors({ db, fields }) {
   function records(rows, sites) {
     const ids = rows.map((r) => r.id);
     const links = linksFor(ids, sites);
+    const reserved = new Map();
+    const badgeIds = rows.map((r) => r.reserved_badge_id).filter(Boolean);
+    if (badgeIds.length) for (const b of raw.prepare(`SELECT id, number FROM badges WHERE id IN (${inList(badgeIds)})`).all(...badgeIds)) reserved.set(b.id, b);
     const values = fields.valuesFor("visitor", ids);
     const days = recheckDays(db);
     return rows.map((r) => ({
@@ -96,6 +117,9 @@ function createVisitors({ db, fields }) {
       firstName: r.first_name,
       lastName: r.last_name,
       organisation: r.organisation,
+      visitorType: r.visitor_type || "Guest",
+      citizenship: r.citizenship ?? null,
+      reservedBadge: r.reserved_badge_id && reserved.has(r.reserved_badge_id) ? { id: r.reserved_badge_id, number: reserved.get(r.reserved_badge_id).number } : null,
       email: r.email,
       phone: r.phone,
       notes: r.notes,
@@ -172,6 +196,19 @@ function createVisitors({ db, fields }) {
       }
     }
     if (input.organisation !== undefined) out.organisation = text(input.organisation, 120);
+    if (input.visitorType !== undefined) {
+      const t = VISITOR_TYPES.find((x) => x.toLowerCase() === String(input.visitorType || "").trim().toLowerCase());
+      if (!t) throw fail(400, `Visitor type is ${VISITOR_TYPES.join(" or ")}.`);
+      out.visitorType = t;
+    }
+    if (input.citizenship !== undefined) {
+      if (input.citizenship === null || input.citizenship === "") out.citizenship = null;
+      else {
+        const code = countryCode(input.citizenship);
+        if (!code) throw fail(400, `"${input.citizenship}" isn't a country this app knows.`);
+        out.citizenship = code;
+      }
+    }
     if (input.email !== undefined) {
       const v = text(input.email, 254);
       if (v && !EMAIL_RE.test(v)) throw fail(400, "Email must be an email address.");
@@ -243,9 +280,9 @@ function createVisitors({ db, fields }) {
     const now = Date.now();
     let id;
     db.transaction(() => {
-      id = raw.prepare(`INSERT INTO visitors (first_name, last_name, organisation, email, phone, notes, clearance_level_id, clearance_granted, clearance_expires, verified, blocked, source, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(v.firstName, v.lastName, v.organisation ?? null, v.email ?? null, v.phone ?? null, v.notes ?? null, v.clearanceLevel ?? null, v.clearanceGranted ?? null, v.clearanceExpires ?? null,
+      id = raw.prepare(`INSERT INTO visitors (first_name, last_name, organisation, visitor_type, citizenship, email, phone, notes, clearance_level_id, clearance_granted, clearance_expires, verified, blocked, source, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(v.firstName, v.lastName, v.organisation ?? null, v.visitorType || "Guest", v.citizenship ?? null, v.email ?? null, v.phone ?? null, v.notes ?? null, v.clearanceLevel ?? null, v.clearanceGranted ?? null, v.clearanceExpires ?? null,
           (v.verified ?? verified) ? 1 : 0, v.blocked ? 1 : 0, source, now, now).lastInsertRowid;
       for (const link of links) setLink(id, link, { sites });
       fields.writeValues(id, values);
@@ -261,13 +298,34 @@ function createVisitors({ db, fields }) {
     const values = customValues(custom, { editable, current: existing.values });
     const next = { ...existing, ...v };
     db.transaction(() => {
-      raw.prepare(`UPDATE visitors SET first_name = ?, last_name = ?, organisation = ?, email = ?, phone = ?, notes = ?, clearance_level_id = ?, clearance_granted = ?, clearance_expires = ?,
+      raw.prepare(`UPDATE visitors SET first_name = ?, last_name = ?, organisation = ?, visitor_type = ?, citizenship = ?, email = ?, phone = ?, notes = ?, clearance_level_id = ?, clearance_granted = ?, clearance_expires = ?,
         verified = ?, blocked = ?, updated_at = ? WHERE id = ?`)
-        .run(next.firstName, next.lastName, next.organisation, next.email, next.phone, next.notes, next.clearanceLevel ?? null, next.clearanceGranted ?? null, next.clearanceExpires ?? null,
+        .run(next.firstName, next.lastName, next.organisation, next.visitorType || "Guest", next.citizenship ?? null, next.email, next.phone, next.notes, next.clearanceLevel ?? null, next.clearanceGranted ?? null, next.clearanceExpires ?? null,
           next.verified ? 1 : 0, next.blocked ? 1 : 0, Date.now(), id);
       fields.writeValues(id, values);
     });
     nameCache = null;
+    return get(id, { sites });
+  }
+
+  /**
+   * Reserves a visitor badge for a regular visitor (null releases it): check-in offers that
+   * badge first. A badge is reserved for one visitor at a time.
+   */
+  function setReservedBadge(id, badgeId, { sites = null } = {}) {
+    const existing = get(id, { sites });
+    if (!existing) throw fail(404, "No such visitor.");
+    if (badgeId === null) {
+      raw.prepare("UPDATE visitors SET reserved_badge_id = NULL, updated_at = ? WHERE id = ?").run(Date.now(), id);
+      return get(id, { sites });
+    }
+    const badge = raw.prepare("SELECT id, number, type, status FROM badges WHERE id = ?").get(Number(badgeId));
+    if (!badge) throw fail(404, "No such badge.");
+    if (badge.type !== "visitor") throw fail(400, `Badge ${badge.number} isn't a visitor badge.`);
+    if (badge.status !== "active") throw fail(400, `Badge ${badge.number} is ${badge.status}.`);
+    const other = raw.prepare("SELECT first_name, last_name FROM visitors WHERE reserved_badge_id = ? AND id <> ?").get(badge.id, id);
+    if (other) throw fail(409, `Badge ${badge.number} is reserved for ${other.first_name} ${other.last_name}.`);
+    raw.prepare("UPDATE visitors SET reserved_badge_id = ?, updated_at = ? WHERE id = ?").run(badge.id, Date.now(), id);
     return get(id, { sites });
   }
 
@@ -300,8 +358,11 @@ function createVisitors({ db, fields }) {
       raw.prepare(`INSERT OR IGNORE INTO field_values (field_id, record_id, value)
         SELECT v.field_id, ?, v.value FROM field_values v JOIN field_definitions d ON d.id = v.field_id WHERE d.entity = 'visitor' AND d.record_id IS NULL AND v.record_id = ?`).run(intoId, fromId);
       const fill = (a, b) => a ?? b ?? null;
-      raw.prepare("UPDATE visitors SET organisation = ?, email = ?, phone = ?, notes = ?, last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?), blocked = max(blocked, ?), updated_at = ? WHERE id = ?")
-        .run(fill(into.organisation, from.organisation), fill(into.email, from.email), fill(into.phone, from.phone), [into.notes, from.notes].filter(Boolean).join("\n\n") || null, intoId, from.blocked ? 1 : 0, Date.now(), intoId);
+      const reserved = raw.prepare("SELECT (SELECT reserved_badge_id FROM visitors WHERE id = ?) AS a, (SELECT reserved_badge_id FROM visitors WHERE id = ?) AS b").get(intoId, fromId);
+      raw.prepare("UPDATE visitors SET reserved_badge_id = NULL WHERE id = ?").run(fromId);
+      raw.prepare("UPDATE visitors SET organisation = ?, citizenship = ?, reserved_badge_id = ?, email = ?, phone = ?, notes = ?, last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?), blocked = max(blocked, ?), updated_at = ? WHERE id = ?")
+        .run(fill(into.organisation, from.organisation), fill(into.citizenship, from.citizenship), fill(reserved.a, reserved.b), fill(into.email, from.email), fill(into.phone, from.phone),
+          [into.notes, from.notes].filter(Boolean).join("\n\n") || null, intoId, from.blocked ? 1 : 0, Date.now(), intoId);
       // A clearance only one of them has on record is kept.
       // A clearance only one of them has on record is kept, with when it was validated.
       if (!into.clearanceLevel && from.clearanceLevel) {
@@ -312,7 +373,7 @@ function createVisitors({ db, fields }) {
       raw.prepare("UPDATE clearance_requests SET holder_id = ? WHERE holder_kind = 'visitor' AND holder_id = ?").run(intoId, fromId);
       // Badges they held, and events they were expected at, follow them.
       raw.prepare("UPDATE badge_assignments SET holder_id = ? WHERE holder_kind = 'visitor' AND holder_id = ?").run(intoId, fromId);
-      raw.prepare("INSERT OR IGNORE INTO event_guests (event_id, visitor_id, visit_id, added_at) SELECT event_id, ?, visit_id, added_at FROM event_guests WHERE visitor_id = ?").run(intoId, fromId);
+      raw.prepare("INSERT OR IGNORE INTO event_guests (event_id, visitor_id, visit_id, badge_id, added_at) SELECT event_id, ?, visit_id, badge_id, added_at FROM event_guests WHERE visitor_id = ?").run(intoId, fromId);
       fields.forgetRecord("visitor", fromId);
       raw.prepare("DELETE FROM visitors WHERE id = ?").run(fromId);
     });
@@ -338,12 +399,17 @@ function createVisitors({ db, fields }) {
       siteId: r.site_id,
       siteName: r.site_name,
       visitorId: r.visitor_id,
-      visitor: { id: r.visitor_id, firstName: r.first_name, lastName: r.last_name, organisation: r.organisation, verified: Boolean(r.verified), blocked: Boolean(r.blocked) },
+      visitor: { id: r.visitor_id, firstName: r.first_name, lastName: r.last_name, organisation: r.organisation, verified: Boolean(r.verified), blocked: Boolean(r.blocked), citizenship: r.citizenship ?? null },
       companyId: r.company_id,
       companyName: r.company_name,
       hostId: r.host_id,
       hostName: r.host_name,
       purpose: r.purpose,
+      visitorType: r.visitor_type || null,
+      checkinStage: r.checkin_stage || "done",
+      idType: r.id_type || null,
+      idVerifiedAt: r.id_verified_at ?? null,
+      idVerifiedBy: r.id_verified_by || null,
       checkedInAt: r.checked_in_at,
       checkedInBy: r.checked_in_by,
       kioskId: r.kiosk_id,
@@ -354,7 +420,7 @@ function createVisitors({ db, fields }) {
     };
   }
 
-  const VISIT_SELECT = `SELECT x.*, s.name AS site_name, v.first_name, v.last_name, v.organisation, v.verified, v.blocked, k.name AS kiosk_name
+  const VISIT_SELECT = `SELECT x.*, s.name AS site_name, v.first_name, v.last_name, v.organisation, v.verified, v.blocked, v.citizenship, k.name AS kiosk_name
     FROM visits x JOIN sites s ON s.id = x.site_id JOIN visitors v ON v.id = x.visitor_id LEFT JOIN kiosks k ON k.id = x.kiosk_id`;
 
   function getVisit(id, { sites = null } = {}) {
@@ -406,7 +472,7 @@ function createVisitors({ db, fields }) {
    * building at that site gets their open visit back rather than a second one.
    * Links the visitor to the company, with the host as their usual one when given.
    */
-  function checkIn({ visitorId, siteId, companyId, hostId = null, purpose = null, by = null, kioskId = null, now = Date.now() }) {
+  function checkIn({ visitorId, siteId, companyId, hostId = null, purpose = null, by = null, kioskId = null, idType = null, now = Date.now() }) {
     const visitor = raw.prepare("SELECT * FROM visitors WHERE id = ?").get(visitorId);
     if (!visitor) throw fail(404, "No such visitor.");
     const site = raw.prepare("SELECT * FROM sites WHERE id = ?").get(siteId);
@@ -418,13 +484,16 @@ function createVisitors({ db, fields }) {
       host = raw.prepare("SELECT * FROM people WHERE id = ? AND company_id = ? AND active = 1").get(Number(hostId), company.id);
       if (!host) throw fail(400, "The host must be someone in that company.");
     }
+    if (idType !== null && !ID_TYPES.includes(idType)) throw fail(400, `The ID is one of: ${ID_TYPES.join(", ")}.`);
     const already = openVisit(visitorId, siteId);
     if (already) return { visit: already, already: true };
     let id;
     db.transaction(() => {
-      id = raw.prepare(`INSERT INTO visits (site_id, visitor_id, company_id, company_name, host_id, host_name, purpose, checked_in_at, checked_in_by, kiosk_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(siteId, visitorId, company.id, company.name, host ? host.id : null, host ? hostDisplayName(host) : null, text(purpose, 200), now, by, kioskId).lastInsertRowid;
+      // Checked by the desk as they arrive: on to the badge. Otherwise (the kiosk) the desk checks their ID first.
+      id = raw.prepare(`INSERT INTO visits (site_id, visitor_id, company_id, company_name, host_id, host_name, purpose, visitor_type, checkin_stage, id_type, id_verified_at, id_verified_by, checked_in_at, checked_in_by, kiosk_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(siteId, visitorId, company.id, company.name, host ? host.id : null, host ? hostDisplayName(host) : null, text(purpose, 200), visitor.visitor_type || "Guest",
+          idType ? "badge" : "id", idType, idType ? now : null, idType ? by : null, now, by, kioskId).lastInsertRowid;
       const link = raw.prepare("SELECT host_id FROM visitor_links WHERE visitor_id = ? AND company_id = ?").get(visitorId, company.id);
       if (!link) raw.prepare("INSERT INTO visitor_links (visitor_id, company_id, host_id, created_at) VALUES (?, ?, ?, ?)").run(visitorId, company.id, host ? host.id : null, now);
       else if (host && link.host_id !== host.id) raw.prepare("UPDATE visitor_links SET host_id = ? WHERE visitor_id = ? AND company_id = ?").run(host.id, visitorId, company.id);
@@ -434,6 +503,41 @@ function createVisitors({ db, fields }) {
         AND event_id IN (SELECT id FROM visitor_events WHERE site_id = ? AND date = ?)`).run(id, visitorId, siteId, today(site.time_zone, now));
     });
     return { visit: getVisit(id), already: false };
+  }
+
+  /** The company a directory person is in (a point of contact), or null. */
+  function companyOfPerson(personId) {
+    return raw.prepare("SELECT company_id FROM people WHERE id = ? AND active = 1").get(Number(personId))?.company_id ?? null;
+  }
+
+  /** The desk has checked the visitor's ID (`idType`): the visit goes on to its badge. */
+  function verifyId(visitId, { idType, by = null, sites = null, now = Date.now() } = {}) {
+    if (!ID_TYPES.includes(idType)) throw fail(400, `Choose the ID: ${ID_TYPES.join(", ")}.`);
+    const visit = getVisit(visitId, { sites });
+    if (!visit || visit.checkedOutAt) throw fail(404, "No such visit in the building.");
+    if (visit.checkinStage !== "id") throw fail(409, `${visit.visitor.firstName} ${visit.visitor.lastName}'s ID has been checked already.`);
+    raw.prepare("UPDATE visits SET checkin_stage = 'badge', id_type = ?, id_verified_at = ?, id_verified_by = ? WHERE id = ?").run(idType, now, by, visitId);
+    return getVisit(visitId);
+  }
+
+  /** Moves a visit on to `stage` (done once a badge is given, or none is needed). */
+  function setStage(visitId, stage) {
+    if (!STAGES.includes(stage)) throw fail(400, "Unknown check-in stage.");
+    raw.prepare("UPDATE visits SET checkin_stage = ? WHERE id = ?").run(stage, visitId);
+    return getVisit(visitId);
+  }
+
+  /** Changes an open visit's purpose, company and host (the desk's confirm step); the host is required. */
+  function updateVisit(visitId, { companyId, hostId, purpose } = {}, { sites = null } = {}) {
+    const visit = getVisit(visitId, { sites });
+    if (!visit || visit.checkedOutAt) throw fail(404, "No such visit in the building.");
+    const company = raw.prepare("SELECT c.* FROM companies c JOIN company_sites cs ON cs.company_id = c.id WHERE c.id = ? AND cs.site_id = ? AND c.active = 1").get(Number(companyId ?? visit.companyId), visit.siteId);
+    if (!company) throw fail(400, "That company isn't at this site.");
+    const host = raw.prepare("SELECT * FROM people WHERE id = ? AND company_id = ? AND active = 1").get(Number(hostId ?? visit.hostId), company.id);
+    if (!host) throw fail(400, "Choose the point of contact, someone at that company.");
+    raw.prepare("UPDATE visits SET company_id = ?, company_name = ?, host_id = ?, host_name = ?, purpose = ? WHERE id = ?")
+      .run(company.id, company.name, host.id, hostDisplayName(host), purpose !== undefined ? text(purpose, 200) : visit.purpose, visitId);
+    return getVisit(visitId);
   }
 
   /** Ends a visit. method: kiosk, staff or auto; `at` defaults to now. */
@@ -506,6 +610,7 @@ function createVisitors({ db, fields }) {
   }
 
   return {
+    verifyId, setStage, updateVisit, setReservedBadge, companyOfPerson,
     list,
     get,
     findMatch,
@@ -531,4 +636,4 @@ function createVisitors({ db, fields }) {
   };
 }
 
-module.exports = { createVisitors, hostDisplayName, CHECKOUT_METHODS };
+module.exports = { createVisitors, hostDisplayName, CHECKOUT_METHODS, VISITOR_TYPES, ID_TYPES, STAGES };

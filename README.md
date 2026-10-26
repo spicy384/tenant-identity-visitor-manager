@@ -18,7 +18,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
   (administrators). The pages of the chosen section are in the bar under the header; a
   section or page the account can't open isn't shown.
 - **Home** is each person's dashboard. **Customize** adds, removes and reorders modules: who
-  is in the building, who is expected today, kiosk visitors waiting for a badge, visitors to
+  is in the building, who is expected today, visitors whose check-in the desk must finish, visitors to
   check, badges out past their time, a quick list of tenants, offices by status with the space
   let and the monthly rent (for those who see facilities), and for Security the clearance
   queue, visitor re-checks, clearances expiring and recent validations (administrators get
@@ -105,18 +105,41 @@ The design and decisions are in [PLAN.md](PLAN.md).
 
 - **Visitors** are kept apart from tenant people. Each can be linked to any number of
   companies, with a usual host at each. They have their own fields in the field access grid,
-  custom fields included, governed by each role's visitor access.
+  custom fields included, governed by each role's visitor access. Besides name and company,
+  a visitor has a **type** (Guest, or Service Technician: someone who comes to do work or
+  maintenance, not tied to a tenant) and a **citizenship** (U.S. citizen, or which country,
+  picked from a list).
 - **In the building** lists everyone checked in (per site, with the header's site picker),
   with check-out buttons, a desk check-in, and a print-friendly evacuation list.
 - **Visitors** lists everyone, with those who registered themselves at a kiosk marked "To
   check": staff confirm them, correct them, or merge them into an existing visitor. A visitor
   can be blocked: the kiosk then sends them to reception, and the desk needs a manager's say-so.
-- **Needs a badge**: when a visitor checks themselves in at a kiosk, a banner appears at the
-  top of every page for staff who give badges out at that site (and the site chosen in the
-  header): who, which kiosk, when, and whom they are visiting. **Assign badge** shows the image
-  of the badge to give and the badges free there, and gives one for that visit; **No badge
-  needed** (audited) clears it. It also clears once they have a badge or check out. Pages
-  check every 15 seconds.
+- **Checking in at the desk** (Check in a visitor, on Home and In the building; Check in
+  beside an expected guest) walks through one step per page:
+  1. **Find** them in the visitor list, or add them: name, company, type, citizenship, the
+     tenant they're visiting and their point of contact. A service technician's point of
+     contact can be anyone in the directory, found by name.
+  2. **Confirm** their details, the point of contact's (job title, phones, email, as the
+     role's field access shows them) and the purpose of the visit.
+  3. **ID**: which ID they showed (driver's license, passport, CAC, state ID or another
+     government ID) and that its name and photo match them. Only the type, who checked it and
+     when are kept: never the ID's number.
+  4. **Badge**: a badge kept for them (picked for the event they're expected at, or reserved
+     for a regular visitor) is shown large, with **Badge handed over** and **Can't find it?
+     Issue a different badge**. Otherwise the desk enters the number of the badge they hand
+     over: it must be an active visitor badge, valid at the site, that the visitor may hold.
+     A visitor whose clearance hasn't been validated can be sent to Security from here
+     (**Request clearance validation**). **No badge needed** (audited) finishes without one.
+- **Complete check-in**: a visitor who checks themselves in at a kiosk is told to show their ID
+  at the desk. A bright banner at the top of every page, and the Complete check-in module on
+  Home, show them to staff who give badges out at that site (and the site chosen in the
+  header): who, which kiosk, when, whom they are visiting and why. **Check ID** opens the
+  check-in at the ID step (at Confirm first if something is missing, such as the point of
+  contact), and **Give badge** at the badge step once their ID is checked. It clears once
+  they have a badge, need none, or check out. Pages check every 15 seconds.
+- **Reserved badges**: a regular visitor can have a visitor badge kept for them (their
+  visitor page, Reserved badge). Check-in tells the desk to hand them that badge; it goes
+  back into stock when they leave and stays theirs. Nobody else can be given it.
 - **Visit log**: every visit with filters and a CSV export (administrators).
 - **End of day**: at each site's end-of-day time, in its own time zone, anyone still checked
   in is checked out automatically, at that time, even if the server was down then.
@@ -263,7 +286,9 @@ Home.
 ## Expected visitors
 
 **Expected** lists a day's visitor events: a name, time, site, company and host, and the guests
-expected. Each guest shows as expected, here (since when) or left. Guests are picked from
+expected. Each guest shows as expected, arrived but not yet through the desk, here (since
+when) or left. Staff who give badges out can pick the visitor badge to hand each guest
+(Badge column): check-in then shows that badge. Guests are picked from
 visitors on record or added as new ones (the app says when someone of that name is already
 on record), and are linked to the event's company and host, so the kiosk recognises them.
 At the kiosk an expected guest is offered their event's company and host first; checking
@@ -289,12 +314,19 @@ iPad keeps a device token. A new code, or removing the kiosk, signs the iPad out
    Check out.
 2. **Found you**: "Welcome back, Jane", the company she's visiting and her host, to confirm or
    change. Someone linked to several companies here picks one.
-3. **New here**: first and last name, their company, email or phone (optional), then the company
-   they're visiting (type a few letters) and the host (or "I'm not sure").
-4. **Done**, then back to the start. Every screen goes back to the start after a set idle time.
+3. **New here**: first and last name, their company, email or phone (optional), whether they're
+   visiting someone or here to do work or maintenance, then the company they're visiting
+   (type a few letters) and the host (or "I'm not sure").
+4. **About your visit**: what brings them in, and for someone new (or a visitor on record
+   without them) whether they're a U.S. citizen, and if not, their country, typed and picked
+   from a list, and their company.
+5. **Done**: they're asked to show their photo ID at the front desk, who will give them their
+   visitor badge. Then back to the start. Every screen goes back to the start after a set idle
+   time.
 
 The kiosk only ever shows a visitor's first name and the names of the company and host they
-came to see: never an email, a phone number or a visit history. It answers only to a full
+came to see: never an email, a phone number, a citizenship or a visit history. It asks a
+visitor on record only for what their record lacks, and never changes what it has. It answers only to a full
 name (two words), tolerating case, accents, word order and one typo per name. Lookups are
 rate-limited per kiosk, and a check-in can only be for someone a lookup just found.
 

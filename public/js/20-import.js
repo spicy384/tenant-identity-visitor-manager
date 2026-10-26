@@ -40,7 +40,9 @@ const IMPORT_FIELDS = {
   visitors: [
     { key: "first_name", field: "firstName", label: "First name", required: true, names: ["firstname", "first", "givenname", "forename", "fname"] },
     { key: "last_name", field: "lastName", label: "Last name", required: true, names: ["lastname", "surname", "familyname", "last", "lname"] },
-    { key: "organisation", field: "organisation", label: "Their organisation", names: ["organisation", "organization", "org", "employer", "theircompany", "from"] },
+    { key: "organisation", field: "organisation", label: "Their company", names: ["organisation", "organization", "org", "employer", "theircompany", "from"] },
+    { key: "visitor_type", field: "visitorType", label: "Visitor type", hint: "Guest or Service Technician", names: ["visitortype", "type", "kind"] },
+    { key: "citizenship", field: "citizenship", label: "Citizenship", hint: "The country, by name or code (US for a U.S. citizen)", names: ["citizenship", "nationality", "country", "citizen"] },
     { key: "email", field: "email", label: "Email", names: ["email", "emailaddress", "mail"] },
     { key: "phone", field: "phone", label: "Phone", names: ["phone", "telephone", "tel", "mobile", "cell"] },
     { key: "company", field: "companies", label: "Company they visit", hint: "A tenant company's name.", names: ["company", "visiting", "visitingfirm", "visitingcompany", "tenant", "firm"] },

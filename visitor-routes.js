@@ -9,6 +9,7 @@
  */
 const express = require("express");
 const { toCsv } = require("./csv");
+const { ID_TYPES } = require("./visitors");
 
 function fail(status, message) {
   const error = new Error(message);
@@ -44,13 +45,15 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
   const fullName = (v) => `${v.firstName} ${v.lastName}`;
 
   function visitorOut(ctx, record, list) {
-    return { ...access.project(ctx, "visitor", record, list), source: record.source, createdAt: record.createdAt };
+    // The badge kept for them, to those who see badges.
+    const reserved = access.canReadBadges(ctx) ? { reservedBadge: record.reservedBadge } : {};
+    return { ...access.project(ctx, "visitor", record, list), source: record.source, createdAt: record.createdAt, ...reserved };
   }
 
-  /** A visit as the caller may see it: the visitor's organisation only when that field is visible. */
+  /** A visit as the caller may see it: the visitor's company and citizenship only when those fields are visible. */
   function visitsOut(ctx, list) {
-    const showOrg = access.fieldsFor(ctx, "visitor").some((f) => f.key === "organisation");
-    return list.map((v) => (showOrg ? v : { ...v, visitor: { ...v.visitor, organisation: undefined } }));
+    const visible = new Set(access.fieldsFor(ctx, "visitor").map((f) => f.key));
+    return list.map((v) => ({ ...v, visitor: { ...v.visitor, organisation: visible.has("organisation") ? v.visitor.organisation : undefined, citizenship: visible.has("citizenship") ? v.visitor.citizenship : undefined } }));
   }
 
   function siteParam(req, value) {
@@ -197,6 +200,12 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
     res.json({ visits: badges.waitingForBadge({ sites: req.ctx.sites, siteId }) });
   });
 
+  router.get("/api/visits/:id", readVisitors, (req, res) => {
+    const visit = visitors.getVisit(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!visit) throw fail(404, "No such visit.");
+    res.json({ visit: visitsOut(req.ctx, [visit])[0] });
+  });
+
   router.post("/api/visits/:id/badge-not-needed", giveBadges, (req, res) => {
     const waived = badges.waiveVisitBadge(positiveInt(req.params.id), { by: req.user?.displayName || req.user?.username || null, sites: req.ctx.sites });
     auditFrom(req, "visit.badge_not_needed", waived.name, `visit ${waived.visitId}`);
@@ -227,6 +236,70 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
     const { visit, already } = visitors.checkIn({ visitorId: visitor.id, siteId, companyId: positiveInt(body.companyId), hostId: body.hostId || null, purpose: body.purpose, by: staffName(req) });
     if (!already) auditFrom(req, "visit.checkin", fullName(visitor), `${visit.siteName}: ${visit.companyName}${visit.hostName ? `, host ${visit.hostName}` : ""}${visitor.blocked ? "; blocked, let in anyway" : ""}`);
     res.json({ ok: true, already, visit: visitsOut(req.ctx, [visit])[0] });
+  });
+
+  // --- checking in at the desk, step by step ------------------------------------------------
+  //
+  // The desk confirms who they are and who they visit, checks their ID, then gives a badge
+  // (badge-routes.js). Visitors who checked themselves in at a kiosk wait at the ID step.
+
+  /** What check-in needs of the visitor's record that isn't filled in, as a message; else null. */
+  function missingForCheckin(visitor) {
+    const missing = [!visitor.organisation ? "company" : null, !visitor.citizenship ? "citizenship" : null].filter(Boolean);
+    return missing.length ? `Fill in ${fullName(visitor)}'s ${missing.join(" and ")} first.` : null;
+  }
+
+  /** The point of contact (anyone in the directory) and their company, from the body or the visit. */
+  function contactFrom(body, visit = null) {
+    const hostId = positiveInt(body.hostId) ?? visit?.hostId ?? null;
+    if (!hostId) throw fail(400, "Choose the point of contact.");
+    const companyId = positiveInt(body.companyId) ?? visitors.companyOfPerson(hostId);
+    if (!companyId) throw fail(400, "That point of contact isn't in the directory.");
+    return { hostId, companyId };
+  }
+
+  /**
+   * The desk checks in someone standing there, their ID already checked: { visitorId, siteId,
+   * hostId, companyId (else the contact's company), purpose, idType }. The visit then waits
+   * for its badge.
+   */
+  router.post("/api/checkins", editVisitors, (req, res) => {
+    const body = req.body || {};
+    const siteId = siteParam(req, body.siteId);
+    if (!siteId) throw fail(400, "Choose the site.");
+    const visitor = visitors.get(positiveInt(body.visitorId), { sites: req.ctx.sites });
+    if (!visitor) throw fail(404, "No such visitor.");
+    if (visitor.blocked && !body.overrideBlock) throw fail(409, `${fullName(visitor)} is blocked. Check with a manager before letting them in.`);
+    const missing = missingForCheckin(visitor);
+    if (missing) throw fail(400, missing);
+    if (!String(body.purpose || "").trim()) throw fail(400, "Say what the visit is for.");
+    if (!ID_TYPES.includes(body.idType)) throw fail(400, "Check their ID, and say which it was.");
+    const { hostId, companyId } = contactFrom(body);
+    const { visit, already } = visitors.checkIn({ visitorId: visitor.id, siteId, companyId, hostId, purpose: body.purpose, idType: body.idType, by: staffName(req) });
+    if (!already) auditFrom(req, "visit.checkin", fullName(visitor), `${visit.siteName}: ${visit.companyName}, contact ${visit.hostName}; ID checked (${body.idType})${visitor.blocked ? "; blocked, let in anyway" : ""}`);
+    res.json({ ok: true, already, visit: visitsOut(req.ctx, [visit])[0] });
+  });
+
+  /**
+   * The desk has checked the ID of someone who checked in at a kiosk: { idType, and hostId,
+   * companyId, purpose to fill in or change }. The visit goes on to its badge.
+   */
+  router.post("/api/visits/:id/verify-id", editVisitors, (req, res) => {
+    const body = req.body || {};
+    const before = visitors.getVisit(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!before || before.checkedOutAt) throw fail(404, "No such visit in the building.");
+    const visitor = visitors.get(before.visitor.id);
+    if (before.checkinStage !== "id") throw fail(409, `${fullName(visitor)}'s ID has been checked already.`);
+    const missing = missingForCheckin(visitor);
+    if (missing) throw fail(400, missing);
+    if (!ID_TYPES.includes(body.idType)) throw fail(400, "Check their ID, and say which it was.");
+    const contact = contactFrom(body, before);
+    const purpose = body.purpose !== undefined ? body.purpose : before.purpose;
+    if (!String(purpose || "").trim()) throw fail(400, "Say what the visit is for.");
+    if (contact.hostId !== before.hostId || contact.companyId !== before.companyId || purpose !== before.purpose) visitors.updateVisit(before.id, { ...contact, purpose });
+    const visit = visitors.verifyId(before.id, { idType: body.idType, by: staffName(req) });
+    auditFrom(req, "visit.id_checked", fullName(visitor), `${visit.siteName}: ${body.idType}`);
+    res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0] });
   });
 
   router.post("/api/visits/:id/checkout", editVisitors, (req, res) => {

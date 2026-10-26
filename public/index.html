@@ -46,7 +46,7 @@
   <nav id="subnav" class="subnav" aria-label="Pages" hidden></nav>
 
   <main id="main" hidden>
-    <!-- Kiosk visitors still waiting for a badge (18-badge-alerts.js) -->
+    <!-- Visitors whose check-in the desk hasn't finished: their ID, then a badge (18-badge-alerts.js) -->
     <div id="badge-alerts" class="badge-alerts" aria-live="polite" hidden></div>
 
     <!-- Companies and their people -->
@@ -99,7 +99,7 @@
         <h2 id="here-title" class="toolbar-title">In the building</h2>
         <span class="spacer"></span>
         <button type="button" id="here-print" class="secondary">Print list</button>
-        <button type="button" id="here-checkin" class="primary" data-visitor-editor>Check someone in</button>
+        <button type="button" id="here-checkin" class="primary" data-visitor-editor>Check in a visitor</button>
       </div>
       <div class="print-only print-head">
         <h2 id="here-print-title"></h2>
@@ -216,6 +216,7 @@
           <div id="home-sites" class="site-chips" role="group" aria-label="Site"></div>
         </div>
         <span class="spacer"></span>
+        <button type="button" id="home-checkin" class="primary" data-visitor-editor>Check in a visitor</button>
         <button type="button" id="home-customize" class="secondary small">Customize</button>
       </div>
       <div id="home-edit-bar" class="dashboard-edit-bar" hidden>
@@ -392,6 +393,7 @@
   <script src="/js/20-import.js"></script>
   <script src="/js/21-bulk.js"></script>
   <script src="/js/22-facilities.js"></script>
+  <script src="/js/23-checkin.js"></script>
   <script src="/js/13-app.js"></script>
 </body>
 </html>

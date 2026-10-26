@@ -330,6 +330,103 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     });
   });
 
+  // --- the badge step of checking a visitor in ---------------------------------------------------
+
+  const giveVisitorBadges = need((ctx) => access.canReadVisitors(ctx) && access.canEditBadges(ctx), "This account can't give badges out.");
+
+  /** An open visit at the badge step (its ID checked, no badge yet), that the caller can see. */
+  function visitForBadge(req) {
+    const visit = visitors.getVisit(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!visit || visit.checkedOutAt) throw fail(404, "No such visit in the building.");
+    const name = `${visit.visitor.firstName} ${visit.visitor.lastName}`;
+    if (visit.checkinStage === "id") throw fail(409, `Check ${name}'s ID first.`);
+    if (visit.checkinStage !== "badge") throw fail(409, `${name}'s check-in is finished; give badges from the Badges page.`);
+    return visit;
+  }
+
+  const validAtSite = (b, siteId) => !b.sites.length || b.sites.some((s) => s.id === siteId);
+
+  /**
+   * What to hand a visitor at check-in: the badge kept for them (picked for the event they are
+   * expected at, else reserved on their record) and why it can't be given, if so; any badge
+   * they hold already; and the visitor badges valid at the site they may be given instead.
+   */
+  router.get("/api/visits/:id/badge-plan", giveVisitorBadges, (req, res) => {
+    const visit = visitForBadge(req);
+    const visitor = visitors.get(visit.visitor.id);
+    const short = (b) => {
+      const out = badgeOut(req, b);
+      return { id: out.id, number: out.number, type: out.type, classificationName: out.classificationName, clearanceLevelName: out.clearanceLevelName, template: out.template, sites: out.sites };
+    };
+    const picked = events.badgeForVisit(visit.id);
+    const keptFor = picked ? { id: picked.id, source: "event", eventTitle: picked.eventTitle } : visitor.reservedBadge ? { id: visitor.reservedBadge.id, source: "reserved" } : null;
+    let assigned = null;
+    const b = keptFor ? badges.get(keptFor.id) : null;
+    if (b) {
+      const heldByThem = Boolean(b.holder && b.holder.kind === "visitor" && b.holder.id === visitor.id);
+      // Why it can't be handed over, so the desk gives another.
+      const why = heldByThem ? null
+        : b.holder ? `It's with ${b.holder.name}.`
+          : !validAtSite(b, visit.siteId) ? `It isn't valid at ${visit.siteName}.`
+            : badges.refusal(b, badges.holder("visitor", visitor.id), { levelNames: seesLevels(req) });
+      assigned = { ...short(b), source: keptFor.source, eventTitle: keptFor.eventTitle || null, heldByThem, problem: why || null };
+    }
+    const holding = badges.forHolder("visitor", visitor.id).filter((a) => !a.returnedAt).map((a) => ({ id: a.badgeId, number: a.badgeNumber }));
+    const available = badges.availableFor("visitor", visitor.id, { sites: req.ctx.sites }).filter((x) => validAtSite(x, visit.siteId));
+    const rank = new Map(clearance.levels().map((l) => [l.id, l.rank]));
+    const best = available.reduce((top, x) => (!top || (rank.get(x.clearanceLevelId) ?? -1) > (rank.get(top.clearanceLevelId) ?? -1) ? x : top), null);
+    res.json({
+      visit: { id: visit.id, siteId: visit.siteId, siteName: visit.siteName, stage: visit.checkinStage },
+      assigned,
+      holding,
+      available: available.map(short),
+      suggested: best ? templates.refFor(best.type, best.clearanceLevelId) : null
+    });
+  });
+
+  /**
+   * Gives a visitor past the ID step their badge: { badgeId } or { number } as typed. It must
+   * be an active visitor badge valid at the site that they may hold. A badge they hold already
+   * is confirmed rather than given again. Their check-in is then done.
+   */
+  router.post("/api/visits/:id/badge", giveVisitorBadges, (req, res) => {
+    const visit = visitForBadge(req);
+    const body = req.body || {};
+    let badgeId = positiveInt(body.badgeId);
+    if (!badgeId) {
+      const number = str(body.number, 60);
+      if (!number || !number.trim()) throw fail(400, "Enter the badge number.");
+      badgeId = badges.findByNumber(number);
+      if (!badgeId) throw fail(404, `There's no badge ${number.trim()}. Check the number on the badge.`);
+    }
+    const badge = badges.get(badgeId, { sites: req.ctx.sites });
+    if (!badge) throw fail(404, "There's no such badge at your sites.");
+    if (badge.type !== "visitor") throw fail(400, `Badge ${badge.number} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`);
+    if (!validAtSite(badge, visit.siteId)) throw fail(400, `Badge ${badge.number} isn't valid at ${visit.siteName}.`);
+    const name = `${visit.visitor.firstName} ${visit.visitor.lastName}`;
+    if (badge.holder && badge.holder.kind === "visitor" && badge.holder.id === visit.visitor.id) {
+      visitors.setStage(visit.id, "done");
+      auditFrom(req, "visit.badge_confirmed", name, `badge ${badge.number}, held already`);
+      return res.json({ ok: true, badge: badgeOut(req, badge), already: true });
+    }
+    const given = badges.assign(badge.id, { kind: "visitor", holderId: visit.visitor.id, visitId: visit.id }, { by: staffName(req), sites: req.ctx.sites, levelNames: seesLevels(req) });
+    auditFrom(req, "badge.assign", given.number, `to ${given.holder.name}${given.holder.company ? ` (${given.holder.company})` : ""}; at check-in`);
+    return res.json({ ok: true, badge: badgeOut(req, given), already: false });
+  });
+
+  /** Reserves a visitor badge for a regular visitor ({ badgeId }, or null to release it). */
+  router.put("/api/visitors/:id/reserved-badge", giveVisitorBadges, editVisitors, (req, res) => {
+    const id = positiveInt(req.params.id);
+    const before = visitors.get(id, { sites: req.ctx.sites });
+    if (!before) throw fail(404, "No such visitor.");
+    const badgeId = req.body?.badgeId === null ? null : positiveInt(req.body?.badgeId);
+    if (badgeId === null && req.body?.badgeId !== null) throw fail(400, "Choose the badge.");
+    if (badgeId && !badges.get(badgeId, { sites: req.ctx.sites })) throw fail(404, "There's no such badge at your sites.");
+    const after = visitors.setReservedBadge(id, badgeId, { sites: req.ctx.sites });
+    auditFrom(req, "visitor.reserved_badge", `${after.firstName} ${after.lastName}`, after.reservedBadge ? `badge ${after.reservedBadge.number}` : `released ${before.reservedBadge?.number || ""}`.trim());
+    res.json({ ok: true, reservedBadge: after.reservedBadge });
+  });
+
   // --- badge template images ------------------------------------------------------------------
 
   /** Every template: with level names for those who see them, else only which kind each is and whether it is a cleared one. */
@@ -440,7 +537,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
         }
       }
       const links = event.companyId ? [{ companyId: event.companyId, hostId: event.hostId }] : [];
-      const created = visitors.create({ firstName: v.firstName, lastName: v.lastName, organisation: v.organisation, email: v.email, phone: v.phone, links }, { sites: req.ctx.sites, source: "staff", verified: true });
+      const created = visitors.create({ firstName: v.firstName, lastName: v.lastName, organisation: v.organisation, visitorType: v.visitorType, citizenship: v.citizenship, email: v.email, phone: v.phone, links }, { sites: req.ctx.sites, source: "staff", verified: true });
       visitorId = created.id;
       auditFrom(req, "visitor.add", `${created.firstName} ${created.lastName}`, `expected at ${event.title}`);
     } else if (event.companyId) {
@@ -452,6 +549,18 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const guest = updated.guests.find((g) => g.visitorId === visitorId);
     auditFrom(req, "event.guest_add", event.title, `${guest.firstName} ${guest.lastName}`);
     res.json({ ok: true, event: updated });
+  });
+
+  /** Picks the visitor badge to hand an expected guest when they arrive ({ badgeId } or null). */
+  router.put("/api/events/:id/guests/:visitorId/badge", editVisitors, editBadges, (req, res) => {
+    const visitorId = positiveInt(req.params.visitorId);
+    const badgeId = req.body?.badgeId === null ? null : positiveInt(req.body?.badgeId);
+    if (badgeId === null && req.body?.badgeId !== null) throw fail(400, "Choose the badge.");
+    if (badgeId && !badges.get(badgeId, { sites: req.ctx.sites })) throw fail(404, "There's no such badge at your sites.");
+    const event = events.setGuestBadge(positiveInt(req.params.id), visitorId, badgeId, { sites: req.ctx.sites });
+    const guest = event.guests.find((g) => g.visitorId === visitorId);
+    auditFrom(req, "event.guest_badge", event.title, `${guest.firstName} ${guest.lastName}: ${guest.badge ? `badge ${guest.badge.number}` : "no badge picked"}`);
+    res.json({ ok: true, event });
   });
 
   router.delete("/api/events/:id/guests/:visitorId", editVisitors, (req, res) => {

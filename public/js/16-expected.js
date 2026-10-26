@@ -3,7 +3,9 @@
 
 const GUEST_STATUS = {
   expected: (g) => h("span", { class: "badge muted", text: "Expected" }),
-  here: (g) => h("span", { class: "badge ok", text: `Here since ${new Date(g.arrivedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` }),
+  here: (g) => (g.checkinStage
+    ? h("span", { class: "badge warn", text: g.checkinStage === "id" ? "Arrived: check their ID" : "Arrived: needs a badge" })
+    : h("span", { class: "badge ok", text: `Here since ${new Date(g.arrivedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` })),
   left: (g) => h("span", { class: "badge", text: `Left ${new Date(g.leftAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` })
 };
 
@@ -71,23 +73,59 @@ function eventPanel(e) {
     h("p", { class: "small-text muted", text: `${e.guests.length} expected: ${counts.here} here, ${counts.left} left, ${counts.expected} not arrived yet.` }),
     e.guests.length
       ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-        h("thead", {}, h("tr", {}, ["Guest", "Organisation", "Status", ""].map((t) => h("th", { text: t })))),
+        h("thead", {}, h("tr", {}, ["Guest", "Company", "Status", ...(canReadBadges() ? ["Badge"] : []), ""].map((t) => h("th", { text: t })))),
         h("tbody", {}, e.guests.map((g) => h("tr", {},
           h("td", {}, h("a", { href: `#visitor/${g.visitorId}`, text: `${g.firstName} ${g.lastName}` }), g.blocked ? h("span", { class: "badge bad", text: "Blocked" }) : null),
           h("td", { text: g.organisation || "" }),
           h("td", {}, GUEST_STATUS[g.status](g)),
+          canReadBadges() ? h("td", {}, guestBadgeCell(e, g)) : null,
           h("td", {}, canEditVisitors() ? h("div", { class: "btn-row" },
-            g.status === "expected" && isToday ? h("button", { type: "button", class: "secondary small", text: "Check in", onclick: async () => {
-              const visitor = (await api(`/api/visitors/${g.visitorId}`)).visitor;
-              const companies = e.companyId ? [{ companyId: e.companyId, companyName: e.companyName, hostId: e.hostId, hostName: e.hostName }, ...(visitor.companies || []).filter((c) => c.companyId !== e.companyId)] : visitor.companies;
-              if (await staffCheckInAt({ ...visitor, companies }, String(e.siteId))) loadExpected();
+            g.status === "expected" && isToday ? h("button", { type: "button", class: "primary small", text: "Check in", onclick: async () => {
+              try {
+                const visitor = (await api(`/api/visitors/${g.visitorId}`)).visitor;
+                if (await checkInWizard({ visitor, event: e })) loadExpected();
+              } catch (error) {
+                toast(error.message, "error");
+              }
             } }) : null,
+            g.checkinStage ? h("button", { type: "button", class: "primary small", text: "Finish check-in", onclick: async () => { if (await continueCheckIn(g.visitId)) loadExpected(); } }) : null,
             g.status === "expected" ? h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: async () => {
               await api(`/api/events/${e.id}/guests/${g.visitorId}`, { method: "DELETE" });
               loadExpected();
               refreshCounts();
             } }) : null) : null))))))
       : h("p", { class: "muted", text: "No guests yet." }));
+}
+
+/** The visitor badge picked ahead for an expected guest, and (for those who give badges) picking it. */
+function guestBadgeCell(e, g) {
+  const may = canGiveBadges() && canEditVisitors() && g.status === "expected";
+  const pickBadge = async () => {
+    const { badges } = await api(`/api/badges?${new URLSearchParams({ type: "visitor", state: "available", site: String(e.siteId), limit: "500" })}`).catch(() => ({ badges: [] }));
+    const chosen = await formDialog({
+      title: `Badge for ${g.firstName} ${g.lastName}`,
+      intro: h("p", { class: "muted", text: "Check-in tells the front desk to hand them this badge when they arrive." }),
+      fields: [{ name: "badgeId", label: "Visitor badge", type: "select", required: true, value: g.badge ? String(g.badge.id) : "",
+        options: [{ value: "", label: badges.length ? "Choose a badge" : "No visitor badge is free here" }, ...badges.map((b) => ({ value: String(b.id), label: [b.number, badgeClassText(b)].filter(Boolean).join(" · ") }))] }],
+      submitLabel: "Pick badge",
+      onSubmit: (v) => api(`/api/events/${e.id}/guests/${g.visitorId}/badge`, { method: "PUT", body: { badgeId: Number(v.badgeId) } })
+    });
+    if (chosen) loadExpected();
+  };
+  const clearBadge = async () => {
+    try {
+      await api(`/api/events/${e.id}/guests/${g.visitorId}/badge`, { method: "PUT", body: { badgeId: null } });
+      loadExpected();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+  if (g.badge) {
+    return h("span", { class: "btn-row" }, h("span", { class: "mono", text: g.badge.number }),
+      may ? h("button", { type: "button", class: "link-btn", text: "Change", onclick: pickBadge }) : null,
+      may ? h("button", { type: "button", class: "link-btn danger-text", text: "Clear", onclick: clearBadge }) : null);
+  }
+  return may ? h("button", { type: "button", class: "link-btn", text: "Pick badge", onclick: pickBadge }) : h("span", { class: "muted small-text", text: "—" });
 }
 
 /** The event form: site, name, date and times, company and host, notes. */

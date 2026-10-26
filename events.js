@@ -27,8 +27,8 @@ function createEvents({ db, now = Date.now }) {
   function guestsOf(eventIds) {
     const out = new Map();
     if (!eventIds.length) return out;
-    const rows = raw.prepare(`SELECT g.event_id, g.visitor_id, g.visit_id, v.first_name, v.last_name, v.organisation, v.blocked, x.checked_in_at, x.checked_out_at
-      FROM event_guests g JOIN visitors v ON v.id = g.visitor_id LEFT JOIN visits x ON x.id = g.visit_id
+    const rows = raw.prepare(`SELECT g.event_id, g.visitor_id, g.visit_id, g.badge_id, b.number AS badge_number, v.first_name, v.last_name, v.organisation, v.blocked, x.checked_in_at, x.checked_out_at, x.checkin_stage
+      FROM event_guests g JOIN visitors v ON v.id = g.visitor_id LEFT JOIN visits x ON x.id = g.visit_id LEFT JOIN badges b ON b.id = g.badge_id
       WHERE g.event_id IN (${inList(eventIds)}) ORDER BY v.last_name COLLATE NOCASE, v.first_name COLLATE NOCASE`).all(...eventIds);
     for (const r of rows) {
       if (!out.has(r.event_id)) out.set(r.event_id, []);
@@ -40,6 +40,10 @@ function createEvents({ db, now = Date.now }) {
         blocked: Boolean(r.blocked),
         visitId: r.visit_id,
         status: !r.visit_id ? "expected" : r.checked_out_at ? "left" : "here",
+        // Arrived, but the desk hasn't finished checking them in (their ID, or a badge).
+        checkinStage: r.visit_id && !r.checked_out_at && ["id", "badge"].includes(r.checkin_stage) ? r.checkin_stage : null,
+        // The visitor badge picked for them ahead of time.
+        badge: r.badge_id ? { id: r.badge_id, number: r.badge_number } : null,
         arrivedAt: r.checked_in_at ?? null,
         leftAt: r.checked_out_at ?? null
       });
@@ -182,16 +186,49 @@ function createEvents({ db, now = Date.now }) {
   }
 
   /**
+   * Picks the visitor badge to hand an expected guest when they arrive (null clears it): an
+   * active visitor badge valid at the event's site, not reserved for someone else, and not
+   * picked for another guest that day at that site.
+   */
+  function setGuestBadge(eventId, visitorId, badgeId, { sites = null } = {}) {
+    const event = get(eventId, { sites });
+    if (!event) throw fail(404, "No such event.");
+    if (!raw.prepare("SELECT 1 FROM event_guests WHERE event_id = ? AND visitor_id = ?").get(event.id, Number(visitorId))) throw fail(404, "They aren't a guest at this event.");
+    if (badgeId !== null) {
+      const badge = raw.prepare("SELECT id, number, type, status FROM badges WHERE id = ?").get(Number(badgeId));
+      if (!badge) throw fail(404, "No such badge.");
+      if (badge.type !== "visitor") throw fail(400, `Badge ${badge.number} isn't a visitor badge.`);
+      if (badge.status !== "active") throw fail(400, `Badge ${badge.number} is ${badge.status}.`);
+      const sitesOf = raw.prepare("SELECT site_id FROM badge_sites WHERE badge_id = ?").all(badge.id).map((r) => r.site_id);
+      if (sitesOf.length && !sitesOf.includes(event.siteId)) throw fail(400, `Badge ${badge.number} isn't valid at ${event.siteName}.`);
+      const reserved = raw.prepare("SELECT id, first_name, last_name FROM visitors WHERE reserved_badge_id = ?").get(badge.id);
+      if (reserved && reserved.id !== Number(visitorId)) throw fail(409, `Badge ${badge.number} is reserved for ${reserved.first_name} ${reserved.last_name}.`);
+      const taken = raw.prepare(`SELECT v.first_name, v.last_name FROM event_guests g JOIN visitor_events e ON e.id = g.event_id JOIN visitors v ON v.id = g.visitor_id
+        WHERE g.badge_id = ? AND e.site_id = ? AND e.date = ? AND NOT (g.event_id = ? AND g.visitor_id = ?)`).get(badge.id, event.siteId, event.date, event.id, Number(visitorId));
+      if (taken) throw fail(409, `Badge ${badge.number} is picked for ${taken.first_name} ${taken.last_name} that day.`);
+    }
+    raw.prepare("UPDATE event_guests SET badge_id = ? WHERE event_id = ? AND visitor_id = ?").run(badgeId === null ? null : Number(badgeId), event.id, Number(visitorId));
+    return get(event.id);
+  }
+
+  /** The badge picked ahead for the event guest this visit is (null if none), with the event's title. */
+  function badgeForVisit(visitId) {
+    const r = raw.prepare(`SELECT g.badge_id, b.number, e.title FROM event_guests g JOIN visitor_events e ON e.id = g.event_id JOIN badges b ON b.id = g.badge_id
+      WHERE g.visit_id = ? ORDER BY coalesce(e.start_time, '99') LIMIT 1`).get(Number(visitId));
+    return r ? { id: r.badge_id, number: r.number, eventTitle: r.title } : null;
+  }
+
+  /**
    * Today's events at `siteId` a visitor is expected at and hasn't arrived for yet, with
    * the company and host to offer them first (the kiosk).
    */
   function expectedToday(visitorId, siteId) {
     const tz = raw.prepare("SELECT time_zone FROM sites WHERE id = ?").get(siteId)?.time_zone;
-    return raw.prepare(`SELECT e.id, e.title, e.company_id, c.name AS company_name, c.active AS company_active, e.host_id, p.first_name, p.last_name, p.preferred_name, p.active AS host_active
+    return raw.prepare(`SELECT e.id, e.title, e.company_id, c.name AS company_name, c.active AS company_active, e.host_id, p.first_name, p.last_name, p.preferred_name, p.active AS host_active, g.badge_id
       FROM event_guests g JOIN visitor_events e ON e.id = g.event_id LEFT JOIN companies c ON c.id = e.company_id LEFT JOIN people p ON p.id = e.host_id
       WHERE g.visitor_id = ? AND g.visit_id IS NULL AND e.site_id = ? AND e.date = ? ORDER BY coalesce(e.start_time, '99')`).all(visitorId, siteId, today(tz, now()))
       .filter((r) => r.company_id && r.company_active)
-      .map((r) => ({ eventId: r.id, title: r.title, companyId: r.company_id, companyName: r.company_name, hostId: r.host_id && r.host_active ? r.host_id : null, hostName: r.host_active ? hostName(r) : null }));
+      .map((r) => ({ eventId: r.id, title: r.title, companyId: r.company_id, companyName: r.company_name, hostId: r.host_id && r.host_active ? r.host_id : null, hostName: r.host_active ? hostName(r) : null, badgeId: r.badge_id ?? null }));
   }
 
   /** Expected guests at the caller's sites today who haven't arrived, for the navigation count. */
@@ -204,7 +241,7 @@ function createEvents({ db, now = Date.now }) {
     return n;
   }
 
-  return { list, get, create, update, remove, addGuest, removeGuest, expectedToday, expectedCount };
+  return { list, get, create, update, remove, addGuest, removeGuest, setGuestBadge, badgeForVisit, expectedToday, expectedCount };
 }
 
 module.exports = { createEvents };

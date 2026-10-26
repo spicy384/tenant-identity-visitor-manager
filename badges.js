@@ -36,7 +36,8 @@ function createBadges({ db, clearance, now = Date.now }) {
   const SELECT = `SELECT b.*, c.name AS classification_name, c.requires_clearance, l.name AS level_name, l.rank AS level_rank,
       (SELECT json_group_array(json_object('id', s.id, 'name', s.name)) FROM badge_sites bs JOIN sites s ON s.id = bs.site_id WHERE bs.badge_id = b.id) AS sites_json,
       a.id AS a_id, a.holder_kind, a.holder_id, a.holder_name, a.holder_company, a.visit_id, a.assigned_at, a.assigned_by,
-      a.temporary AS a_temporary, a.due_at AS a_due_at, rb.number AS a_replaces_number
+      a.temporary AS a_temporary, a.due_at AS a_due_at, rb.number AS a_replaces_number,
+      (SELECT json_object('id', rv.id, 'name', rv.first_name || ' ' || rv.last_name) FROM visitors rv WHERE rv.reserved_badge_id = b.id) AS reserved_json
     FROM badges b
     LEFT JOIN badge_classifications c ON c.id = b.classification_id
     LEFT JOIN clearance_levels l ON l.id = b.clearance_level_id
@@ -58,6 +59,8 @@ function createBadges({ db, clearance, now = Date.now }) {
       temporary: Boolean(r.temporary),
       status: r.status,
       notes: r.notes,
+      // The visitor this badge is kept for, if any (handed to them at each check-in).
+      reservedFor: r.reserved_json ? JSON.parse(r.reserved_json) : null,
       holder: r.a_id ? {
         assignmentId: r.a_id, kind: r.holder_kind, id: r.holder_id, name: r.holder_name, company: r.holder_company, visitId: r.visit_id, assignedAt: r.assigned_at, assignedBy: r.assigned_by,
         temporary: Boolean(r.a_temporary), dueAt: r.a_due_at ?? null, replacesNumber: r.a_replaces_number ?? null, overdue: Boolean(r.a_temporary && r.a_due_at && r.a_due_at < now())
@@ -321,6 +324,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (badge.type !== "visitor" && h.kind === "visitor") return `Badge ${badge.number} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`;
     if (badge.type === "personnel" && !h.buildingStaff) return `Badge ${badge.number} is a personnel badge, for building staff; ${h.company} isn't marked as building staff.`;
     if (badge.type === "tenant" && h.buildingStaff) return `Badge ${badge.number} is a tenant badge; ${h.name} is building staff and gets a personnel badge.`;
+    if (badge.reservedFor && !(h.kind === "visitor" && h.id === badge.reservedFor.id)) return `Badge ${badge.number} is reserved for ${badge.reservedFor.name}.`;
     if (!h.active) return `${h.name} is inactive.`;
     if (h.blocked) return `${h.name} is blocked.`;
     if (badge.temporary) {
@@ -371,8 +375,15 @@ function createBadges({ db, clearance, now = Date.now }) {
       if (!replaces) throw fail(400, `${h.name} doesn't hold that badge.`);
       dueAt = endOfToday(h.timeZone);
     }
-    raw.prepare(`INSERT INTO badge_assignments (badge_id, holder_kind, holder_id, holder_name, holder_company, visit_id, assigned_at, assigned_by, temporary, replaces_badge_id, due_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(badge.id, kind, h.id, h.name, h.company || null, visitId, now(), by, badge.temporary ? 1 : 0, replaces ? replaces.id : null, dueAt);
+    db.transaction(() => {
+      raw.prepare(`INSERT INTO badge_assignments (badge_id, holder_kind, holder_id, holder_name, holder_company, visit_id, assigned_at, assigned_by, temporary, replaces_badge_id, due_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(badge.id, kind, h.id, h.name, h.company || null, visitId, now(), by, badge.temporary ? 1 : 0, replaces ? replaces.id : null, dueAt);
+      // A visitor waiting for a badge has one now: their check-in is done.
+      if (kind === "visitor") {
+        if (visitId) raw.prepare("UPDATE visits SET checkin_stage = 'done' WHERE id = ? AND checkin_stage IN ('id', 'badge')").run(visitId);
+        raw.prepare("UPDATE visits SET checkin_stage = 'done' WHERE visitor_id = ? AND checked_out_at IS NULL AND checkin_stage = 'badge'").run(h.id);
+      }
+    });
     return get(badge.id);
   }
 
@@ -400,13 +411,13 @@ function createBadges({ db, clearance, now = Date.now }) {
     return list({ state: "overdue", sites, limit: 1 }).total;
   }
 
-  // --- kiosk visits waiting for a badge --------------------------------------------------------
+  // --- visits whose check-in the desk hasn't finished ------------------------------------------
 
-  const WAITING_WHERE = `v.kiosk_id IS NOT NULL AND v.checked_out_at IS NULL AND v.badge_waived_at IS NULL
-    AND NOT EXISTS (SELECT 1 FROM badge_assignments a WHERE a.holder_kind = 'visitor' AND a.holder_id = v.visitor_id AND a.returned_at IS NULL)`;
+  const WAITING_WHERE = "v.checked_out_at IS NULL AND v.checkin_stage IN ('id', 'badge')";
 
   /**
-   * Visitors who checked themselves in at a kiosk and hold no badge yet, oldest first, at the
+   * Visitors whose check-in the desk hasn't finished (most checked themselves in at a kiosk):
+   * stage "id" waits for the desk to check their ID, "badge" for a badge. Oldest first, at the
    * sites `sites` covers (null for every site), or at `siteId` alone. Each leaves the list once
    * given a badge, checked out, or marked as needing none.
    */
@@ -415,8 +426,8 @@ function createBadges({ db, clearance, now = Date.now }) {
     const params = [];
     if (sites) where.push(`v.site_id IN (${[...sites].map(Number).join(",") || "NULL"})`);
     if (siteId) { where.push("v.site_id = ?"); params.push(Number(siteId)); }
-    return raw.prepare(`SELECT v.id, v.visitor_id, v.site_id, v.company_name, v.host_name, v.checked_in_at, s.name AS site_name, k.name AS kiosk_name,
-        p.first_name, p.last_name, p.organisation
+    return raw.prepare(`SELECT v.id, v.visitor_id, v.site_id, v.company_name, v.host_name, v.checked_in_at, v.checkin_stage, v.purpose, s.name AS site_name, k.name AS kiosk_name,
+        p.first_name, p.last_name, p.organisation, coalesce(v.visitor_type, p.visitor_type) AS visitor_type
       FROM visits v JOIN visitors p ON p.id = v.visitor_id JOIN sites s ON s.id = v.site_id LEFT JOIN kiosks k ON k.id = v.kiosk_id
       WHERE ${where.join(" AND ")} ORDER BY v.checked_in_at`).all(...params).map((r) => ({
       visitId: r.id,
@@ -428,15 +439,22 @@ function createBadges({ db, clearance, now = Date.now }) {
       kioskName: r.kiosk_name,
       companyName: r.company_name,
       hostName: r.host_name,
+      purpose: r.purpose,
+      visitorType: r.visitor_type || "Guest",
+      stage: r.checkin_stage,
       checkedInAt: r.checked_in_at
     }));
   }
 
-  /** Staff say a kiosk visit needs no badge (an escort, a delivery): it leaves the list. */
+  /**
+   * Staff say a visit needs no badge (an escort, a delivery): its check-in is done. Their ID is
+   * checked first.
+   */
   function waiveVisitBadge(visitId, { by = null, sites = null } = {}) {
-    const v = raw.prepare(`SELECT v.id, v.site_id, p.first_name, p.last_name FROM visits v JOIN visitors p ON p.id = v.visitor_id WHERE v.id = ? AND ${WAITING_WHERE}`).get(Number(visitId));
+    const v = raw.prepare(`SELECT v.id, v.site_id, v.checkin_stage, p.first_name, p.last_name FROM visits v JOIN visitors p ON p.id = v.visitor_id WHERE v.id = ? AND ${WAITING_WHERE}`).get(Number(visitId));
     if (!v || (sites && !sites.has(v.site_id))) throw fail(404, "That visit isn't waiting for a badge.");
-    raw.prepare("UPDATE visits SET badge_waived_at = ?, badge_waived_by = ? WHERE id = ?").run(now(), by, v.id);
+    if (v.checkin_stage === "id") throw fail(409, `Check ${v.first_name} ${v.last_name}'s ID first.`);
+    raw.prepare("UPDATE visits SET badge_waived_at = ?, badge_waived_by = ?, checkin_stage = 'done' WHERE id = ?").run(now(), by, v.id);
     return { visitId: v.id, name: `${v.first_name} ${v.last_name}` };
   }
 

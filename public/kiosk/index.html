@@ -84,8 +84,15 @@
             <input id="first-name" class="big-input" autocapitalize="words" spellcheck="false" placeholder="First name" aria-label="First name" />
             <input id="last-name" class="big-input" autocapitalize="words" spellcheck="false" placeholder="Last name" aria-label="Last name" />
           </div>
-          <input id="organisation" class="big-input" autocapitalize="words" placeholder="Your company (optional)" aria-label="Your company" />
+          <input id="organisation" class="big-input" autocapitalize="words" placeholder="Your company" aria-label="Your company" />
           <input id="contact" class="big-input" type="text" inputmode="email" autocapitalize="off" spellcheck="false" placeholder="Email or phone (optional)" aria-label="Email or phone" />
+          <div class="picker">
+            <span class="picker-label">Why are you here?</span>
+            <div id="type-list" class="choices compact two">
+              <button type="button" class="choice selected" data-type="Guest"><strong>Visiting someone</strong></button>
+              <button type="button" class="choice" data-type="Service Technician"><strong>Here to do work or maintenance</strong></button>
+            </div>
+          </div>
         </div>
         <div class="picker">
           <label class="picker-label" for="company-search">Who are you visiting?</label>
@@ -101,12 +108,44 @@
           <div id="host-list" class="choices compact"></div>
         </div>
         <p id="details-error" class="error" role="alert"></p>
-        <button type="submit" id="details-submit" class="btn primary">Check in</button>
+        <button type="submit" id="details-submit" class="btn primary">Next</button>
       </form>
       <button type="button" class="btn link" data-action="home">Start again</button>
     </section>
 
-    <!-- 4. Done. -->
+    <!-- 4. About this visit: what it's for, and what their record lacks (their company, their citizenship). -->
+    <section id="visit-info" class="screen" hidden>
+      <h1 id="info-title">Almost done</h1>
+      <form id="info-form" class="stack" autocomplete="off">
+        <label class="picker-label" for="purpose">What brings you in today?</label>
+        <input id="purpose" class="big-input" autocapitalize="sentences" placeholder="A meeting, an interview, a repair…" />
+        <div id="info-org" class="stack" hidden>
+          <label class="picker-label" for="info-organisation">Your company</label>
+          <input id="info-organisation" class="big-input" autocapitalize="words" placeholder="The company you work for" />
+        </div>
+        <div id="info-citizen" class="picker" hidden>
+          <span class="picker-label">Are you a U.S. citizen?</span>
+          <div id="citizen-list" class="choices compact two">
+            <button type="button" class="choice" data-citizen="yes"><strong>Yes</strong></button>
+            <button type="button" class="choice" data-citizen="no"><strong>No</strong></button>
+          </div>
+          <div id="country-picker" class="picker" hidden>
+            <label class="picker-label" for="country-search">Your country of citizenship</label>
+            <div id="country-chosen" class="chosen" hidden>
+              <span id="country-chosen-name"></span>
+              <button type="button" id="country-clear" class="btn link small">Change</button>
+            </div>
+            <input id="country-search" class="big-input" autocapitalize="words" spellcheck="false" placeholder="Start typing the country" />
+            <div id="country-list" class="choices compact"></div>
+          </div>
+        </div>
+        <p id="info-error" class="error" role="alert"></p>
+        <button type="submit" id="info-submit" class="btn primary">Check in</button>
+      </form>
+      <button type="button" class="btn link" data-action="home">Start again</button>
+    </section>
+
+    <!-- 5. Done. -->
     <section id="done" class="screen" hidden>
       <div class="tick" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>

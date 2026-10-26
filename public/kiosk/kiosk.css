@@ -154,3 +154,4 @@ h1 { margin: 0; font-size: 2.1rem; font-weight: 650; letter-spacing: -0.02em; li
   .brand { margin-bottom: 4px; }
   .logo { max-height: 90px; }
 }
+.choices.two { grid-template-columns: 1fr 1fr; max-height: none; }

@@ -724,3 +724,50 @@ input[type="color"] { width: 64px; min-height: 36px; padding: 2px; cursor: point
 .update-bar { position: fixed; left: calc(16px + env(safe-area-inset-left)); bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 60; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; width: max-content; max-width: calc(100vw - 32px); padding: 10px 16px; background: var(--warn-soft); border: 1px solid var(--warn); border-radius: var(--radius); box-shadow: var(--shadow-lg); color: var(--text); font-size: 0.9rem; }
 .import-retry { margin-top: 10px; }
 .skipped-rows { max-height: 50vh; overflow-y: auto; }
+
+/* --- the check-in wizard (23-checkin.js) --- */
+.checkin-wizard { width: min(760px, 96vw); }
+.checkin-wizard .dialog-body { min-height: 360px; }
+.wizard-steps { list-style: none; display: flex; gap: 6px; margin: 0 0 14px; padding: 0; counter-reset: step; }
+.wizard-steps li { flex: 1; counter-increment: step; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-muted); font-size: 0.85rem; text-align: center; border: 1px solid var(--border); }
+.wizard-steps li::before { content: counter(step) ". "; }
+.wizard-steps li.current { background: var(--primary-soft); color: var(--text); border-color: var(--primary); font-weight: 600; }
+.wizard-steps li.done { color: var(--text); }
+.wizard-steps li.done::before { content: "✓ "; }
+.wizard-title { margin: 0 0 10px; font-size: 1.15rem; }
+.choices-list.short { max-height: 30vh; }
+.contact-card { padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); display: flex; flex-direction: column; gap: 2px; }
+.chosen-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; }
+.citizenship-field .btn-row { gap: 18px; }
+.citizen-country { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.check-row.inline { display: inline-flex; }
+.id-person { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.id-name { font-size: 1.5rem; font-weight: 700; margin-bottom: 6px; }
+.id-types { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.id-types legend { font-weight: 600; margin-bottom: 6px; }
+.id-choice { display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; min-height: var(--tap); }
+.id-choice:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
+.id-match { font-weight: 600; }
+.badge-assigned { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; padding: 16px; border: 2px solid var(--primary); border-radius: var(--radius); background: var(--primary-soft); }
+.badge-assigned.compact { border-width: 1px; padding: 10px 14px; justify-content: space-between; }
+.badge-assigned p { margin: 0; }
+.badge-assigned-label { font-weight: 600; }
+.badge-assigned-number { font-size: 2.6rem; font-weight: 800; letter-spacing: 0.04em; line-height: 1.1; }
+.badge-number-input { font-size: 1.2rem; max-width: 220px; }
+.free-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.free-badges .chip { padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text); cursor: pointer; }
+.clearance-ask { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 14px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
+.message.warn { background: var(--warn-soft); border-color: var(--warn); }
+.checkin-done { text-align: center; padding: 30px 10px; font-size: 1.1rem; }
+.checkin-done .tick { font-size: 3rem; color: var(--success); line-height: 1; }
+
+/* --- check-ins waiting on the desk: bright, so they aren't missed --- */
+.badge-alerts-head { font-size: 0.95rem; color: #7c2d12; }
+.badge-alert.stage-id, .badge-alert.stage-badge { border-left: 6px solid #f97316; }
+.checkin-row.stage-id .dash-row, .checkin-row.stage-badge .dash-row { background: #fff7ed; border-left: 4px solid #f97316; }
+:root[data-theme="dark"] .checkin-row.stage-id .dash-row, :root[data-theme="dark"] .checkin-row.stage-badge .dash-row { background: #3a2412; }
+:root[data-theme="dark"] .badge-alerts-head { color: #fdba74; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .checkin-row.stage-id .dash-row, :root:not([data-theme="light"]) .checkin-row.stage-badge .dash-row { background: #3a2412; }
+  :root:not([data-theme="light"]) .badge-alerts-head { color: #fdba74; }
+}

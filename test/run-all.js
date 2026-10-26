@@ -12,6 +12,7 @@ const SUITES = [
   "api.test.js",
   "badges.test.js",
   "events.test.js",
+  "checkin.test.js",
   "clearance.test.js",
   "templates.test.js",
   "import.test.js",
