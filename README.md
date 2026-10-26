@@ -74,7 +74,10 @@ The design and decisions are in [PLAN.md](PLAN.md).
   The key is kept outside the data directory.
 - **Sign-in** carried over from Equipment Checkout: local accounts with password, authenticator
   code and passkeys, plus Microsoft Entra ID. App roles in Entra match role names (`Manager`,
-  `FrontDesk`, ...); every one that matches is given.
+  `FrontDesk`, ...); every one that matches is given. Once Microsoft sign-in is set up and
+  ready, the sign-in page shows its button alone, with local accounts and passkeys folded away
+  behind **Sign in with a local account**; a browser that last signed in with a local account
+  opens with that form showing. Without Microsoft sign-in, the local form is all there is.
 - **Several roles on one account.** Under Settings > Users, tick any number of roles for an
   account. It can do whatever any of them can: the highest level of each area (directory,
   visitors, badges, facilities), and every field that any of its roles sees in the field access

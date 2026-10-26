@@ -345,13 +345,17 @@
           <svg viewBox="0 0 21 21" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#f25022" /><rect x="11" y="1" width="9" height="9" fill="#7fba00" /><rect x="1" y="11" width="9" height="9" fill="#00a4ef" /><rect x="11" y="11" width="9" height="9" fill="#ffb900" /></svg>
           <span id="entra-label">Sign in with Microsoft</span>
         </a>
-        <div id="or-divider" class="divider" hidden><span>or with a local account</span></div>
-        <form id="login-form" class="stack">
-          <label>Username <input name="username" autocomplete="username webauthn" required /></label>
-          <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
-          <button type="submit" class="primary big">Sign in</button>
-        </form>
-        <button type="button" id="passkey-btn" class="secondary full" hidden>Sign in with a passkey</button>
+        <!-- With Microsoft sign-in set up, local accounts fold away behind this link (02-auth.js). -->
+        <button type="button" id="local-toggle" class="link-btn local-toggle" aria-expanded="false" aria-controls="local-login" hidden>Sign in with a local account</button>
+        <div id="local-login">
+          <div id="or-divider" class="divider" hidden><span>or with a local account</span></div>
+          <form id="login-form" class="stack">
+            <label>Username <input name="username" autocomplete="username webauthn" required /></label>
+            <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+            <button type="submit" class="primary big">Sign in</button>
+          </form>
+          <button type="button" id="passkey-btn" class="secondary full" hidden>Sign in with a passkey</button>
+        </div>
       </div>
 
       <form id="mfa-form" class="stack" hidden>

@@ -4,6 +4,39 @@
 let pendingToken = null;
 let entraInfo = { enabled: false };
 
+// With Microsoft sign-in ready, it is the sign-in card's one button and local accounts (and
+// passkeys) fold away behind a link, unless this browser last signed in with a local account.
+// Without it, the local form is all there is and is always open.
+const LAST_SIGNIN_KEY = "ivm.lastSignIn";
+let localOpen = null; // null: not decided yet for this sign-in card
+
+function lastSignIn() {
+  try {
+    return localStorage.getItem(LAST_SIGNIN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function rememberSignIn(how) {
+  try {
+    localStorage.setItem(LAST_SIGNIN_KEY, how);
+  } catch {
+    // A convenience only.
+  }
+}
+
+/** Shows or folds away the local sign-in (always shown without Microsoft sign-in). */
+function showLocalLogin(open) {
+  localOpen = open;
+  const folded = entraInfo.enabled && !open;
+  $("local-login").hidden = folded;
+  $("local-toggle").hidden = !folded;
+  $("local-toggle").setAttribute("aria-expanded", String(!folded));
+  $("or-divider").hidden = !entraInfo.enabled;
+  $("entra-btn").classList.toggle("prominent", folded);
+}
+
 function authStep(step) {
   $("setup-form").hidden = step !== "setup";
   $("login-block").hidden = step !== "login";
@@ -12,13 +45,21 @@ function authStep(step) {
   $("auth-title").textContent = step === "setup" ? "Create the first administrator" : step === "mfa" || step === "recovery" ? "Two-factor sign-in" : "Sign in";
   if (step === "login") {
     $("entra-btn").hidden = !entraInfo.enabled;
-    $("or-divider").hidden = !entraInfo.enabled;
     $("entra-label").textContent = entraInfo.label || "Sign in with Microsoft";
     $("passkey-btn").hidden = Boolean(passkeyBlocker());
+    showLocalLogin(localOpen ?? lastSignIn() === "local");
   }
-  const first = { setup: "#setup-form input", login: "#login-form input", mfa: "#mfa-form input", recovery: "#recovery-form input" }[step];
+  const folded = step === "login" && $("local-login").hidden;
+  const first = folded ? "#entra-btn" : { setup: "#setup-form input", login: "#login-form input", mfa: "#mfa-form input", recovery: "#recovery-form input" }[step];
   if (first && !matchMedia("(pointer: coarse)").matches) setTimeout(() => document.querySelector(first)?.focus(), 0);
 }
+
+$("local-toggle").addEventListener("click", () => {
+  showLocalLogin(true);
+  $("login-form").username.focus();
+});
+
+$("entra-btn").addEventListener("click", () => rememberSignIn("entra"));
 
 function authMessage(message) {
   $("auth-message").textContent = message || "";
@@ -28,6 +69,7 @@ function authMessage(message) {
 /** Covers the app with the sign-in card. */
 function showAuth(message = "", step = "login") {
   state.me = null;
+  localOpen = null;
   state.csrfToken = null;
   $("main").hidden = true;
   $("nav").hidden = true;
@@ -39,8 +81,12 @@ function showAuth(message = "", step = "login") {
   authStep(step);
 }
 
-/** Signed in: remember who, then hand over to the app. */
-async function signedIn(user, csrfToken) {
+/**
+ * Signed in: remember who, then hand over to the app. Signed in here (a local account or a
+ * passkey) rather than resuming a session: this browser opens the local sign-in next time.
+ */
+async function signedIn(user, csrfToken, { resumed = false } = {}) {
+  if (!resumed) rememberSignIn("local");
   state.me = user;
   state.csrfToken = csrfToken;
   pendingToken = null;
@@ -200,5 +246,5 @@ async function checkSession() {
   applyBranding(me.branding);
   if (me.setupRequired) return showAuth("", "setup");
   if (!me.authenticated) return showAuth(entraError || "");
-  await signedIn(me.user, me.csrfToken);
+  await signedIn(me.user, me.csrfToken, { resumed: true });
 }
