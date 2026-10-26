@@ -12,7 +12,7 @@ const siteParams = (extra = {}) => new URLSearchParams({ ...siteQuery(), ...extr
 /** A clickable row: a main line, a muted second line, and something on the right. */
 function dashRow({ href = null, onclick = null, main, sub = null, right = null }) {
   const content = [h("span", { class: "dash-row-main" }, h("span", { class: "dash-row-title" }, main), sub ? h("span", { class: "muted small-text", text: sub }) : null), right ? h("span", { class: "dash-row-right" }, right) : null];
-  return href ? h("a", { class: "dash-row", href }, content) : h("div", { class: "dash-row", onclick }, content);
+  return href ? h("a", { class: "dash-row", href }, content) : h("div", { class: onclick ? "dash-row is-clickable" : "dash-row", onclick }, content);
 }
 
 function dashList(items, empty, { more = null } = {}) {
@@ -46,11 +46,27 @@ const DASHBOARD_MODULES = {
     href: "#here",
     async load() {
       const { visits, total } = await api(`/api/visits?${siteParams({ status: "open", limit: "50" })}`);
+      // A row with a button can't be a link: the name is, and the rest of the row opens it too.
+      const open = (v) => { location.hash = `#visitor/${v.visitorId}`; };
+      const checkOut = async (e, v) => {
+        e.stopPropagation();
+        e.target.disabled = true;
+        try {
+          await api(`/api/visits/${v.id}/checkout`, { method: "POST", body: {} });
+          toast(`${visitorName(v.visitor)} checked out.`);
+          loadDashboard();
+          refreshCounts();
+        } catch (error) {
+          toast(error.message, "error");
+          e.target.disabled = false;
+        }
+      };
       return { count: total, body: dashList(visits.map((v) => dashRow({
-        href: `#visitor/${v.visitorId}`,
-        main: `${v.visitor.firstName} ${v.visitor.lastName}`,
+        onclick: () => open(v),
+        main: h("a", { href: `#visitor/${v.visitorId}`, text: visitorName(v.visitor), onclick: (e) => e.stopPropagation() }),
         sub: [v.companyName, v.hostName ? `host ${v.hostName}` : null, multiSite() && !state.site ? v.siteName : null].filter(Boolean).join(" · "),
-        right: h("span", { class: "muted small-text", text: fmtDateTime(v.checkedInAt) })
+        right: h("span", { class: "btn-row" }, h("span", { class: "muted small-text", text: fmtDateTime(v.checkedInAt) }),
+          canEditVisitors() ? h("button", { type: "button", class: "secondary small", text: "Check out", onclick: (e) => checkOut(e, v) }) : null)
       })), "Nobody is checked in right now.", { more: "#here" }) };
     }
   },
