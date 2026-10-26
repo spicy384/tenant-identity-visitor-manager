@@ -116,7 +116,9 @@ async function main() {
     && annVisit.checkinStage === "badge" && annVisit.idType === "Driver's license" && annVisit.idVerifiedBy === "desk" && annVisit.visitorType === "Guest" && annVisit.purpose === "Quarterly review", JSON.stringify(r.data));
   check("desk: and in the audit log, which ID but no number", (await admin.get("/api/audit?action=visit.checkin")).data.entries.some((e) => e.target === "Ann Arrival" && /ID checked \(Driver's license\)/.test(e.detail)));
   check("desk: on the list waiting for a badge", (await desk.get("/api/visits/badge-needed")).data.visits.some((v) => v.visitId === annVisit.id && v.stage === "badge"));
-  check("id: no second ID check", (await desk.post(`/api/visits/${annVisit.id}/verify-id`, { idType: "Passport" })).status === 409);
+  r = await desk.post(`/api/visits/${annVisit.id}/verify-id`, { idType: "Passport", purpose: "Quarterly review and lunch" });
+  check("id: back a step before the badge, the ID is checked again and the purpose changed", r.status === 200 && r.data.visit.checkinStage === "badge" && r.data.visit.idType === "Passport" && r.data.visit.purpose === "Quarterly review and lunch", JSON.stringify(r.data));
+  check("id: the audit log says it was checked again", (await admin.get("/api/audit?action=visit.id_checked")).data.entries.some((e) => e.target === "Ann Arrival" && e.detail.includes("checked again (was Driver's license)")));
 
   // A service technician: the point of contact can be anyone in the directory, not only hosts.
   r = await desk.post("/api/checkins", { visitorId: tech.id, siteId: site.id, hostId: facilities.id, purpose: "Lift service", idType: "State ID" });
@@ -141,6 +143,7 @@ async function main() {
     && (await desk.get(`/api/visits?status=open`)).data.visits.find((v) => v.id === annVisit.id).checkinStage === "done"
     && !(await desk.get("/api/visits/badge-needed")).data.visits.some((v) => v.visitId === annVisit.id));
   check("badge: the visit is done, so there's no more badge step for it", (await desk.post(`/api/visits/${annVisit.id}/badge`, { badgeId: v2.id })).status === 409 && (await desk.get(`/api/visits/${annVisit.id}/badge-plan`)).status === 409);
+  check("id: once the badge is given, the check-in stands", (await desk.post(`/api/visits/${annVisit.id}/verify-id`, { idType: "CAC" })).status === 409);
   check("badge: a badge that's out is refused", (await desk.post(`/api/visits/${techVisit.id}/badge`, { badgeId: v1.id })).status === 409);
 
   // --- a badge reserved for a regular -----------------------------------------------------------
@@ -210,6 +213,24 @@ async function main() {
   r = await desk.post("/api/checkins", { visitorId: tech.id, siteId: site.id, hostId: facilities.id, purpose: "Inspection", idType: "CAC" });
   check("no badge: marked, the check-in is done", (await desk.post(`/api/visits/${r.data.visit.id}/badge-not-needed`)).status === 200
     && (await desk.get(`/api/visits?status=open`)).data.visits.find((v) => v.id === r.data.visit.id).checkinStage === "done");
+
+  // --- the badge image: uncleared until Security validates their clearance ---------------------------
+  const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const secret = (await admin.get("/api/clearance")).data.levels.find((l) => l.name === "Secret");
+  const clearedClass = classifications.find((c) => c.name === "Cleared");
+  const unclearedImage = (await admin.put("/api/badge-templates/0/visitor", { dataUrl: PNG })).data.template.ref;
+  const secretImage = (await admin.put(`/api/badge-templates/${secret.id}/visitor`, { dataUrl: PNG })).data.template.ref;
+  await security.post("/api/badges", { number: "VC-1", type: "visitor", classificationId: clearedClass.id, clearanceLevelId: secret.id });
+  // The only uncleared visitor badge left is retired: just the cleared one is in stock.
+  await security.put(`/api/badges/${v2.id}`, { status: "retired" });
+  const val = (await desk.post("/api/visitors", { firstName: "Val", lastName: "Idated", organisation: "Clear Co", citizenship: "US" })).data.visitor;
+  const valVisit = (await desk.post("/api/checkins", { visitorId: val.id, siteId: site.id, hostId: host.id, purpose: "Briefing", idType: "CAC" })).data.visit;
+  r = await desk.get(`/api/visits/${valVisit.id}/badge-plan`);
+  check("image: not validated, the uncleared visitor badge is shown, even with none free", r.data.uncleared === true && r.data.suggested === unclearedImage && r.data.available.length === 0, JSON.stringify(r.data));
+  check("image: the same on their visitor page", (await desk.get(`/api/badge-holders/visitor/${val.id}`)).data.suggested === unclearedImage);
+  await security.post("/api/clearance/validate", { kind: "visitor", id: val.id, levelId: secret.id, granted: "2025-01-01" });
+  r = await desk.get(`/api/visits/${valVisit.id}/badge-plan`);
+  check("image: once Security validates it, the badge their clearance allows", r.data.uncleared === false && r.data.suggested === secretImage && r.data.available.map((b) => b.number).join() === "VC-1", JSON.stringify(r.data));
 }
 
 main()

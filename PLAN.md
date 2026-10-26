@@ -589,6 +589,14 @@ visits wait at the ID step. The banner and the Home module (badgeNeeded, now "Co
 check-in") list stage id and badge visits, brightly, and open the wizard (23-checkin.js) at
 the right step. test/checkin.test.js (16 suites).
 
+Same day, two follow-ups from the user: a visitor whose clearance doesn't count (no level, not
+validated, due a re-check, expired; clearance.effectiveLevel) always gets the uncleared visitor
+image at the badge step and on their badge section, whatever is free (suggestedFor in
+badge-routes.js; plan.uncleared drives a note), a blocked visitor none; and the wizard can go
+back from Badge to ID and Confirm (Back, and the passed steps in the step bar) until the badge
+is given: verify-id now accepts a visit at stage badge too, re-recording the ID and any change
+of contact or purpose (audited as checked again), and refuses once the stage is done.
+
 ## Tests
 
 - Field projection: every role × every field type, with and without site limits, on records,

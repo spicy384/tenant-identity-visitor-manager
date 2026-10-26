@@ -316,19 +316,34 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const atSite = siteParam(req, req.query.site);
     const validThere = (b) => !atSite || !b.sites.length || b.sites.some((s) => s.id === atSite);
     const available = canGive ? badges.availableFor(kind, id, { sites: req.ctx.sites }).filter(validThere) : [];
-    // The image of the highest badge on offer that they may hold, shown large to whoever gives
-    // badges out: the badge to hand over (uncleared ones rank lowest).
-    const rank = new Map(clearance.levels().map((l) => [l.id, l.rank]));
-    const best = available.reduce((top, b) => (!top || (rank.get(b.clearanceLevelId) ?? -1) > (rank.get(top.clearanceLevelId) ?? -1) ? b : top), null);
+    const best = suggestedFor(kind, id, available);
     res.json({
       current: held.filter((a) => !a.returnedAt),
       past: held.filter((a) => a.returnedAt),
       available: available.map(short),
       // Temporary badges they could borrow for the day: only someone holding a badge of their own.
       temporary: canGive && kind === "person" ? badges.availableFor(kind, id, { sites: req.ctx.sites, temporary: true }).map(short) : [],
-      suggested: best ? templates.refFor(best.type, best.clearanceLevelId) : null
+      suggested: best.ref,
+      uncleared: best.uncleared
     });
   });
+
+  /**
+   * The image of the badge to hand over, shown large to whoever gives badges out. A visitor
+   * whose clearance doesn't count (none on record, not validated by Security, due a re-check,
+   * or expired) gets the uncleared visitor badge, whatever is free. Otherwise the highest badge
+   * on offer they may hold (uncleared ones rank lowest). A blocked visitor gets none.
+   * { ref, uncleared }.
+   */
+  function suggestedFor(kind, id, available) {
+    const h = kind === "visitor" ? badges.holder(kind, id) : null;
+    // A blocked visitor gets no badge at all.
+    if (h?.blocked) return { ref: null, uncleared: false };
+    if (h && !clearance.effectiveLevel(h)) return { ref: templates.refFor("visitor", null), uncleared: true };
+    const rank = new Map(clearance.levels().map((l) => [l.id, l.rank]));
+    const best = available.reduce((top, b) => (!top || (rank.get(b.clearanceLevelId) ?? -1) > (rank.get(top.clearanceLevelId) ?? -1) ? b : top), null);
+    return { ref: best ? templates.refFor(best.type, best.clearanceLevelId) : null, uncleared: false };
+  }
 
   // --- the badge step of checking a visitor in ---------------------------------------------------
 
@@ -373,14 +388,15 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     }
     const holding = badges.forHolder("visitor", visitor.id).filter((a) => !a.returnedAt).map((a) => ({ id: a.badgeId, number: a.badgeNumber }));
     const available = badges.availableFor("visitor", visitor.id, { sites: req.ctx.sites }).filter((x) => validAtSite(x, visit.siteId));
-    const rank = new Map(clearance.levels().map((l) => [l.id, l.rank]));
-    const best = available.reduce((top, x) => (!top || (rank.get(x.clearanceLevelId) ?? -1) > (rank.get(top.clearanceLevelId) ?? -1) ? x : top), null);
+    const best = suggestedFor("visitor", visitor.id, available);
     res.json({
       visit: { id: visit.id, siteId: visit.siteId, siteName: visit.siteName, stage: visit.checkinStage },
       assigned,
       holding,
       available: available.map(short),
-      suggested: best ? templates.refFor(best.type, best.clearanceLevelId) : null
+      suggested: best.ref,
+      // Their clearance doesn't count yet: an uncleared visitor badge is the one to give.
+      uncleared: best.uncleared
     });
   });
 

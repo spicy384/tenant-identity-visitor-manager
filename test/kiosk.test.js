@@ -248,7 +248,7 @@ async function main() {
   check("id: and which ID it was", (await riverDesk.post(`/api/visits/${kay.visitId}/verify-id`, { idType: "Library card", hostId: riverHost.id })).status === 400);
   r = await riverDesk.post(`/api/visits/${kay.visitId}/verify-id`, { idType: "Passport", hostId: riverHost.id });
   check("id: checked, the visit goes on to its badge, with the contact filled in", r.status === 200 && r.data.visit.checkinStage === "badge" && r.data.visit.idType === "Passport" && r.data.visit.idVerifiedBy === "riverdesk" && r.data.visit.hostName === "Rae River", JSON.stringify(r.data));
-  check("id: once only", (await riverDesk.post(`/api/visits/${kay.visitId}/verify-id`, { idType: "Passport" })).status === 409);
+  check("id: can be checked again before the badge", (await riverDesk.post(`/api/visits/${kay.visitId}/verify-id`, { idType: "State ID" })).data.visit?.idType === "State ID");
   check("badge banner: staff at another site can't mark them", (await harbourDesk.post(`/api/visits/${kay.visitId}/badge-not-needed`)).status === 404);
   check("badge banner: nor can someone who doesn't give badges out", (await viewer.post(`/api/visits/${kay.visitId}/badge-not-needed`)).status === 403);
   r = await riverDesk.post(`/api/visits/${kay.visitId}/badge-not-needed`);

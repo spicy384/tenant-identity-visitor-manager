@@ -515,7 +515,8 @@ function createVisitors({ db, fields }) {
     if (!ID_TYPES.includes(idType)) throw fail(400, `Choose the ID: ${ID_TYPES.join(", ")}.`);
     const visit = getVisit(visitId, { sites });
     if (!visit || visit.checkedOutAt) throw fail(404, "No such visit in the building.");
-    if (visit.checkinStage !== "id") throw fail(409, `${visit.visitor.firstName} ${visit.visitor.lastName}'s ID has been checked already.`);
+    // Checked again (the desk went back a step) until their badge is given; then it stands.
+    if (!["id", "badge"].includes(visit.checkinStage)) throw fail(409, `${visit.visitor.firstName} ${visit.visitor.lastName}'s check-in is finished.`);
     raw.prepare("UPDATE visits SET checkin_stage = 'badge', id_type = ?, id_verified_at = ?, id_verified_by = ? WHERE id = ?").run(idType, now, by, visitId);
     return getVisit(visitId);
   }

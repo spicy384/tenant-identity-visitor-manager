@@ -195,7 +195,14 @@ function checkInWizard(start = {}) {
     };
     function page(step, title, content, buttons) {
       const at = CHECKIN_STEPS.findIndex((s) => s.key === step);
-      stepper.replaceChildren(...CHECKIN_STEPS.map((s, i) => h("li", { class: i < at ? "done" : i === at ? "current" : "", "aria-current": i === at ? "step" : null, text: s.label })));
+      // Confirm and ID, once passed, can be gone back to until the badge is given.
+      const back = { details: () => detailsStep(), id: () => idStep() };
+      stepper.replaceChildren(...CHECKIN_STEPS.map((s, i) => {
+        const label = i < at && back[s.key] && w.visitor && w.visit?.checkinStage !== "done"
+          ? h("button", { type: "button", class: "wizard-step-link", title: `Back to ${s.label}`, onclick: back[s.key] }, s.label)
+          : s.label;
+        return h("li", { class: i < at ? "done" : i === at ? "current" : "", "aria-current": i === at ? "step" : null }, label);
+      }));
       showError(null);
       body.replaceChildren(h("h4", { class: "wizard-title", text: title }), content);
       footer.replaceChildren(...buttons.filter(Boolean));
@@ -363,6 +370,8 @@ function checkInWizard(start = {}) {
       const idName = `id-${Math.random().toString(36).slice(2, 8)}`;
       const types = (state.config.checkin?.idTypes || []).map((t) => {
         const input = h("input", { type: "radio", name: idName, value: t });
+        // Back here from the badge step: the ID recorded, to keep or change.
+        input.checked = w.visit?.idType === t;
         return h("label", { class: "id-choice" }, input, h("span", { text: t }));
       });
       const match = h("input", { type: "checkbox" });
@@ -383,7 +392,8 @@ function checkInWizard(start = {}) {
         if (!idType) throw new Error("Choose the ID they showed.");
         if (!match.checked) throw new Error(`Tick the box once the ID matches ${name()}. If it doesn't, don't check them in.`);
         const visit = { hostId: w.hostId, companyId: w.companyId, purpose: w.purpose };
-        if (w.visit && w.visit.checkinStage === "id") {
+        // A visit under way (from a kiosk, or back here from the badge step): checked on that visit.
+        if (w.visit && ["id", "badge"].includes(w.visit.checkinStage)) {
           w.visit = (await api(`/api/visits/${w.visit.id}/verify-id`, { method: "POST", body: { idType, ...visit } })).visit;
         } else {
           const r = await api("/api/checkins", { method: "POST", body: { visitorId: v.id, siteId: Number(w.siteId), idType, overrideBlock: w.overrideBlock, ...visit } });
@@ -432,9 +442,10 @@ function checkInWizard(start = {}) {
       const entry = h("div", { class: "stack badge-entry" },
         h("div", { class: "badge-give" }, suggestedBadge(plan.suggested),
           h("div", { class: "stack" },
+            plan.uncleared ? h("p", { class: "message warn", text: `${name()}'s clearance hasn't been validated, so give them an uncleared visitor badge.` }) : null,
             h("p", {}, plan.available.length
-              ? [`Give them a visitor badge${kinds.length ? ` (${kinds.join(" or ")})` : ""}, and enter its number.`, h("span", { class: "muted small-text", text: ` ${plan.available.length} free${multiSite() ? ` at ${plan.visit.siteName}` : ""}.` })]
-              : h("span", { class: "message error", text: `No visitor badge is free${multiSite() ? ` at ${plan.visit.siteName}` : ""} that ${name()} may hold.` })),
+              ? [`Give them ${plan.uncleared ? "an uncleared" : "a"} visitor badge${!plan.uncleared && kinds.length ? ` (${kinds.join(" or ")})` : ""}, and enter its number.`, h("span", { class: "muted small-text", text: ` ${plan.available.length} free${multiSite() ? ` at ${plan.visit.siteName}` : ""}.` })]
+              : h("span", { class: "message error", text: `No ${plan.uncleared ? "uncleared " : ""}visitor badge is free${multiSite() ? ` at ${plan.visit.siteName}` : ""} that ${name()} may hold.` })),
             h("div", { class: "btn-row" }, number, issue),
             plan.available.length ? h("button", { type: "button", class: "link-btn small-text", text: "Show the free badges", onclick: (e) => { free.hidden = !free.hidden; e.target.textContent = free.hidden ? "Show the free badges" : "Hide the free badges"; } }) : null,
             free)));
@@ -473,6 +484,7 @@ function checkInWizard(start = {}) {
         }
       }
       page("badge", `${name()}'s visitor badge`, content, [
+        btn("Back", "secondary", idStep),
         btn("Close", "secondary", finish),
         btn("No badge needed", "secondary", async () => {
           if (!(await confirmDialog(`${name()} doesn't need a badge for this visit (escorted, say)?`, { title: "No badge needed", confirmLabel: "No badge needed" }))) return;
@@ -485,6 +497,8 @@ function checkInWizard(start = {}) {
     }
 
     function doneStep(text) {
+      // Finished: no going back a step any more.
+      if (w.visit) w.visit = { ...w.visit, checkinStage: "done" };
       page("badge", "Done", h("div", { class: "checkin-done" },
         h("div", { class: "tick", "aria-hidden": "true" }, "✓"),
         h("p", { text })),

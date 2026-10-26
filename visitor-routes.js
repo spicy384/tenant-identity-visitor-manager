@@ -282,14 +282,15 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
 
   /**
    * The desk has checked the ID of someone who checked in at a kiosk: { idType, and hostId,
-   * companyId, purpose to fill in or change }. The visit goes on to its badge.
+   * companyId, purpose to fill in or change }. The visit goes on to its badge. Until the badge
+   * is given the desk can come back and check it again, or change the contact or purpose.
    */
   router.post("/api/visits/:id/verify-id", editVisitors, (req, res) => {
     const body = req.body || {};
     const before = visitors.getVisit(positiveInt(req.params.id), { sites: req.ctx.sites });
     if (!before || before.checkedOutAt) throw fail(404, "No such visit in the building.");
     const visitor = visitors.get(before.visitor.id);
-    if (before.checkinStage !== "id") throw fail(409, `${fullName(visitor)}'s ID has been checked already.`);
+    if (!["id", "badge"].includes(before.checkinStage)) throw fail(409, `${fullName(visitor)}'s check-in is finished.`);
     const missing = missingForCheckin(visitor);
     if (missing) throw fail(400, missing);
     if (!ID_TYPES.includes(body.idType)) throw fail(400, "Check their ID, and say which it was.");
@@ -298,7 +299,7 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
     if (!String(purpose || "").trim()) throw fail(400, "Say what the visit is for.");
     if (contact.hostId !== before.hostId || contact.companyId !== before.companyId || purpose !== before.purpose) visitors.updateVisit(before.id, { ...contact, purpose });
     const visit = visitors.verifyId(before.id, { idType: body.idType, by: staffName(req) });
-    auditFrom(req, "visit.id_checked", fullName(visitor), `${visit.siteName}: ${body.idType}`);
+    auditFrom(req, "visit.id_checked", fullName(visitor), `${visit.siteName}: ${body.idType}${before.checkinStage === "badge" ? `; checked again (was ${before.idType})` : ""}`);
     res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0] });
   });
 

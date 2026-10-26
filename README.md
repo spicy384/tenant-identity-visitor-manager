@@ -128,8 +128,14 @@ The design and decisions are in [PLAN.md](PLAN.md).
      for a regular visitor) is shown large, with **Badge handed over** and **Can't find it?
      Issue a different badge**. Otherwise the desk enters the number of the badge they hand
      over: it must be an active visitor badge, valid at the site, that the visitor may hold.
-     A visitor whose clearance hasn't been validated can be sent to Security from here
-     (**Request clearance validation**). **No badge needed** (audited) finishes without one.
+     A visitor whose clearance doesn't count (not validated by Security, due a re-check, or
+     expired) is shown the uncleared visitor badge image, with a note saying so, and can be
+     sent to Security from here (**Request clearance validation**). **No badge needed**
+     (audited) finishes without one.
+
+  Until the badge is given, **Back** (or the Confirm and ID steps at the top) goes back to
+  change the point of contact or purpose, or to check the ID again; the audit log notes an ID
+  checked again and what it was before. Once the badge is given the check-in stands.
 - **Complete check-in**: a visitor who checks themselves in at a kiosk is told to show their ID
   at the desk. A bright banner at the top of every page, and the Complete check-in module on
   Home, show them to staff who give badges out at that site (and the site chosen in the

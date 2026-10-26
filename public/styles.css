@@ -771,3 +771,4 @@ input[type="color"] { width: 64px; min-height: 36px; padding: 2px; cursor: point
   :root:not([data-theme="light"]) .checkin-row.stage-id .dash-row, :root:not([data-theme="light"]) .checkin-row.stage-badge .dash-row { background: #3a2412; }
   :root:not([data-theme="light"]) .badge-alerts-head { color: #fdba74; }
 }
+.wizard-step-link { background: none; border: 0; padding: 0; font: inherit; color: var(--primary); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
