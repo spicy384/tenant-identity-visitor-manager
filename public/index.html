@@ -11,6 +11,8 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+  <!-- The header and the page bar float over the page as one translucent layer (styles.css). -->
+  <div class="chrome" id="chrome">
   <header class="app-header">
     <a class="brand" href="#home" title="Home">
       <span class="brand-mark" aria-hidden="true">
@@ -44,6 +46,7 @@
   </header>
 
   <nav id="subnav" class="subnav" aria-label="Pages" hidden></nav>
+  </div>
 
   <main id="main" hidden>
     <!-- Visitors whose check-in the desk hasn't finished: their ID, then a badge (18-badge-alerts.js) -->
@@ -450,6 +453,7 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite" popover="manual"></div>
 
+  <script src="/js/00-motion.js"></script>
   <script src="/js/01-core.js"></script>
   <script src="/js/02-auth.js"></script>
   <script src="/js/03-records.js"></script>

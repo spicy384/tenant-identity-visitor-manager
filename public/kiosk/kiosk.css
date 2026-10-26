@@ -14,6 +14,9 @@
   --error: #b42318;
   --radius: 18px;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* A critically damped spring (damping 1, response 0.35 s): settles without overshoot. */
+  --spring: linear(0, 0.0294, 0.0993, 0.1892, 0.286, 0.3816, 0.4714, 0.5529, 0.6251, 0.6879, 0.7417, 0.7874, 0.8258, 0.8579, 0.8844, 0.9063, 0.9243, 0.939, 0.9509, 0.9606, 0.9684, 0.9748, 0.9799, 0.9839, 0.9872, 0.9898, 0.9919, 0.9936, 0.9949, 0.996, 0.9968, 0.9975, 1);
+  --spring-time: 470ms;
 }
 
 * { box-sizing: border-box; }
@@ -46,9 +49,14 @@ body {
   align-items: center;
   text-align: center;
   gap: 22px;
-  animation: rise 0.28s ease-out;
+  animation: rise var(--spring-time) var(--spring);
 }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+/* Onward comes in from the right, back from the left (kiosk.js sets data-go). */
+body[data-go="on"] .screen { animation-name: from-right; }
+body[data-go="back"] .screen { animation-name: from-left; }
+@keyframes from-right { from { opacity: 0; transform: translateX(36px); } to { opacity: 1; transform: none; } }
+@keyframes from-left { from { opacity: 0; transform: translateX(-36px); } to { opacity: 1; transform: none; } }
 
 h1 { margin: 0; font-size: 2.1rem; font-weight: 650; letter-spacing: -0.02em; line-height: 1.15; }
 .lead { margin: -8px 0 0; color: var(--muted); font-size: 1.15rem; }
@@ -90,10 +98,10 @@ h1 { margin: 0; font-size: 2.1rem; font-weight: 650; letter-spacing: -0.02em; li
   border-radius: var(--radius);
   border: 1.5px solid transparent;
   cursor: pointer;
-  transition: transform 0.08s, background 0.15s;
+  transition: transform 90ms cubic-bezier(0.25, 1, 0.5, 1), background-color 150ms, border-color 150ms;
   touch-action: manipulation;
 }
-.btn:active { transform: scale(0.98); }
+.btn:not(:disabled):active { transform: scale(0.97); }
 .btn:disabled { opacity: 0.55; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); }
 .btn.secondary { background: var(--card); color: var(--ink); border-color: var(--line); }
@@ -123,7 +131,9 @@ h1 { margin: 0; font-size: 2.1rem; font-weight: 650; letter-spacing: -0.02em; li
   border-radius: var(--radius);
   cursor: pointer;
   touch-action: manipulation;
+  transition: transform 90ms cubic-bezier(0.25, 1, 0.5, 1), background-color 150ms, border-color 150ms;
 }
+.choice:active { transform: scale(0.985); }
 .choice strong { font-size: 1.2rem; font-weight: 600; }
 .choice span { color: var(--muted); font-size: 1rem; }
 .choice:active, .choice.selected { border-color: var(--accent); background: var(--accent-soft); }
@@ -138,7 +148,7 @@ h1 { margin: 0; font-size: 2.1rem; font-weight: 650; letter-spacing: -0.02em; li
 .error { min-height: 1.4em; margin: 0; color: var(--error); font-size: 1.05rem; }
 .error:empty { min-height: 0; }
 
-.tick { width: 104px; height: 104px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok); animation: pop 0.35s ease-out; }
+.tick { width: 104px; height: 104px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok); animation: pop var(--spring-time) var(--spring); }
 .tick svg { width: 56px; height: 56px; }
 @keyframes pop { from { transform: scale(0.6); opacity: 0; } to { transform: none; opacity: 1; } }
 
@@ -155,3 +165,15 @@ h1 { margin: 0; font-size: 2.1rem; font-weight: 650; letter-spacing: -0.02em; li
   .logo { max-height: 90px; }
 }
 .choices.two { grid-template-columns: 1fr 1fr; max-height: none; }
+
+/* Asked for less motion: screens fade in, nothing slides or scales. */
+@media (prefers-reduced-motion: reduce) {
+  .screen, body[data-go] .screen { animation: fade 0.2s ease-out; }
+  .tick { animation: fade 0.2s ease-out; }
+  .btn:not(:disabled):active, .choice:active { transform: none; }
+}
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+/* Asked for more contrast: clearer edges. */
+@media (prefers-contrast: more) {
+  :root { --line: #9ca3af; --muted: #4b5563; }
+}

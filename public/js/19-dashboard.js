@@ -299,7 +299,10 @@ function moveModule(index, by) {
   const list = dashboard.draft;
   const [m] = list.splice(index, 1);
   list.splice(index + by, 0, m);
+  // The cards slide to their new places rather than jumping there.
+  const glide = glideFrom($("home-modules").querySelectorAll("[data-module]"), (el) => el.dataset.module);
   renderDashboard();
+  glide($("home-modules").querySelectorAll("[data-module]"));
 }
 
 /** The "add a module" card in edit mode: the modules they may have and haven't added. */

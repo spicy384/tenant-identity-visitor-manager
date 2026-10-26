@@ -36,6 +36,12 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Light or dark.** The moon/sun button in the header switches at once; Account > Appearance
   also offers "Match this device" (the default). The choice is kept with the account, so it
   follows you, and applied before the page draws.
+- **Motion.** Buttons and rows respond the moment they are pressed; dialogs, menus and messages
+  leave the way they came; the header is a translucent layer the page scrolls under. On a
+  phone, dialogs are sheets from the bottom: drag the top down (or flick it) to put one away.
+  The check-in steps and the kiosk screens slide the way the visit is going, and a dragged floor
+  plan glides on when let go. The device's "reduce motion" (fades only), "reduce transparency"
+  (solid surfaces) and "increase contrast" settings are followed.
 
 ## The directory
 
@@ -718,5 +724,7 @@ database in test/fixtures, made by make-access-fixture.ps1), merging and bulk ch
   mouse (touch has larger points to grab, but right-click to remove a point needs the Delete key
   or a mouse there)
 - A large directory: lists are paged, but nothing has been measured beyond a few hundred people
+- The phone sheets' drag on a real phone (tried with pointer events in a desktop browser at
+  phone size)
 - QuickBooks Online against a real company (only a fake QuickBooks), and the CSV and IIF
   exports imported into real QuickBooks Online and Desktop

@@ -166,15 +166,14 @@ function checkInWizard(start = {}) {
     const error = h("p", { class: "message error pre", role: "alert", hidden: true });
     const footer = h("div", { class: "dialog-actions" });
     const dlg = h("dialog", { class: "dialog wide checkin-wizard" },
-      h("div", { class: "dialog-head" }, h("h3", { text: "Check in a visitor" }), h("button", { type: "button", class: "icon-close", "aria-label": "Close", onclick: () => finish() }, "×")),
+      h("div", { class: "dialog-head" }, h("span", { class: "sheet-grabber", "aria-hidden": "true" }), h("h3", { text: "Check in a visitor" }), h("button", { type: "button", class: "icon-close", "aria-label": "Close", onclick: () => finish() }, "×")),
       h("div", { class: "dialog-body" }, stepper, error, body),
       footer);
     let closed = false;
-    function finish() {
+    function finish({ instant = false } = {}) {
       if (closed) return;
       closed = true;
-      dlg.close();
-      dlg.remove();
+      dismissDialog(dlg, { instant: instant === true });
       if (w.changed) {
         refreshCounts();
         loadBadgeAlerts();
@@ -205,8 +204,12 @@ function checkInWizard(start = {}) {
       });
       return b;
     };
+    // The step shown last, so the next one slides in from the side the wizard is going.
+    let shownAt = -1;
     function page(step, title, content, buttons) {
       const at = CHECKIN_STEPS.findIndex((s) => s.key === step);
+      const dir = shownAt < 0 ? 0 : Math.sign(at - shownAt);
+      shownAt = at;
       // Confirm and ID, once passed, can be gone back to until the badge is given.
       const back = { details: () => detailsStep(), id: () => idStep() };
       stepper.replaceChildren(...CHECKIN_STEPS.map((s, i) => {
@@ -217,6 +220,7 @@ function checkInWizard(start = {}) {
       }));
       showError(null);
       body.replaceChildren(h("h4", { class: "wizard-title", text: title }), content);
+      slideIn(body, dir);
       footer.replaceChildren(...buttons.filter(Boolean));
       dlg.querySelector(".dialog-body").scrollTop = 0;
       const first = body.querySelector("input:not([type=radio]):not([type=checkbox]):not([hidden]), select");
@@ -525,6 +529,7 @@ function checkInWizard(start = {}) {
 
     document.body.append(dlg);
     dlg.showModal();
+    sheetGesture(dlg, () => finish({ instant: true }));
     (async () => {
       try {
         if (w.visit) {

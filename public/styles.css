@@ -626,9 +626,15 @@ tr.is-picked td { background: var(--primary-soft); }
 @media (max-width: 960px) { .floor-layout { grid-template-columns: 1fr; } }
 .plan-viewer { position: relative; min-width: 0; }
 .plan-pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px; box-shadow: var(--shadow-sm); overflow: auto; max-height: calc(100vh - 210px); overscroll-behavior: contain; }
-.plan-pane.can-pan { cursor: grab; }
-.plan-pane.is-panning, .space-pan .plan-pane, .space-pan .plan-layer.is-drawing { cursor: grabbing; }
-.plan-pane.is-panning .plan-shape { cursor: grabbing; }
+/* The hands on a plan are drawn here, a dark line with a white halo: the system's white hand can
+   all but vanish over a plan's white background. (Shapes after the Lucide "hand" and "grab" icons.) */
+:root {
+  --cursor-grab: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='-2 -2 28 28' fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2 M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2 M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8 M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15' stroke='white' stroke-width='5'/%3E%3Cpath d='M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2 M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2 M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8 M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15' stroke='%23111827' stroke-width='2'/%3E%3C/svg%3E") 16 16, grab;
+  --cursor-grabbing: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='-2 -2 28 28' fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 11.5V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1.4 M14 10V8a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2 M10 9.9V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v5 M6 14a2 2 0 0 0-2-2a2 2 0 0 0-2 2 M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8 2 2 0 1 1 4 0' stroke='white' stroke-width='5'/%3E%3Cpath d='M18 11.5V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1.4 M14 10V8a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2 M10 9.9V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v5 M6 14a2 2 0 0 0-2-2a2 2 0 0 0-2 2 M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8 2 2 0 1 1 4 0' stroke='%23111827' stroke-width='2'/%3E%3C/svg%3E") 16 16, grabbing;
+}
+.plan-pane.can-pan { cursor: var(--cursor-grab); }
+.plan-pane.is-panning, .space-pan .plan-pane, .space-pan .plan-layer.is-drawing { cursor: var(--cursor-grabbing); }
+.plan-pane.is-panning .plan-shape { cursor: var(--cursor-grabbing); }
 .plan-zoom { position: absolute; top: 18px; right: 18px; display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; box-shadow: var(--shadow-md); z-index: 2; }
 .plan-zoom button { border: 0; border-radius: 0; background: var(--surface); color: var(--text); min-width: 34px; min-height: 32px; padding: 2px 8px; font-weight: 700; }
 .plan-zoom button:hover { background: var(--surface-3); }
@@ -670,7 +676,7 @@ polyline.plan-draft { fill: none; }
 .plan-label-who { font-size: 0.68rem; text-shadow: 0 0 3px #fff, 0 0 3px #fff; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-scale-label { position: absolute; transform: translate(-50%, -130%); padding: 1px 6px; border-radius: 999px; background: #c026d3; color: #fff; font-size: 0.72rem; font-weight: 700; white-space: nowrap; }
 .plan-vertex, .plan-mid { position: absolute; transform: translate(-50%, -50%); pointer-events: auto; box-sizing: border-box; }
-.plan-vertex { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid var(--primary); cursor: grab; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
+.plan-vertex { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid var(--primary); cursor: var(--cursor-grab); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
 .plan-vertex.is-selected { background: var(--primary); }
 .plan-vertex.is-draft { width: 10px; height: 10px; pointer-events: none; }
 .plan-vertex.is-first { width: 16px; height: 16px; background: var(--primary); }
@@ -786,3 +792,191 @@ input[type="color"] { width: 64px; min-height: 36px; padding: 2px; cursor: point
 .invoice-lines td:nth-child(n+2) { white-space: nowrap; }
 .lease-offices .check-row { flex-direction: row; align-items: flex-start; gap: 8px; }
 .lease-offices .check-row input { margin-top: 3px; }
+
+/* ============================================================
+   Motion, materials and type (00-motion.js does the gestures)
+
+   Pressing shows at once; dialogs, menus and toasts leave the
+   way they came; the header is a translucent layer the page
+   scrolls under; springs settle without overshoot unless
+   something was thrown. "Reduce motion", "reduce transparency"
+   and "increase contrast" are all honored at the end.
+   ============================================================ */
+:root {
+  /* A critically damped spring (damping 1, response 0.35 s): it settles without overshoot. */
+  --spring: linear(0, 0.0294, 0.0993, 0.1892, 0.286, 0.3816, 0.4714, 0.5529, 0.6251, 0.6879, 0.7417, 0.7874, 0.8258, 0.8579, 0.8844, 0.9063, 0.9243, 0.939, 0.9509, 0.9606, 0.9684, 0.9748, 0.9799, 0.9839, 0.9872, 0.9898, 0.9919, 0.9936, 0.9949, 0.996, 0.9968, 0.9975, 1);
+  --spring-time: 470ms;
+  --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
+  /* The mirror of --ease-out, for things leaving along the path they came in on. */
+  --ease-in: cubic-bezier(0.5, 0, 0.75, 0);
+  --press: 90ms;
+  --material: color-mix(in srgb, var(--surface) 78%, transparent);
+  --material-blur: blur(20px) saturate(180%);
+  --scrim-color: rgba(15, 23, 42, 0.42);
+}
+:root[data-theme="dark"] { --scrim-color: rgba(0, 0, 0, 0.58); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --scrim-color: rgba(0, 0, 0, 0.58); }
+}
+
+/* --- type: the system font, size-specific tracking and leading --- */
+body {
+  font-size: 0.9375rem; /* 15px, but following the browser's text size */
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+h2, .page-title, .toolbar-title { letter-spacing: -0.012em; line-height: 1.2; }
+h3, .wizard-title, .dash-card-head h3 { letter-spacing: -0.006em; }
+.id-name { letter-spacing: -0.02em; line-height: 1.1; }
+.pill, .badge, .dash-stat strong, .table td.num, .plan-zoom-level { font-variant-numeric: tabular-nums; }
+
+/* --- response: feedback the moment something is pressed, not when it's let go --- */
+button, .pick-row, .dash-row, .nav a, .subnav a, .site-option, .nav-list a, .company-pick, .id-choice,
+.template-choice, .floor-office-row, .dash-stat, .chip, .site-chip, .entra-btn {
+  transition: background-color 150ms var(--ease-out), border-color 150ms var(--ease-out), color 150ms var(--ease-out),
+    box-shadow 150ms var(--ease-out), opacity 150ms var(--ease-out), transform var(--press) var(--ease-out);
+}
+button:not(:disabled):active, .nav a:active, .subnav a:active, .chip:active, .site-chip:active, .entra-btn:active { transform: scale(0.96); }
+.pick-row:active, a.dash-row:active, .dash-row.is-clickable:active, .nav-list a:active, .company-pick:active, .id-choice:active,
+.template-choice:active, .floor-office-row:active, .dash-stat:active, .site-option:active { transform: scale(0.985); }
+.table tr.clickable:active td { background: var(--surface-3); }
+
+/* --- the header and page bar: one translucent layer the page scrolls under --- */
+.chrome {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--material);
+  -webkit-backdrop-filter: var(--material-blur);
+  backdrop-filter: var(--material-blur);
+  transition: box-shadow 220ms var(--ease-out);
+}
+.chrome .app-header { position: static; background: transparent; border-bottom: 0; box-shadow: none; }
+.chrome .subnav { background: transparent; border-bottom: 0; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.chrome .subnav a.is-active { background: var(--surface); }
+/* The edge shows only once the page is under it (00-motion.js marks the scroll). */
+.chrome::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--border); opacity: 0; transition: opacity 220ms var(--ease-out); pointer-events: none; }
+html.is-scrolled .chrome { box-shadow: 0 10px 24px -18px rgba(15, 23, 42, 0.45); }
+html.is-scrolled .chrome::after { opacity: 1; }
+.split-list { top: calc(var(--chrome-h, 64px) + 12px); max-height: calc(100vh - var(--chrome-h, 64px) - 24px); }
+.settings-nav { top: calc(var(--chrome-h, 64px) + 12px); }
+
+/* --- pages arrive with a short fade, never a jump --- */
+main > .view:not([hidden]) { animation: view-in 220ms var(--ease-out); }
+@keyframes view-in { from { opacity: 0; } }
+
+/* --- dialogs: rise a little and grow into place; leave the same way --- */
+dialog.dialog {
+  border-radius: 16px;
+  transition: opacity 200ms var(--ease-out), transform var(--spring-time) var(--spring);
+}
+@starting-style {
+  dialog.dialog[open] { opacity: 0; transform: translateY(12px) scale(0.97); }
+}
+/* Leaving (01-core.js closes it once this has played). */
+dialog.dialog.is-closing {
+  opacity: 0;
+  transform: translateY(12px) scale(0.97);
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-in);
+  pointer-events: none;
+}
+dialog.dialog::backdrop {
+  background: var(--scrim-color);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  opacity: var(--scrim, 1);
+  transition: opacity 200ms var(--ease-out);
+}
+@starting-style {
+  dialog.dialog[open]::backdrop { opacity: 0; }
+}
+dialog.dialog.is-closing::backdrop { opacity: 0; }
+.dialog-head { position: relative; }
+.sheet-grabber { display: none; }
+
+/* On a phone a dialog is a sheet from the bottom edge, dragged down by its top to put it away. */
+@media (max-width: 640px) {
+  dialog.dialog, dialog.dialog.wide, dialog.dialog.full, dialog.dialog.checkin-wizard {
+    width: 100%;
+    max-width: 100%;
+    margin: auto 0 0;
+    max-height: calc(100dvh - 12px - env(safe-area-inset-top));
+    border-radius: 18px 18px 0 0;
+  }
+  dialog.dialog.full { height: calc(100dvh - 12px - env(safe-area-inset-top)); }
+  @starting-style {
+    dialog.dialog[open] { opacity: 1; transform: translateY(100%); }
+  }
+  dialog.dialog.is-closing { opacity: 1; transform: translateY(100%); }
+  .dialog-head { padding-top: 16px; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+  .sheet-grabber { display: block; position: absolute; top: 6px; left: 50%; width: 36px; height: 5px; margin-left: -18px; border-radius: 999px; background: var(--border-strong); }
+}
+
+/* --- the site menu grows out of its button, and fades back into it --- */
+.site-menu {
+  transform-origin: top right;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  -webkit-backdrop-filter: var(--material-blur);
+  backdrop-filter: var(--material-blur);
+  border-radius: var(--radius);
+  transition: opacity 160ms var(--ease-out), transform var(--spring-time) var(--spring);
+}
+@starting-style {
+  .site-menu:not([hidden]) { opacity: 0; transform: translateY(-4px) scale(0.95); }
+}
+
+/* --- toasts come up from the bottom edge and go back down it --- */
+.toast {
+  background: color-mix(in srgb, var(--text) 88%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  backdrop-filter: blur(16px) saturate(160%);
+  border-radius: 999px;
+  padding: 12px 20px;
+  letter-spacing: 0.005em;
+  transition: opacity 200ms var(--ease-out), transform var(--spring-time) var(--spring);
+}
+.toast.error { background: var(--danger); }
+@starting-style {
+  .toast[popover]:popover-open, .toast:not([hidden]) { opacity: 0; transform: translate(-50%, 16px); }
+}
+.toast.is-leaving { opacity: 0; transform: translate(-50%, 16px); transition-duration: 200ms; transition-timing-function: var(--ease-in); }
+
+/* --- the check-in steps slide the way the wizard is going (23-checkin.js) --- */
+.wizard-steps li { transition: background-color 200ms var(--ease-out), border-color 200ms var(--ease-out), color 200ms var(--ease-out); }
+
+/* --- the light/dark switch cross-fades rather than flashing (13-app.js) --- */
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 280ms; animation-timing-function: var(--ease-out); }
+
+/* --- asked for less motion: fades only, nothing slides, scales or springs --- */
+@media (prefers-reduced-motion: reduce) {
+  :root { --spring-time: 150ms; --spring: ease; }
+  button:not(:disabled):active, .nav a:active, .subnav a:active, .chip:active, .site-chip:active, .entra-btn:active,
+  .pick-row:active, a.dash-row:active, .dash-row.is-clickable:active, .nav-list a:active, .company-pick:active, .id-choice:active,
+  .template-choice:active, .floor-office-row:active, .dash-stat:active, .site-option:active { transform: none; }
+  @starting-style {
+    dialog.dialog[open] { transform: none; }
+    .site-menu:not([hidden]) { transform: none; }
+    .toast[popover]:popover-open, .toast:not([hidden]) { transform: translateX(-50%); }
+  }
+  dialog.dialog.is-closing { transform: none; opacity: 0; }
+  .toast.is-leaving { transform: translateX(-50%); }
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 1ms; }
+}
+
+/* --- asked for less transparency: solid surfaces, no blur --- */
+@media (prefers-reduced-transparency: reduce) {
+  .chrome, .site-menu { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .toast { background: var(--text); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .toast.error { background: var(--danger); }
+  dialog.dialog::backdrop { -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+
+/* --- asked for more contrast: solid surfaces and clear edges --- */
+@media (prefers-contrast: more) {
+  :root, :root[data-theme] { --border: var(--border-strong); }
+  .chrome { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .chrome::after { opacity: 1; background: var(--border-strong); }
+  .site-menu { background: var(--surface); border-color: var(--border-strong); }
+}

@@ -222,15 +222,112 @@ function toast(message, kind = "ok") {
   }
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
-    if (popover) {
-      try { el.hidePopover(); } catch { /* already hidden */ }
-    } else {
-      el.hidden = true;
-    }
+    // It goes back down the way it came, then hides.
+    el.classList.add("is-leaving");
+    toastTimer = setTimeout(() => {
+      el.classList.remove("is-leaving");
+      if (popover) {
+        try { el.hidePopover(); } catch { /* already hidden */ }
+      } else {
+        el.hidden = true;
+      }
+    }, reducedMotion() ? 0 : 200);
   }, kind === "error" ? 6000 : 3000);
 }
 
 // --- dialogs ---------------------------------------------------------------------
+
+/**
+ * Closes a dialog the way it came in (it shrinks back, or a sheet slides back down; see
+ * styles.css), then takes it out of the page. instant: it's already out of sight.
+ */
+function dismissDialog(dlg, { instant = false } = {}) {
+  const done = () => {
+    // A dialog opened meanwhile keeps the focus (closing would hand it back to the page).
+    const newer = [...document.querySelectorAll("dialog[open]")].some((d) => d !== dlg && !d.classList.contains("is-closing"));
+    const keep = newer ? document.activeElement : null;
+    if (dlg.open) dlg.close();
+    dlg.remove();
+    if (keep && keep !== document.activeElement) keep.focus({ preventScroll: true });
+  };
+  // It leaves while still open (browsers don't reliably animate a closed one), taking no clicks.
+  dlg.classList.add("is-closing");
+  if (instant || reducedMotion() || !dlg.open) done();
+  else setTimeout(done, 200);
+}
+
+/**
+ * On a phone a dialog is a sheet from the bottom: its top can be dragged, following the finger,
+ * and let go it either goes away (pulled far enough, or flicked down) or springs back, at the
+ * finger's speed. It can be caught again while it moves. dismiss() puts it away for good.
+ */
+function sheetGesture(dlg, dismiss) {
+  const handle = dlg.querySelector(".dialog-head");
+  const isSheet = () => Boolean(window.matchMedia && matchMedia("(max-width: 640px)").matches);
+  let y = 0;
+  let drag = null;
+  let motion = null;
+  const set = (value) => {
+    y = value;
+    dlg.style.transform = value ? `translateY(${value}px)` : "";
+    // The dimming behind follows how far it has gone.
+    dlg.style.setProperty("--scrim", String(Math.min(1, Math.max(0, 1 - value / (dlg.offsetHeight || 1)))));
+  };
+  handle.addEventListener("pointerdown", (e) => {
+    if (!isSheet() || e.button !== 0 || e.target.closest("button, a, input, select, textarea")) return;
+    const caught = Boolean(motion);
+    motion?.stop();
+    motion = null;
+    drag = { id: e.pointerId, grab: e.clientY - y, startY: e.clientY, moved: caught, track: trackVelocity() };
+    drag.track.add(0, e.clientY);
+    dlg.style.transition = "none";
+    // Held from the start, so a quick pull that leaves the bar still drags it (and selects no text).
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    // A little movement first, so a tap on the title stays a tap.
+    if (!drag.moved && Math.abs(e.clientY - drag.startY) < 6) return;
+    // From then on it stays under the finger, at the point it was grabbed.
+    drag.moved = true;
+    drag.track.add(0, e.clientY);
+    const raw = e.clientY - drag.grab;
+    // Upward, it resists: there's nothing more above.
+    set(raw < 0 ? rubberband(raw, dlg.offsetHeight) : raw);
+  });
+  const release = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const was = drag;
+    drag = null;
+    if (!was.moved && !y) {
+      dlg.style.transition = "";
+      return;
+    }
+    const v = was.track.velocity().y;
+    const height = dlg.offsetHeight;
+    // A clear flick decides by its direction; otherwise by where it would come to rest.
+    const away = Math.abs(v) > 300 ? v > 0 : y + projectMomentum(v) > height * 0.4;
+    motion = springTo({
+      from: y,
+      to: away ? height : 0,
+      velocity: v,
+      damping: away ? 1 : 0.8,
+      response: away ? 0.3 : 0.35,
+      onUpdate: set,
+      onDone: () => {
+        motion = null;
+        if (away) dismiss();
+        else {
+          set(0);
+          dlg.style.transition = "";
+        }
+      }
+    });
+  };
+  handle.addEventListener("pointerup", release);
+  handle.addEventListener("pointercancel", release);
+}
 
 /**
  * Opens a modal. `body` is a node; `actions` are { label, kind, value, close=true,
@@ -243,15 +340,14 @@ function openDialog({ title, body, actions = [{ label: "Close", value: null }], 
     const error = h("p", { class: "message error pre", hidden: true });
     const footer = h("div", { class: "dialog-actions" });
     const dlg = h("dialog", { class: `dialog${wide ? " wide" : ""}${full ? " full" : ""}` },
-      h("div", { class: "dialog-head" }, h("h3", { text: title }), h("button", { type: "button", class: "icon-close", "aria-label": "Close", onclick: () => finish(null) }, "×")),
+      h("div", { class: "dialog-head" }, h("span", { class: "sheet-grabber", "aria-hidden": "true" }), h("h3", { text: title }), h("button", { type: "button", class: "icon-close", "aria-label": "Close", onclick: () => finish(null) }, "×")),
       h("div", { class: "dialog-body" }, error, body),
       footer);
     let done = false;
-    function finish(value) {
+    function finish(value, { instant = false } = {}) {
       if (done) return;
       done = true;
-      dlg.close();
-      dlg.remove();
+      dismissDialog(dlg, { instant });
       resolve(value);
     }
     for (const action of actions) {
@@ -278,6 +374,7 @@ function openDialog({ title, body, actions = [{ label: "Close", value: null }], 
     dlg.finish = finish;
     document.body.append(dlg);
     dlg.showModal();
+    sheetGesture(dlg, () => finish(null, { instant: true }));
     if (onOpen) onOpen(dlg);
   });
 }

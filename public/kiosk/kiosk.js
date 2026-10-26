@@ -71,7 +71,14 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+// How far along a visit each screen is, so the next one comes in from the side it's going:
+// onward from the right, back from the left, and a fresh start just fades in (kiosk.css).
+const SCREEN_ORDER = { pair: 0, welcome: 0, which: 1, "out-which": 1, confirm: 2, "pick-company": 2, "out-confirm": 2, details: 3, "visit-info": 4, done: 5, reception: 5 };
+
 function show(id) {
+  const current = [...document.querySelectorAll(".screen")].find((s) => !s.hidden);
+  const by = current ? (SCREEN_ORDER[id] ?? 0) - (SCREEN_ORDER[current.id] ?? 0) : 0;
+  document.body.dataset.go = id === "welcome" || !by ? "fade" : by > 0 ? "on" : "back";
   for (const s of document.querySelectorAll(".screen")) s.hidden = s.id !== id;
   clearTimeout(k.doneTimer);
   armIdle();

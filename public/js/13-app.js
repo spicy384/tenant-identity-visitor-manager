@@ -176,8 +176,10 @@ function showThemeButton() {
 
 /** "light", "dark" or "auto": shown at once, kept in this browser and with the account. */
 function setTheme(theme) {
-  applyTheme(theme);
-  showThemeButton();
+  softly(() => {
+    applyTheme(theme);
+    showThemeButton();
+  });
   if (state.me) api("/api/me/prefs", { method: "PUT", body: { theme } }).catch(() => {});
 }
 

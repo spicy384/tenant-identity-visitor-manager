@@ -370,11 +370,11 @@ const ZOOM_MAX = 8;
  */
 function planViewer(wrap, view, { drawing = false } = {}) {
   const pane = h("div", { class: `plan-pane${drawing ? "" : " can-pan"}` }, wrap);
-  const level = h("button", { type: "button", class: "plan-zoom-level", title: "Fit the whole plan", onclick: () => zoomTo(1) });
+  const level = h("button", { type: "button", class: "plan-zoom-level", title: "Fit the whole plan", onclick: () => glideZoom(1) });
   const controls = h("div", { class: "plan-zoom", role: "group", "aria-label": "Zoom" },
-    h("button", { type: "button", text: "−", title: "Zoom out", "aria-label": "Zoom out", onclick: () => zoomTo(view.zoom / 1.5) }),
+    h("button", { type: "button", text: "−", title: "Zoom out", "aria-label": "Zoom out", onclick: () => glideZoom((goal ?? view.zoom) / 1.5) }),
     level,
-    h("button", { type: "button", text: "+", title: "Zoom in", "aria-label": "Zoom in", onclick: () => zoomTo(view.zoom * 1.5) }));
+    h("button", { type: "button", text: "+", title: "Zoom in", "aria-label": "Zoom in", onclick: () => glideZoom((goal ?? view.zoom) * 1.5) }));
   const show = () => {
     wrap.style.width = `${view.zoom * 100}%`;
     level.textContent = `${Math.round(view.zoom * 100)}%`;
@@ -391,10 +391,49 @@ function planViewer(wrap, view, { drawing = false } = {}) {
     pane.scrollLeft = left;
     pane.scrollTop = top;
   }
+  // The buttons glide to the new zoom on a spring: pressing again on the way carries on from
+  // wherever it has got to, at the speed it's going.
+  let zooming = null;
+  let goal = null;
+  function glideZoom(target) {
+    goal = Math.min(ZOOM_MAX, Math.max(1, target));
+    const from = zooming ? zooming.value() : view.zoom;
+    const velocity = zooming ? zooming.velocity() : 0;
+    zooming?.stop();
+    zooming = springTo({ from, to: goal, velocity, response: 0.3, onUpdate: (z) => zoomTo(z), onDone: () => { zooming = null; goal = null; } });
+  }
+  const stopZooming = () => { zooming?.stop(); zooming = null; goal = null; };
+  // Let go mid-drag, the plan carries on at the hand's speed and slows as a scrolled page does.
+  let coast = 0;
+  const stopCoast = () => { cancelAnimationFrame(coast); coast = 0; };
+  function glidePan(vx, vy) {
+    if (reducedMotion() || Math.hypot(vx, vy) < 200) return;
+    let x = pane.scrollLeft;
+    let y = pane.scrollTop;
+    let last = performance.now();
+    const step = (now) => {
+      const dt = Math.min(now - last, 64);
+      last = now;
+      const decay = 0.998 ** dt;
+      vx *= decay;
+      vy *= decay;
+      x -= (vx * dt) / 1000;
+      y -= (vy * dt) / 1000;
+      pane.scrollLeft = x;
+      pane.scrollTop = y;
+      // At an edge it stops that way.
+      if (Math.abs(pane.scrollLeft - x) > 1) { x = pane.scrollLeft; vx = 0; }
+      if (Math.abs(pane.scrollTop - y) > 1) { y = pane.scrollTop; vy = 0; }
+      coast = Math.hypot(vx, vy) > 20 ? requestAnimationFrame(step) : 0;
+    };
+    coast = requestAnimationFrame(step);
+  }
   show();
   pane.addEventListener("wheel", (e) => {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
+    stopZooming();
+    stopCoast();
     const r = pane.getBoundingClientRect();
     zoomTo(view.zoom * Math.exp(-e.deltaY * 0.002), e.clientX - r.left, e.clientY - r.top);
   }, { passive: false });
@@ -407,10 +446,13 @@ function planViewer(wrap, view, { drawing = false } = {}) {
   let pan = null;
   let swallowClick = false;
   pane.addEventListener("pointerdown", (e) => {
+    // A hand on the plan catches it mid-glide.
+    stopCoast();
     const wanted = e.button === 1 || (e.button === 0 && (!drawing || facilitiesView.spaceDown));
     if (!wanted) return;
     if (e.button === 1 || drawing) e.preventDefault();
-    pan = { x: e.clientX, y: e.clientY, left: pane.scrollLeft, top: pane.scrollTop, moved: false, id: e.pointerId };
+    pan = { x: e.clientX, y: e.clientY, left: pane.scrollLeft, top: pane.scrollTop, moved: false, id: e.pointerId, track: trackVelocity() };
+    pan.track.add(e.clientX, e.clientY);
   });
   pane.addEventListener("pointermove", (e) => {
     if (!pan) return;
@@ -424,6 +466,7 @@ function planViewer(wrap, view, { drawing = false } = {}) {
     if (pan.moved) {
       pane.scrollLeft = pan.left - dx;
       pane.scrollTop = pan.top - dy;
+      pan.track.add(e.clientX, e.clientY);
     }
   });
   const stop = () => {
@@ -432,6 +475,8 @@ function planViewer(wrap, view, { drawing = false } = {}) {
       if (pane.hasPointerCapture(pan.id)) pane.releasePointerCapture(pan.id);
       swallowClick = true;
       setTimeout(() => { swallowClick = false; }, 0);
+      const v = pan.track.velocity();
+      glidePan(v.x, v.y);
     }
     pan = null;
   };
