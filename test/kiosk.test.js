@@ -241,9 +241,8 @@ async function main() {
   const walkIn = (await desk.post("/api/visitors", { firstName: "Wally", lastName: "Walkin" })).data.visitor;
   await desk.post("/api/visits", { visitorId: walkIn.id, siteId: river.id, companyId: both.id });
   check("badge banner: a desk check-in that skipped the ID check waits for one too", (await desk.get("/api/visits/badge-needed")).data.visits.some((v) => v.name === "Wally Walkin" && v.stage === "id"));
-  const uncleared = (await admin.get("/api/clearance")).data.classifications.find((c) => !c.requiresClearance);
-  const harborBadge = (await admin.post("/api/badges", { number: "VH-1", type: "visitor", classificationId: uncleared.id, siteIds: [harbor.id] })).data.badge;
-  const riverBadge = (await admin.post("/api/badges", { number: "VR-1", type: "visitor", classificationId: uncleared.id, siteIds: [river.id] })).data.badge;
+  const harborBadge = (await admin.post("/api/badges", { number: "VH-1", type: "visitor", siteIds: [harbor.id] })).data.badge;
+  const riverBadge = (await admin.post("/api/badges", { number: "VR-1", type: "visitor", siteIds: [river.id] })).data.badge;
   const graceWaiting = (await desk.get("/api/visits/badge-needed")).data.visits[0];
   r = await desk.get(`/api/badge-holders/visitor/${graceWaiting.visitorId}?site=${river.id}`);
   check("badge banner: the badges offered are those valid where they checked in", r.data.available.map((b) => b.number).join() === "VR-1" && harborBadge.id);

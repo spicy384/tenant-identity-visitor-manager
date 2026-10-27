@@ -77,10 +77,8 @@ async function main() {
   await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Harbor Point" });
   const site = (await admin.get("/api/config")).data.sites[0];
   const acme = (await admin.post("/api/companies", { name: "Acme Corp", sites: [{ siteId: site.id }] })).data.company;
-  const { levels, classifications } = (await admin.get("/api/clearance")).data;
+  const { levels } = (await admin.get("/api/clearance")).data;
   const L = Object.fromEntries(levels.map((l) => [l.name, l]));
-  const cleared = classifications.find((c) => c.requiresClearance);
-  const uncleared = classifications.find((c) => !c.requiresClearance);
 
   const pw = {};
   // A role that keeps the badge stock without seeing clearance levels: it picks levels by image.
@@ -103,7 +101,7 @@ async function main() {
   check("names: a manager's has them", r.data.access.clearances === true && r.data.clearanceLevels.length === 5);
   check("names: Security's too", (await security.get("/api/config")).data.clearanceLevels.length === 5);
   r = await desk.get("/api/clearance");
-  check("names: front desk gets the classifications but no levels", r.data.levels.length === 0 && r.data.classifications.length === 2 && !NAMES.test(r.text));
+  check("names: front desk gets Uncleared but no levels", r.data.levels.length === 0 && r.data.uncleared === "Uncleared" && !NAMES.test(r.text));
   check("names: the level list is never cached", r.cache === "no-store");
 
   // --- the images -------------------------------------------------------------------------------
@@ -135,30 +133,33 @@ async function main() {
   check("images: a made-up ref finds nothing", (await desk.get("/api/badge-templates/AAAAAAAAAAAAAAAA/image")).status === 404);
 
   // --- badges, as front desk sees them -------------------------------------------------------------
-  const ts = (await security.post("/api/badges", { number: "T-1", type: "tenant", classificationId: cleared.id, clearanceLevelId: L.TS.id })).data.badge;
-  const sci = (await security.post("/api/badges", { number: "T-2", type: "tenant", classificationId: cleared.id, clearanceLevelId: L["TS//SCI"].id })).data.badge;
-  const plain = (await security.post("/api/badges", { number: "T-3", type: "tenant", classificationId: uncleared.id })).data.badge;
-  await security.post("/api/badges", { number: "V-1", type: "visitor", classificationId: cleared.id, clearanceLevelId: L.TS.id });
+  const ts = (await security.post("/api/badges", { number: "T-1", type: "tenant", clearanceLevelId: L.TS.id })).data.badge;
+  const sci = (await security.post("/api/badges", { number: "T-2", type: "tenant", clearanceLevelId: L["TS//SCI"].id })).data.badge;
+  const plain = (await security.post("/api/badges", { number: "T-3", type: "tenant" })).data.badge;
+  await security.post("/api/badges", { number: "V-1", type: "visitor", clearanceLevelId: L.TS.id });
   r = await desk.get("/api/badges");
   check("badges: front desk's list has each badge's image and no level", r.data.badges.length === 4 && r.data.badges.every((b) => b.clearanceLevelId === undefined && b.clearanceLevelName === undefined) && !NAMES.test(r.text)
     && r.data.badges.find((b) => b.number === "T-1").template === ref.tsTenant && r.data.badges.find((b) => b.number === "T-3").template === ref.noneTenant);
-  check("badges: whether a badge is cleared, as the classification says", r.data.badges.find((b) => b.number === "T-1").cleared === true && r.data.badges.find((b) => b.number === "T-3").cleared === false);
+  check("badges: whether a badge is cleared (has a level)", r.data.badges.find((b) => b.number === "T-1").cleared === true && r.data.badges.find((b) => b.number === "T-3").cleared === false);
   check("badges: front desk can't filter by a level", (await desk.get(`/api/badges?levelId=${L.TS.id}`)).data.total === 4);
   check("badges: a manager sees the level", (await manager.get(`/api/badges/${ts.id}`)).data.badge.clearanceLevelName === "TS");
   r = await desk.get(`/api/badges/${sci.id}`);
   check("badges: one badge, as front desk sees it", r.data.badge.template === ref.sciTenant && !NAMES.test(r.text));
 
   // Choosing a cleared badge's level by its image.
-  check("pick: front desk can't add badges at all", (await desk.post("/api/badges", { number: "T-4", type: "tenant", classificationId: uncleared.id })).status === 403);
-  check("pick: a role that manages badges without seeing levels can't give a level id", (await office.post("/api/badges", { number: "T-4", type: "tenant", classificationId: cleared.id, clearanceLevelId: L.TS.id })).status === 403);
-  r = await office.post("/api/badges", { number: "T-4", type: "tenant", classificationId: cleared.id, templateRef: ref.tsTenant });
+  check("pick: front desk can't add badges at all", (await desk.post("/api/badges", { number: "T-4", type: "tenant" })).status === 403);
+  check("pick: a role that manages badges without seeing levels can't give a level id", (await office.post("/api/badges", { number: "T-4", type: "tenant", clearanceLevelId: L.TS.id })).status === 403);
+  r = await office.post("/api/badges", { number: "T-4", type: "tenant", templateRef: ref.tsTenant });
   check("pick: it adds a cleared badge by its image", r.status === 200 && r.data.badge.template === ref.tsTenant && !NAMES.test(r.text));
   check("pick: it has that image's level", (await manager.get(`/api/badges/${r.data.badge.id}`)).data.badge.clearanceLevelName === "TS");
   const t4 = r.data.badge;
-  check("pick: not a visitor image for a tenant badge", (await office.post("/api/badges", { number: "T-5", type: "tenant", classificationId: cleared.id, templateRef: ref.tsVisitor })).status === 400);
-  check("pick: not the uncleared image", (await office.post("/api/badges", { number: "T-5", type: "tenant", classificationId: cleared.id, templateRef: ref.noneTenant })).status === 400);
-  check("pick: a cleared badge still needs one", (await office.post("/api/badges", { number: "T-5", type: "tenant", classificationId: cleared.id, templateRef: "" })).status === 400);
-  check("pick: a range too", (await office.post("/api/badges/range", { prefix: "S-", from: 1, to: 3, type: "tenant", classificationId: cleared.id, templateRef: ref.sciTenant })).data.count === 3);
+  check("pick: not a visitor image for a tenant badge", (await office.post("/api/badges", { number: "T-5", type: "tenant", templateRef: ref.tsVisitor })).status === 400);
+  r = await office.post("/api/badges", { number: "T-5", type: "tenant", templateRef: ref.noneTenant });
+  check("pick: the uncleared image makes it Uncleared", r.status === 200 && r.data.badge.cleared === false);
+  r = await office.post("/api/badges", { number: "T-6", type: "tenant", templateRef: "" });
+  check("pick: so does no image", r.status === 200 && r.data.badge.cleared === false);
+  check("pick: and so does a null level, the one level id it may give", (await office.put(`/api/badges/${r.data.badge.id}`, { clearanceLevelId: null })).status === 200);
+  check("pick: a range too", (await office.post("/api/badges/range", { prefix: "S-", from: 1, to: 3, type: "tenant", templateRef: ref.sciTenant })).data.count === 3);
   r = await office.put(`/api/badges/${t4.id}`, { notes: "spare" });
   check("pick: editing anything else keeps the level", r.status === 200 && (await manager.get(`/api/badges/${t4.id}`)).data.badge.clearanceLevelName === "TS");
   r = await office.put(`/api/badges/${t4.id}`, { templateRef: ref.sciTenant });
@@ -173,7 +174,7 @@ async function main() {
   const tsPerson = await person("Tina", "TS");
   r = await desk.get(`/api/badge-holders/person/${tsPerson.id}`);
   check("give: front desk is shown the image of the highest badge on offer they may hold", r.data.suggested === ref.tsTenant);
-  check("give: offered the badges they may hold, each with its image, no level", r.data.available.map((b) => b.number).sort().join() === "T-1,T-3" && r.data.available.every((b) => b.template && b.clearanceLevelName === undefined) && !NAMES.test(r.text));
+  check("give: offered the badges they may hold, each with its image, no level", r.data.available.map((b) => b.number).sort().join() === "T-1,T-3,T-5,T-6" && r.data.available.every((b) => b.template && b.clearanceLevelName === undefined) && !NAMES.test(r.text));
   const fspPerson = await person("Fran", "TS//SCI FSP");
   check("give: the highest badge on offer, even below their own level", (await desk.get(`/api/badge-holders/person/${fspPerson.id}`)).data.suggested === ref.sciTenant);
   const nobody = await person("Ned");
@@ -183,7 +184,7 @@ async function main() {
   const visitor = (await admin.post("/api/visitors", { firstName: "Vera", lastName: "Visitor" })).data.visitor;
   await security.post("/api/clearance/validate", { kind: "visitor", id: visitor.id, levelId: L.TS.id });
   check("give: a visitor at TS, the TS visitor image", (await desk.get(`/api/badge-holders/visitor/${visitor.id}`)).data.suggested === ref.tsVisitor);
-  await security.post("/api/badges", { number: "V-2", type: "visitor", classificationId: uncleared.id });
+  await security.post("/api/badges", { number: "V-2", type: "visitor" });
   const secretVisitor = (await admin.post("/api/visitors", { firstName: "Sid", lastName: "Secret" })).data.visitor;
   await security.post("/api/clearance/validate", { kind: "visitor", id: secretVisitor.id, levelId: L.Secret.id });
   r = await desk.get(`/api/badge-holders/visitor/${secretVisitor.id}`);

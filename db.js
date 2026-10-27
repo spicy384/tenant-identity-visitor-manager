@@ -253,6 +253,8 @@ CREATE TABLE IF NOT EXISTS clearance_levels (
   created_at INTEGER NOT NULL
 );
 
+-- No longer used: a badge's clearance level says it all, none being Uncleared. Kept
+-- so older databases open as they were; badges.classification_id with it.
 CREATE TABLE IF NOT EXISTS badge_classifications (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL COLLATE NOCASE UNIQUE,

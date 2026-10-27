@@ -173,9 +173,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
 
 ## Badges and clearances
 
-- **Badges** have a number, a type (personnel, tenant or visitor), a classification and, when
-  the classification needs one, a clearance level; and the sites it is valid at (any number,
-  or every site). Add them one at a time
+- **Badges** have a number, a type (personnel, tenant or visitor), a clearance level
+  (Uncleared, or one of the levels), and the sites it is valid at (any number, or every site). Add them one at a time
   or as a numbered range (B-0001 to B-0050). Statuses: active, lost, retired.
 - **Facility codes.** A badge can also have a facility code (2 or 3 digits), kept apart from
   its number as CCURE 9000 keeps it. It is optional, Security sets it (one at a time, for a
@@ -193,8 +192,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   limited to some sites see the badges valid at any of their sites.
 - **Clearance levels** are an ordered list under Settings > Badges and clearances: Secret <
   TS < TS//SCI < TS//SCI CI < TS//SCI FSP to start with; a higher level covers every level
-  below it. **Classifications** (Cleared, Uncleared, and any you add) say whether a badge
-  carries a level.
+  below it. **Uncleared** is built in, below them all: an Uncleared badge can go to anyone of
+  the right type. It can't be renamed or deleted, and no level can take its name. (Badges had a
+  separate classification, Cleared or Uncleared, before; the level now says it all.)
 - **People and visitors** have a clearance level, the date it was granted and when it
   expires; an expired clearance counts as none. Clearance fields go through the field access
   grid and start hidden from roles that only read the directory (or visitors) and from API
@@ -230,9 +230,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   midnight where they work. Their own badge stays theirs. One not back in time shows as
   overdue on the Badges page and in the navigation until someone takes it back.
 - **Several badges at once** (Security): tick boxes on the Badges page, then **Change** to move
-  them to another type (visitor, tenant or personnel), classification or level, the sites they
-  are valid at, temporary, status or notes, or **Retire** or **Delete** them. A badge that is out
-  can't change type, classification, level or temporary until it is taken back, and one that
+  them to another type (visitor, tenant or personnel), clearance level, the sites they are
+  valid at, temporary, status or notes, or **Retire** or **Delete** them. A badge that is out
+  can't change type, level or temporary until it is taken back, and one that
   has been given out can only be retired; if any chosen badge can't take the change, none does.
 - **Access.** Each role has a badge level as well as directory and visitor levels: read to
   look; issue and return to give badges out and take them back (Front desk and Manager to
@@ -691,8 +691,10 @@ A company's site can come from one column (a site's name) and its suite from ano
   blocked (yes/no), the company they visit and their host there (by name), and custom fields.
   A visitor with the same email, else exactly the same name, is updated. Imported visitors
   count as checked by staff. Clearances aren't imported: only Security sets them, by validating.
-- **Badges**: number, type (personnel or staff, tenant, visitor) and classification (by name)
-  required; clearance level (by name, only for roles that see clearance levels), the sites it
+- **Badges**: number and type (personnel or staff, tenant, visitor) required; clearance level
+  (a level's name or Uncleared; empty is Uncleared for a new badge and leaves an existing one's
+  as it is; a level's name only from roles that see clearance levels; a column called
+  Classification is matched to it too), the sites it
   is valid at (names separated by ;, empty for every site), temporary (yes/no), status
   (active, lost, retired), notes and custom badge fields. A badge with the same number is updated. The CSV
 column names below are what a CSV file is matched to automatically, and what the CSV import

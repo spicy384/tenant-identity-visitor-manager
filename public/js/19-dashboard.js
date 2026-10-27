@@ -246,7 +246,7 @@ const DASHBOARD_MODULES = {
       return { count: null, body: dashList(recent.map((x) => dashRow({
         href: holderHref(x),
         main: x.name,
-        sub: [x.levelName || "No clearance", x.validatedBy ? `by ${x.validatedBy}` : null].filter(Boolean).join(" · "),
+        sub: [x.levelName || "Uncleared", x.validatedBy ? `by ${x.validatedBy}` : null].filter(Boolean).join(" · "),
         right: h("span", { class: "muted small-text", text: fmtDate(x.validatedAt) })
       })), "Nothing validated lately.", { more: "#clearances" }) };
     }

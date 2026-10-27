@@ -1,9 +1,10 @@
 /**
- * Clearance levels and badge classifications.
+ * Clearance levels.
  *
  * Levels are an ordered list: a higher rank covers every level below it, so someone at
- * TS//SCI FSP may hold a TS//SCI CI badge but not the other way round. Classifications
- * (Cleared, Uncleared, and any added) say whether a badge carries a clearance level.
+ * TS//SCI FSP may hold a TS//SCI CI badge but not the other way round. Below them all is
+ * Uncleared, built in: no level at all (null), which anyone may hold. It isn't a row, so it
+ * can't be renamed, reordered or deleted, and no level may take its name.
  *
  * A person's or visitor's clearance counts only while it hasn't expired: an expiry date in
  * the past means no clearance at all for badge purposes.
@@ -61,10 +62,10 @@ const DEFAULT_LEVELS = [
   ["TS//SCI CI", 40],
   ["TS//SCI FSP", 50]
 ];
-const DEFAULT_CLASSIFICATIONS = [
-  ["Cleared", 1],
-  ["Uncleared", 0]
-];
+/** The built-in lowest level: no clearance. */
+const UNCLEARED = "Uncleared";
+/** Names that mean Uncleared where a level is given by name (an import). */
+const isUnclearedName = (value) => ["uncleared", "none", "no clearance"].includes(String(value ?? "").trim().toLowerCase());
 
 function fail(status, message) {
   const error = new Error(message);
@@ -94,7 +95,6 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
   if (!raw.prepare("SELECT 1 FROM clearance_levels LIMIT 1").get() && !db.getSetting("clearance.seeded")) {
     db.transaction(() => {
       for (const [name, rank] of DEFAULT_LEVELS) raw.prepare("INSERT INTO clearance_levels (name, rank, created_at) VALUES (?, ?, ?)").run(name, rank, now());
-      for (const [name, req] of DEFAULT_CLASSIFICATIONS) raw.prepare("INSERT OR IGNORE INTO badge_classifications (name, requires_clearance, created_at) VALUES (?, ?, ?)").run(name, req, now());
       db.setSetting("clearance.seeded", "1");
     });
   }
@@ -119,6 +119,7 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     if (input.name !== undefined || !existing) {
       const name = String(input.name || "").trim().replace(/\s+/g, " ").slice(0, 40);
       if (!name) throw fail(400, "Give the clearance level a name.");
+      if (isUnclearedName(name)) throw fail(409, `${UNCLEARED} is built in: it is the level below all the others, no clearance at all.`);
       const clash = raw.prepare("SELECT id FROM clearance_levels WHERE name = ?").get(name);
       if (clash && clash.id !== existing?.id) throw fail(409, "There is already a clearance level with that name.");
       out.name = name;
@@ -153,54 +154,6 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
       raw.prepare("DELETE FROM badge_templates WHERE level_key = ?").run(Number(id));
       raw.prepare("DELETE FROM clearance_levels WHERE id = ?").run(id);
     });
-    return existing;
-  }
-
-  // --- classifications ------------------------------------------------------------------
-
-  function classRow(r) {
-    return r && { id: r.id, name: r.name, requiresClearance: Boolean(r.requires_clearance), inUse: r.in_use ?? undefined };
-  }
-
-  function classifications() {
-    return raw.prepare("SELECT c.*, (SELECT count(*) FROM badges WHERE classification_id = c.id) AS in_use FROM badge_classifications c ORDER BY c.requires_clearance DESC, c.name").all().map(classRow);
-  }
-
-  function classification(id) {
-    return classRow(raw.prepare("SELECT * FROM badge_classifications WHERE id = ?").get(Number(id)));
-  }
-
-  function createClassification({ name, requiresClearance = false }) {
-    const clean = String(name || "").trim().replace(/\s+/g, " ").slice(0, 40);
-    if (!clean) throw fail(400, "Give the classification a name.");
-    if (raw.prepare("SELECT 1 FROM badge_classifications WHERE name = ?").get(clean)) throw fail(409, "There is already a classification with that name.");
-    return classification(raw.prepare("INSERT INTO badge_classifications (name, requires_clearance, created_at) VALUES (?, ?, ?)").run(clean, requiresClearance ? 1 : 0, now()).lastInsertRowid);
-  }
-
-  function updateClassification(id, { name, requiresClearance } = {}) {
-    const existing = classifications().find((c) => c.id === Number(id));
-    if (!existing) throw fail(404, "No such classification.");
-    const next = { ...existing };
-    if (name !== undefined) {
-      const clean = String(name || "").trim().replace(/\s+/g, " ").slice(0, 40);
-      if (!clean) throw fail(400, "Give the classification a name.");
-      const clash = raw.prepare("SELECT id FROM badge_classifications WHERE name = ?").get(clean);
-      if (clash && clash.id !== existing.id) throw fail(409, "There is already a classification with that name.");
-      next.name = clean;
-    }
-    if (requiresClearance !== undefined && Boolean(requiresClearance) !== existing.requiresClearance) {
-      if (existing.inUse) throw fail(409, `${existing.inUse} badge${existing.inUse === 1 ? " uses" : "s use"} ${existing.name}; whether it needs a clearance level can't change while they do.`);
-      next.requiresClearance = Boolean(requiresClearance);
-    }
-    raw.prepare("UPDATE badge_classifications SET name = ?, requires_clearance = ? WHERE id = ?").run(next.name, next.requiresClearance ? 1 : 0, id);
-    return classification(id);
-  }
-
-  function removeClassification(id) {
-    const existing = classifications().find((c) => c.id === Number(id));
-    if (!existing) throw fail(404, "No such classification.");
-    if (existing.inUse) throw fail(409, `${existing.inUse} badge${existing.inUse === 1 ? " uses" : "s use"} ${existing.name}; change them first.`);
-    raw.prepare("DELETE FROM badge_classifications WHERE id = ?").run(id);
     return existing;
   }
 
@@ -493,11 +446,6 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     createLevel,
     updateLevel,
     removeLevel,
-    classifications,
-    classification,
-    createClassification,
-    updateClassification,
-    removeClassification,
     cleanLevelId,
     effectiveLevel,
     notCounting,
@@ -520,4 +468,4 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
   };
 }
 
-module.exports = { createClearance, cleanDate, today, DEFAULT_LEVELS, recheckDays, statusFor, isFourDigits, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS, DEFAULT_RECHECK_DAYS };
+module.exports = { createClearance, cleanDate, today, DEFAULT_LEVELS, UNCLEARED, isUnclearedName, recheckDays, statusFor, isFourDigits, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS, DEFAULT_RECHECK_DAYS };

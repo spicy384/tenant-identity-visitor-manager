@@ -339,10 +339,9 @@ async function overHttp() {
   check("prefs: administrators see re-checks but not the queue", (await admin.get("/api/me/prefs")).data.available.includes("rechecks") && !(await admin.get("/api/me/prefs")).data.available.includes("clearanceQueue"));
 
   // --- who keeps the badge stock --------------------------------------------------------------------
-  const uncl = (await admin.get("/api/clearance")).data.classifications.find((c) => !c.requiresClearance);
-  check("badges: Security adds them", (await security.post("/api/badges", { number: "SEC-1", type: "visitor", classificationId: uncl.id })).status === 200);
-  check("badges: front desk and managers don't", (await desk.post("/api/badges", { number: "D-1", type: "visitor", classificationId: uncl.id })).status === 403
-    && (await manager.post("/api/badges", { number: "M-1", type: "visitor", classificationId: uncl.id })).status === 403);
+  check("badges: Security adds them", (await security.post("/api/badges", { number: "SEC-1", type: "visitor" })).status === 200);
+  check("badges: front desk and managers don't", (await desk.post("/api/badges", { number: "D-1", type: "visitor" })).status === 403
+    && (await manager.post("/api/badges", { number: "M-1", type: "visitor" })).status === 403);
   const secBadge = (await security.get("/api/badges?q=SEC-1")).data.badges[0];
   check("badges: but they issue and take them back", (await desk.post(`/api/badges/${secBadge.id}/assign`, { kind: "visitor", holderId: visitor.id })).status === 200
     && (await manager.post(`/api/badges/${secBadge.id}/return`)).status === 200);

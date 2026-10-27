@@ -1,5 +1,5 @@
 /**
- * Badges: their numbers, type, classification and clearance level, and who has held each.
+ * Badges: their numbers, type and clearance level (none: Uncleared), and who has held each.
  *
  * Types: personnel badges go to people of companies marked "Building staff", tenant badges
  * to people of every other company, visitor badges to visitors. A badge with a clearance
@@ -39,13 +39,12 @@ function createBadges({ db, clearance, now = Date.now }) {
 
   // --- reading ----------------------------------------------------------------------------
 
-  const SELECT = `SELECT b.*, c.name AS classification_name, c.requires_clearance, l.name AS level_name, l.rank AS level_rank,
+  const SELECT = `SELECT b.*, l.name AS level_name, l.rank AS level_rank,
       (SELECT json_group_array(json_object('id', s.id, 'name', s.name)) FROM badge_sites bs JOIN sites s ON s.id = bs.site_id WHERE bs.badge_id = b.id) AS sites_json,
       a.id AS a_id, a.holder_kind, a.holder_id, a.holder_name, a.holder_company, a.visit_id, a.assigned_at, a.assigned_by,
       a.temporary AS a_temporary, a.due_at AS a_due_at, rb.number AS a_replaces_number, rb.facility_code AS a_replaces_code,
       (SELECT json_object('id', rv.id, 'name', rv.first_name || ' ' || rv.last_name) FROM visitors rv WHERE rv.reserved_badge_id = b.id) AS reserved_json
     FROM badges b
-    LEFT JOIN badge_classifications c ON c.id = b.classification_id
     LEFT JOIN clearance_levels l ON l.id = b.clearance_level_id
     LEFT JOIN badge_assignments a ON a.badge_id = b.id AND a.returned_at IS NULL
     LEFT JOIN badges rb ON rb.id = a.replaces_badge_id`;
@@ -58,8 +57,6 @@ function createBadges({ db, clearance, now = Date.now }) {
       facilityCode: r.facility_code ?? null,
       label: badgeLabel(r.facility_code, r.number),
       type: r.type,
-      classificationId: r.classification_id,
-      classificationName: r.classification_name,
       clearanceLevelId: r.clearance_level_id,
       clearanceLevelName: r.level_name,
       // [] means every site.
@@ -97,7 +94,7 @@ function createBadges({ db, clearance, now = Date.now }) {
    * "temporary" (temporary badges out), "overdue" (temporary badges not back by their time).
    * temporary: true or false limits to temporary or regular badges.
    */
-  function list({ q = "", type = null, state = null, classificationId = null, levelId = null, siteId = null, sites = null, temporary = null, limit = 200, offset = 0 } = {}) {
+  function list({ q = "", type = null, state = null, levelId = null, siteId = null, sites = null, temporary = null, limit = 200, offset = 0 } = {}) {
     const where = [];
     const params = [];
     const sc = scope(sites);
@@ -105,8 +102,9 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (TYPES.includes(type)) { where.push("b.type = ?"); params.push(type); }
     // "people": the badges people (not visitors) wear, personnel and tenant.
     if (type === "people") where.push("b.type IN ('personnel', 'tenant')");
-    if (classificationId) { where.push("b.classification_id = ?"); params.push(classificationId); }
-    if (levelId) { where.push("b.clearance_level_id = ?"); params.push(levelId); }
+    // levelId "none": Uncleared badges.
+    if (levelId === "none") where.push("b.clearance_level_id IS NULL");
+    else if (levelId) { where.push("b.clearance_level_id = ?"); params.push(levelId); }
     if (siteId) { const v = validAt([siteId]); where.push(v.sql); params.push(...v.params); }
     if (state === "available") where.push("b.status = 'active' AND a.id IS NULL");
     if (state === "assigned") where.push("a.id IS NOT NULL");
@@ -197,11 +195,7 @@ function createBadges({ db, clearance, now = Date.now }) {
       if (!TYPES.includes(input.type)) throw fail(400, `The badge type must be one of: ${TYPES.join(", ")}.`);
       out.type = input.type;
     }
-    if (input.classificationId !== undefined || !existing) {
-      const c = clearance.classification(input.classificationId);
-      if (!c) throw fail(400, "Choose the badge's classification.");
-      out.classificationId = c.id;
-    }
+    // The clearance level: null (or left out on a new badge) is Uncleared.
     if (input.clearanceLevelId !== undefined) out.clearanceLevelId = clearance.cleanLevelId(input.clearanceLevelId);
     // The sites it is valid at: null or [] for every site.
     if (input.siteIds !== undefined) {
@@ -217,11 +211,6 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (input.notes !== undefined) out.notes = String(input.notes ?? "").trim().slice(0, 1000) || null;
     if (input.temporary !== undefined) out.temporary = Boolean(input.temporary);
     if ((out.temporary ?? existing?.temporary) && (out.type ?? existing?.type) === "visitor") throw fail(400, "Temporary badges stand in for a person's own badge; visitors get visitor badges.");
-    // A cleared classification needs a level; an uncleared one has none.
-    const classification = clearance.classification(out.classificationId ?? existing?.classificationId);
-    const level = out.clearanceLevelId !== undefined ? out.clearanceLevelId : existing?.clearanceLevelId ?? null;
-    if (classification.requiresClearance && !level) throw fail(400, `A ${classification.name} badge needs a clearance level.`);
-    if (!classification.requiresClearance && level) out.clearanceLevelId = null;
     return out;
   }
 
@@ -253,8 +242,8 @@ function createBadges({ db, clearance, now = Date.now }) {
     const t = now();
     let id;
     db.transaction(() => {
-      id = raw.prepare(`INSERT INTO badges (number, facility_code, type, classification_id, clearance_level_id, temporary, status, notes, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.number, v.facilityCode ?? null, v.type, v.classificationId, v.clearanceLevelId ?? null, v.temporary ? 1 : 0, v.status || "active", v.notes ?? null, t, t).lastInsertRowid;
+      id = raw.prepare(`INSERT INTO badges (number, facility_code, type, clearance_level_id, temporary, status, notes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.number, v.facilityCode ?? null, v.type, v.clearanceLevelId ?? null, v.temporary ? 1 : 0, v.status || "active", v.notes ?? null, t, t).lastInsertRowid;
       writeSites(id, siteIds);
     });
     return get(id);
@@ -284,15 +273,15 @@ function createBadges({ db, clearance, now = Date.now }) {
     const v = clean(input, existing);
     const siteIds = v.siteIds !== undefined ? mergeSites(v.siteIds, existing.sites.map((x) => x.id), sites) : null;
     if (existing.holder) {
-      if ((v.type && v.type !== existing.type) || (v.clearanceLevelId !== undefined && v.clearanceLevelId !== existing.clearanceLevelId) || (v.classificationId && v.classificationId !== existing.classificationId) || (v.temporary !== undefined && v.temporary !== existing.temporary)) {
-        throw fail(409, `${existing.holder.name} holds this badge; take it back before changing its type, classification, level or whether it is temporary.`);
+      if ((v.type && v.type !== existing.type) || (v.clearanceLevelId !== undefined && v.clearanceLevelId !== existing.clearanceLevelId) || (v.temporary !== undefined && v.temporary !== existing.temporary)) {
+        throw fail(409, `${existing.holder.name} holds this badge; take it back before changing its type, clearance level or whether it is temporary.`);
       }
       if (v.status && v.status !== "active") throw fail(409, `${existing.holder.name} holds this badge; mark it returned or lost instead.`);
     }
     const next = { ...existing, ...v };
     db.transaction(() => {
-      raw.prepare("UPDATE badges SET number = ?, facility_code = ?, type = ?, classification_id = ?, clearance_level_id = ?, temporary = ?, status = ?, notes = ?, updated_at = ? WHERE id = ?")
-        .run(next.number, next.facilityCode ?? null, next.type, next.classificationId, next.clearanceLevelId ?? null, next.temporary ? 1 : 0, next.status, next.notes ?? null, now(), id);
+      raw.prepare("UPDATE badges SET number = ?, facility_code = ?, type = ?, clearance_level_id = ?, temporary = ?, status = ?, notes = ?, updated_at = ? WHERE id = ?")
+        .run(next.number, next.facilityCode ?? null, next.type, next.clearanceLevelId ?? null, next.temporary ? 1 : 0, next.status, next.notes ?? null, now(), id);
       if (siteIds) writeSites(id, siteIds);
     });
     return get(id);

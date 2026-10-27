@@ -125,8 +125,7 @@ async function main() {
   check("companies: made inactive together", r.status === 200 && r.data.updated === 2 && (await admin.get(`/api/companies/${other.id}`)).data.company.active === false);
   await manager.post("/api/companies/bulk", { ids: [acme.id, other.id], patch: { active: true } });
   check("companies: only administrators delete them", (await manager.post("/api/companies/bulk-delete", { ids: [other.id] })).status === 403);
-  const uncleared = (await admin.get("/api/clearance")).data.classifications.find((c) => !c.requiresClearance);
-  const badge = (await admin.post("/api/badges", { number: "T-1", type: "tenant", classificationId: uncleared.id })).data.badge;
+  const badge = (await admin.post("/api/badges", { number: "T-1", type: "tenant" })).data.badge;
   await admin.post(`/api/badges/${badge.id}/assign`, { kind: "person", holderId: dee.id });
   r = await admin.post("/api/companies/bulk-delete", { ids: [other.id] });
   check("companies: not while one of their people holds a badge", r.status === 409 && (await admin.get(`/api/companies/${other.id}`)).status === 200);
@@ -162,19 +161,18 @@ async function main() {
   pw.sec = password();
   await admin.post("/api/users", { username: "sec", password: pw.sec, role: "security" });
   const security = await as("sec");
-  const cleared = (await admin.get("/api/clearance")).data.classifications.find((c) => c.requiresClearance);
   const levels = (await admin.get("/api/clearance")).data.levels;
-  const mkBadge = async (number, type = "tenant") => (await security.post("/api/badges", { number, type, classificationId: uncleared.id })).data.badge;
+  const mkBadge = async (number, type = "tenant") => (await security.post("/api/badges", { number, type })).data.badge;
   const b1 = await mkBadge("B-1");
   const b2 = await mkBadge("B-2");
   const b3 = await mkBadge("B-3", "personnel");
   check("badges: only Security changes several", (await manager.post("/api/badges/bulk", { ids: [b1.id, b2.id], patch: { type: "visitor" } })).status === 403);
   r = await security.post("/api/badges/bulk", { ids: [b1.id, b2.id, b3.id], patch: { type: "visitor" } });
   check("badges: moved to visitor badges together", r.status === 200 && r.data.updated === 3 && (await security.get(`/api/badges/${b3.id}`)).data.badge.type === "visitor");
-  r = await security.post("/api/badges/bulk", { ids: [b1.id, b2.id], patch: { type: "personnel", classificationId: cleared.id, clearanceLevelId: levels[0].id } });
+  r = await security.post("/api/badges/bulk", { ids: [b1.id, b2.id], patch: { type: "personnel", clearanceLevelId: levels[0].id } });
   check("badges: and to personnel, cleared at a level", r.status === 200 && (await security.get(`/api/badges/${b1.id}`)).data.badge.clearanceLevelName === levels[0].name);
   const mover = (await admin.post("/api/people", { firstName: "Hal", lastName: "Holder", companyId: acme.id })).data.person;
-  await security.post("/api/badges/bulk", { ids: [b2.id], patch: { type: "tenant", classificationId: uncleared.id } });
+  await security.post("/api/badges/bulk", { ids: [b2.id], patch: { type: "tenant", clearanceLevelId: null } });
   await security.post(`/api/badges/${b2.id}/assign`, { kind: "person", holderId: mover.id });
   r = await security.post("/api/badges/bulk", { ids: [b2.id, b3.id], patch: { type: "personnel" } });
   check("badges: one that is out can't move, so none does", r.status === 409 && /Badge B-2/.test(r.data.error) && /Nothing was changed/.test(r.data.error) && (await security.get(`/api/badges/${b3.id}`)).data.badge.type === "visitor");
@@ -196,7 +194,7 @@ async function main() {
   const cell = (role) => gridField.access[role];
   check("badge fields: Security (manage) can change them, others who see badges only read them", cell("security") === "edit" && cell("frontdesk") === "view" && cell("manager") === "view" && cell("viewer") === "view");
   check("badge fields: the grid can't let a role that only issues badges change them", (await admin.put("/api/field-access", { changes: [{ roleId: "frontdesk", entity: "badge", field: gridField.key, access: "edit" }] })).status === 400);
-  r = await security.post("/api/badges", { number: "L-1", type: "visitor", classificationId: uncleared.id, custom: { [lanyard.key]: "Red" } });
+  r = await security.post("/api/badges", { number: "L-1", type: "visitor", custom: { [lanyard.key]: "Red" } });
   check("badge fields: set when a badge is added", r.status === 200 && r.data.badge.custom[lanyard.key] === "Red");
   check("badge fields: front desk sees them", (await desk.get(`/api/badges/${r.data.badge.id}`)).data.badge.custom[lanyard.key] === "Red"
     && (await desk.get("/api/badges?q=L-1")).data.badges[0].custom[lanyard.key] === "Red");
@@ -204,14 +202,14 @@ async function main() {
   check("badge fields: but can't change them", (await desk.put(`/api/badges/${l1.id}`, { custom: { [lanyard.key]: "Blue" } })).status === 403);
   check("badge fields: Security changes them", (await security.put(`/api/badges/${l1.id}`, { custom: { [lanyard.key]: "Blue" } })).data.badge.custom[lanyard.key] === "Blue");
   check("badge fields: an unknown one is refused", (await security.put(`/api/badges/${l1.id}`, { custom: { nope: "x" } })).status === 400);
-  const range = (await security.post("/api/badges/range", { prefix: "R-", from: 1, to: 3, type: "visitor", classificationId: uncleared.id, custom: { [lanyard.key]: "Green" } })).data;
+  const range = (await security.post("/api/badges/range", { prefix: "R-", from: 1, to: 3, type: "visitor", custom: { [lanyard.key]: "Green" } })).data;
   check("badge fields: a range gets them all", range.count === 3 && range.last.custom[lanyard.key] === "Green");
   const rangeIds = (await security.get("/api/badges?q=R-")).data.badges.map((b) => b.id);
   r = await security.post("/api/badges/bulk", { ids: [l1.id, ...rangeIds], patch: { custom: { [lanyard.key]: "Black" } } });
   check("badge fields: changed on several at once", r.status === 200 && r.data.updated === 4 && (await security.get(`/api/badges/${rangeIds[0]}`)).data.badge.custom[lanyard.key] === "Black");
   const req2 = (await admin.post("/api/fields", { entity: "badge", label: "Box", type: "text", required: true, visibility: "all" })).data.field;
-  check("badge fields: a required one must be given for a new badge", (await security.post("/api/badges", { number: "L-2", type: "visitor", classificationId: uncleared.id })).status === 400
-    && (await security.post("/api/badges", { number: "L-2", type: "visitor", classificationId: uncleared.id, custom: { [req2.key]: "4" } })).status === 200);
+  check("badge fields: a required one must be given for a new badge", (await security.post("/api/badges", { number: "L-2", type: "visitor" })).status === 400
+    && (await security.post("/api/badges", { number: "L-2", type: "visitor", custom: { [req2.key]: "4" } })).status === 200);
   await security.post("/api/badges/bulk-delete", { ids: rangeIds });
   check("badge fields: deleted with their badge", (await security.get(`/api/badges/${rangeIds[0]}`)).status === 404);
 

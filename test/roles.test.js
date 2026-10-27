@@ -163,8 +163,7 @@ async function main() {
   r = await manny.post("/api/fields", { entity: "badge", label: "Locker", type: "text", visibility: "all" });
   const locker = r.data.field;
   check("badge fields: a manager adds one", r.status === 200 && locker.entity === "badge");
-  const uncleared = (await admin.get("/api/clearance")).data.classifications.find((c) => !c.requiresClearance);
-  const badge = (await admin.post("/api/badges", { number: "M-1", type: "tenant", classificationId: uncleared.id })).data.badge;
+  const badge = (await admin.post("/api/badges", { number: "M-1", type: "tenant" })).data.badge;
   check("badge fields: but filling one in stays with those who manage badges", (await manny.put(`/api/badges/${badge.id}`, { custom: { [locker.key]: "12" } })).status === 403
     && ((await manny.get(`/api/badges/${badge.id}`)).data.badge.custom[locker.key] ?? null) === null);
   pw.sec = password();

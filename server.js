@@ -18,7 +18,7 @@ const { COUNTRIES } = require("./countries");
 const { ID_TYPES } = require("./visitors");
 const { createApiClients } = require("./api-clients");
 const { createApiV1 } = require("./api-v1");
-const { createClearance, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS } = require("./clearance");
+const { createClearance, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS, UNCLEARED, isUnclearedName } = require("./clearance");
 const { createBadges } = require("./badges");
 const { createEvents } = require("./events");
 const { createBadgeRoutes } = require("./badge-routes");
@@ -913,20 +913,20 @@ function importVisitors(req, rows, { where, from = "CSV", skipProblems = false }
   return { ...counts, ignored };
 }
 
-const BADGE_COLUMNS = ["number", "facility_code", "type", "classification", "level", "sites", "temporary", "status", "notes"];
+const BADGE_COLUMNS = ["number", "facility_code", "type", "level", "sites", "temporary", "status", "notes"];
 const BADGE_TYPE_NAMES = { personnel: "personnel", staff: "personnel", building: "personnel", tenant: "tenant", visitor: "visitor", guest: "visitor" };
 
 /**
- * Imports badges from rows keyed by column (number, type, classification, level, sites,
- * temporary, status, notes). A badge with the same number is updated (one that is out can't
- * change its type, classification, level or temporary flag). Level names only for roles that
- * see clearance levels.
+ * Imports badges from rows keyed by column (number, type, level, sites, temporary, status,
+ * notes). The level is a level's name or Uncleared; empty is Uncleared for a new badge and
+ * leaves an existing one's as it is. A badge with the same number is updated (one that is out
+ * can't change its type, level or temporary flag). Level names other than Uncleared only for
+ * roles that see clearance levels.
  */
 function importBadges(req, rows, { where, from = "CSV", skipProblems = false } = {}) {
-  checkImport(rows, ["number", "type", "classification"]);
+  checkImport(rows, ["number", "type"]);
   const seesLevels = access.canSeeClearances(req.ctx);
-  if (!seesLevels && rows.some((r) => r.level)) throw fail(403, "This account doesn't see clearance levels, so it can't import them; leave the level out, or ask Security.");
-  const classes = clearance.classifications();
+  if (!seesLevels && rows.some((r) => r.level && !isUnclearedName(r.level))) throw fail(403, "This account doesn't see clearance levels, so it can't import them; leave the level out, or ask Security.");
   const levels = clearance.levels();
   // Custom badge fields the caller may change, by their key.
   const customDefs = new Map(access.fieldsFor(req.ctx, "badge").filter((f) => !f.builtIn && f.access === "edit" && f.recordId === null).map((f) => [f.apiKey, f]));
@@ -937,15 +937,12 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
     const type = BADGE_TYPE_NAMES[String(row.type || "").trim().toLowerCase()];
     if (!type) throw fail(400, `"${row.type}" isn't a badge type: personnel, tenant or visitor.`);
     input.type = type;
-    const cls = classes.find((c) => c.name.toLowerCase() === String(row.classification || "").trim().toLowerCase());
-    if (!cls) throw fail(400, `There is no classification called "${row.classification}" (${classes.map((c) => c.name).join(", ")}).`);
-    input.classificationId = cls.id;
-    if (row.level) {
-      const level = levels.find((l) => l.name.toLowerCase() === String(row.level).trim().toLowerCase());
-      if (!level) throw fail(400, `There is no clearance level called "${row.level}".`);
-      input.clearanceLevelId = level.id;
-    } else if (!cls.requiresClearance) {
+    if (isUnclearedName(row.level)) {
       input.clearanceLevelId = null;
+    } else if (row.level) {
+      const level = levels.find((l) => l.name.toLowerCase() === String(row.level).trim().toLowerCase());
+      if (!level) throw fail(400, `There is no clearance level called "${row.level}" (${[...levels.map((l) => l.name), UNCLEARED].join(", ")}).`);
+      input.clearanceLevelId = level.id;
     }
     if (row.sites) input.siteIds = String(row.sites).split(";").map((s) => s.trim()).filter(Boolean).map((s) => siteByName(req.ctx, s).id);
     if (row.temporary) input.temporary = parseYesNo(row.temporary, "temporary");

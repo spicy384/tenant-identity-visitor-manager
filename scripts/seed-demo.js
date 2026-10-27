@@ -91,14 +91,13 @@ db.writeDoc("users", accounts.map((a) => ({
 })));
 // Building security, and a stock of badges.
 directory.createCompany({ name: "Harbor Point Security", buildingStaff: true, phone: "555-0911", sites: [{ siteId: harbor.id, suite: "Lobby desk" }, { siteId: riverside.id, suite: "Security office" }] });
-const cls = Object.fromEntries(clearance.classifications().map((c) => [c.name, c.id]));
 const lvl = Object.fromEntries(clearance.levels().map((l) => [l.name, l.id]));
-badges.createRange({ prefix: "P-", from: 1, to: 6, width: 3, type: "personnel", classificationId: cls.Cleared, clearanceLevelId: lvl.TS });
-badges.createRange({ prefix: "T-", from: 1, to: 30, width: 4, type: "tenant", classificationId: cls.Uncleared });
-badges.createRange({ prefix: "S-", from: 1, to: 6, width: 3, type: "tenant", classificationId: cls.Cleared, clearanceLevelId: lvl["TS//SCI"] });
-badges.createRange({ prefix: "V-", from: 1, to: 20, width: 3, type: "visitor", classificationId: cls.Uncleared });
+badges.createRange({ prefix: "P-", from: 1, to: 6, width: 3, type: "personnel", clearanceLevelId: lvl.TS });
+badges.createRange({ prefix: "T-", from: 1, to: 30, width: 4, type: "tenant" });
+badges.createRange({ prefix: "S-", from: 1, to: 6, width: 3, type: "tenant", clearanceLevelId: lvl["TS//SCI"] });
+badges.createRange({ prefix: "V-", from: 1, to: 20, width: 3, type: "visitor" });
 // Lent for the day to people who forgot theirs.
-badges.createRange({ prefix: "TMP-", from: 1, to: 5, width: 2, type: "tenant", classificationId: cls.Uncleared, temporary: true });
+badges.createRange({ prefix: "TMP-", from: 1, to: 5, width: 2, type: "tenant", temporary: true });
 
 db.audit({ username: "seed-demo", action: "demo.seed", detail: `${companies.length} companies, ${accounts.length} accounts` });
 clearance.stop();

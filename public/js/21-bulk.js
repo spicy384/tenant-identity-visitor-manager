@@ -358,7 +358,7 @@ async function deleteBadges(list) {
 
 /**
  * Changes the ticked things on every chosen badge: move them to another type (visitor,
- * tenant, personnel), classification or clearance level, the sites they're valid at,
+ * tenant, personnel), clearance level, the sites they're valid at,
  * temporary, status or notes.
  */
 async function bulkEditBadges(list) {
@@ -374,8 +374,8 @@ async function bulkEditBadges(list) {
     return h("div", { class: "bulk-field" }, h("label", { class: "check-row" }, change, h("span", { text: label }), hint ? h("span", { class: "muted small-text", text: ` ${hint}` }) : null), el);
   };
   const type = h("select", { "aria-label": "Type" }, options(info.badgeTypes.map((t) => [t.value, t.label])));
-  const classification = h("select", { "aria-label": "Classification" }, options(info.classifications.map((c) => [String(c.id), c.name])));
-  const level = canSeeClearances() ? h("select", { "aria-label": "Clearance level" }, options([["", "None"], ...info.levels.map((l) => [String(l.id), l.name])])) : null;
+  // Those who don't see level names may still make badges Uncleared.
+  const level = h("select", { "aria-label": "Clearance level" }, options([["", info.uncleared], ...(canSeeClearances() ? info.levels.map((l) => [String(l.id), l.name]) : [])]));
   const sites = siteLimitPicker(null);
   sites.node.querySelector(".label").textContent = "";
   const temporary = h("select", { "aria-label": "Temporary" }, options([["no", "No"], ["yes", "Yes, lent for the day"]]));
@@ -385,8 +385,7 @@ async function bulkEditBadges(list) {
   const nodes = [
     row("facilityCode", "Facility code", facilityCode, () => facilityCode.value.trim(), "(empty takes it away)"),
     row("type", "Move to type", type, () => type.value, "(visitor, tenant or personnel)"),
-    row("classificationId", "Classification", classification, () => Number(classification.value)),
-    level ? row("clearanceLevelId", "Clearance level", level, () => (level.value ? Number(level.value) : null)) : null,
+    row("clearanceLevelId", "Clearance level", level, () => (level.value ? Number(level.value) : null)),
     multiSite() || state.config.access.sitesLimited ? row("siteIds", "Valid at", sites.node, () => sites.value() || []) : null,
     row("temporary", "Temporary", temporary, () => temporary.value === "yes"),
     row("status", "Status", status, () => status.value),
@@ -400,7 +399,7 @@ async function bulkEditBadges(list) {
   const result = await formDialog({
     title: `Change ${list.length} ${list.length === 1 ? "badge" : "badges"}`,
     wide: true,
-    intro: h("p", { class: "muted", text: `Tick each thing to change; it is set the same on every chosen badge (${list.map((b) => b.label).slice(0, 8).join(", ")}${list.length > 8 ? ", …" : ""}). A badge that is out can't move to another type or change its classification, level or whether it is temporary: take it back first. If any badge can't take the change, none does.${level ? "" : " Clearance levels are changed by roles that see them."}` }),
+    intro: h("p", { class: "muted", text: `Tick each thing to change; it is set the same on every chosen badge (${list.map((b) => b.label).slice(0, 8).join(", ")}${list.length > 8 ? ", …" : ""}). A badge that is out can't move to another type or change its clearance level or whether it is temporary: take it back first. If any badge can't take the change, none does.${canSeeClearances() ? "" : " Cleared levels are set by roles that see them, or one at a time by the badge's image."}` }),
     fields: [{ node: h("div", { class: "full-row bulk-fields" }, nodes) }],
     submitLabel: "Change",
     onSubmit: async () => {

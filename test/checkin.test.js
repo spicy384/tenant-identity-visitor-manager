@@ -79,8 +79,6 @@ async function main() {
   const mgmt = (await admin.post("/api/companies", { name: "Harbor Management", buildingStaff: true, sites: [{ siteId: site.id }] })).data.company;
   const host = (await admin.post("/api/people", { firstName: "Hana", lastName: "Host", companyId: acme.id, phone: "555-0100" })).data.person;
   const facilities = (await admin.post("/api/people", { firstName: "Fred", lastName: "Fixit", companyId: mgmt.id, canHost: false })).data.person;
-  const { classifications } = (await admin.get("/api/clearance")).data;
-  const uncleared = classifications.find((c) => c.name === "Uncleared");
 
   const pw = { desk: password(), viewer: password(), security: password() };
   await admin.post("/api/users", { username: "desk", password: pw.desk, role: "frontdesk" });
@@ -126,11 +124,11 @@ async function main() {
   check("technician: anyone in the directory can be their contact, the visit going to that company", r.status === 200 && techVisit.companyName === "Harbor Management" && techVisit.visitorType === "Service Technician", JSON.stringify(r.data));
 
   // --- the badge step ---------------------------------------------------------------------------
-  const v1 = (await security.post("/api/badges", { number: "V-1", type: "visitor", classificationId: uncleared.id })).data.badge;
-  const v2 = (await security.post("/api/badges", { number: "V-2", type: "visitor", classificationId: uncleared.id })).data.badge;
-  const v3 = (await security.post("/api/badges", { number: "V-3", type: "visitor", classificationId: uncleared.id })).data.badge;
-  const vRiver = (await security.post("/api/badges", { number: "VR-9", type: "visitor", classificationId: uncleared.id, siteIds: [other.id] })).data.badge;
-  const tenantBadge = (await security.post("/api/badges", { number: "T-1", type: "tenant", classificationId: uncleared.id })).data.badge;
+  const v1 = (await security.post("/api/badges", { number: "V-1", type: "visitor" })).data.badge;
+  const v2 = (await security.post("/api/badges", { number: "V-2", type: "visitor" })).data.badge;
+  const v3 = (await security.post("/api/badges", { number: "V-3", type: "visitor" })).data.badge;
+  const vRiver = (await security.post("/api/badges", { number: "VR-9", type: "visitor", siteIds: [other.id] })).data.badge;
+  const tenantBadge = (await security.post("/api/badges", { number: "T-1", type: "tenant" })).data.badge;
   r = await desk.get(`/api/visits/${annVisit.id}/badge-plan`);
   check("plan: nothing kept for Ann, the visitor badges valid here on offer", r.status === 200 && r.data.assigned === null && r.data.available.map((b) => b.number).join() === "V-1,V-2,V-3" && r.data.holding.length === 0, JSON.stringify(r.data));
   check("plan: not for a viewer", (await viewer.get(`/api/visits/${annVisit.id}/badge-plan`)).status === 403);
@@ -217,10 +215,9 @@ async function main() {
   // --- the badge image: uncleared until Security validates their clearance ---------------------------
   const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
   const secret = (await admin.get("/api/clearance")).data.levels.find((l) => l.name === "Secret");
-  const clearedClass = classifications.find((c) => c.name === "Cleared");
   const unclearedImage = (await admin.put("/api/badge-templates/0/visitor", { dataUrl: PNG })).data.template.ref;
   const secretImage = (await admin.put(`/api/badge-templates/${secret.id}/visitor`, { dataUrl: PNG })).data.template.ref;
-  await security.post("/api/badges", { number: "VC-1", type: "visitor", classificationId: clearedClass.id, clearanceLevelId: secret.id });
+  await security.post("/api/badges", { number: "VC-1", type: "visitor", clearanceLevelId: secret.id });
   // The only uncleared visitor badge left is retired: just the cleared one is in stock.
   await security.put(`/api/badges/${v2.id}`, { status: "retired" });
   const val = (await desk.post("/api/visitors", { firstName: "Val", lastName: "Idated", organization: "Clear Co", citizenship: "US" })).data.visitor;
@@ -233,7 +230,7 @@ async function main() {
   check("image: once Security validates it, the badge their clearance allows", r.data.uncleared === false && r.data.suggested === secretImage && r.data.available.map((b) => b.number).join() === "VC-1", JSON.stringify(r.data));
 
   // --- facility codes: optional, 2-3 digits, the same number under several -----------------------------
-  const add = (body) => security.post("/api/badges", { type: "visitor", classificationId: uncleared.id, ...body });
+  const add = (body) => security.post("/api/badges", { type: "visitor", ...body });
   check("code: 2 or 3 digits", (await add({ number: "777", facilityCode: "7" })).status === 400 && (await add({ number: "777", facilityCode: "1234" })).status === 400 && (await add({ number: "777", facilityCode: "1a" })).status === 400);
   r = await add({ number: "777", facilityCode: "101" });
   const fc101 = r.data.badge;
@@ -243,7 +240,7 @@ async function main() {
   check("code: but not twice under the same code", (await add({ number: "777", facilityCode: "101" })).status === 409);
   const uncoded = (await add({ number: "777" })).data.badge;
   check("code: without one is a code of its own", uncoded && uncoded.label === "777" && uncoded.facilityCode === null && (await add({ number: "777" })).status === 409);
-  check("code: only Security adds them", (await desk.post("/api/badges", { type: "visitor", classificationId: uncleared.id, number: "778", facilityCode: "101" })).status === 403);
+  check("code: only Security adds them", (await desk.post("/api/badges", { type: "visitor", number: "778", facilityCode: "101" })).status === 403);
   check("code: anyone who sees badges sees it", (await viewer.get(`/api/badges/${fc101.id}`)).data.badge.facilityCode === "101");
   check("code: found by search, alone or written with the number", (await desk.get("/api/badges?q=205-777")).data.badges.map((b) => b.id).join() === String(fc205.id)
     && (await desk.get("/api/badges?q=101")).data.badges.some((b) => b.id === fc101.id));

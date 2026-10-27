@@ -14,8 +14,9 @@ async function clearanceInfo(fresh = false) {
   return clearanceCache;
 }
 
-function badgeClassText(b) {
-  return [b.classificationName, b.clearanceLevelName].filter(Boolean).join(" · ");
+/** A badge's clearance level: its name, or for those who don't see names Cleared; else Uncleared. */
+function badgeLevelText(b) {
+  return b.clearanceLevelName || (b.cleared ? "Cleared" : "Uncleared");
 }
 
 /** A badge template image from its ref (the server never says which level it is): small, or large. */
@@ -44,7 +45,7 @@ function badgePicker(list, { suggested = null, allowNone = false, label = "Badge
     ordered.map((b, i) => row(String(b.id), [
       templateImg(b.template) || h("span", { class: "badge-thumb empty", title: "No image for this badge yet" }),
       h("span", { class: "mono", text: b.label }),
-      h("span", { class: "muted small-text", text: [badgeClassText(b), multiSite() ? badgeSitesText(b) : null].filter(Boolean).join(" · ") })
+      h("span", { class: "muted small-text", text: [badgeLevelText(b), multiSite() ? badgeSitesText(b) : null].filter(Boolean).join(" · ") })
     ], !allowNone && i === 0)));
   const value = () => node.querySelector("input:checked")?.value || "";
   return { node, value, chosen: () => list.find((b) => String(b.id) === value()) || null };
@@ -56,27 +57,34 @@ function suggestedBadge(ref) {
 }
 
 /**
- * For staff who don't see clearance level names: a cleared badge's level, chosen by the
- * badge's image. Returns { node, setKind(kind), value() (template ref or null), changed() }.
+ * For staff who don't see clearance level names: a badge's level, chosen by the badge's image,
+ * or Uncleared. `current`: the badge's image ref, "" when it is Uncleared, null for a new one
+ * (Uncleared to start with). Returns { node, setKind(kind), value() (template ref, "" for
+ * Uncleared), changed() }.
  */
 function templatePicker(templates, { kind = "tenant", current = null } = {}) {
   const name = `template-pick-${Math.random().toString(36).slice(2, 8)}`;
   const grid = h("div", { class: "template-picker" });
   const note = h("span", { class: "hint" });
   const node = h("div", { class: "full-row template-field" }, h("span", { class: "label", text: "Clearance level, by the badge's image" }), grid, note);
+  current ??= "";
   let chosen = current;
   function render() {
     const list = templates.filter((t) => t.cleared && t.kind === kind);
-    if (!list.some((t) => t.ref === chosen)) chosen = null;
-    grid.replaceChildren(...list.map((t, i) => {
-      const input = h("input", { type: "radio", name, value: t.ref });
-      input.checked = t.ref === chosen;
-      input.addEventListener("change", () => { chosen = t.ref; });
-      return h("label", { class: "template-choice" }, input, templateImg(t.ref, { alt: `Cleared badge, choice ${i + 1}` }));
-    }));
+    const plain = templates.find((t) => !t.cleared && t.kind === kind);
+    if (chosen !== "" && !list.some((t) => t.ref === chosen)) chosen = "";
+    const choice = (value, content) => {
+      const input = h("input", { type: "radio", name, value });
+      input.checked = value === chosen;
+      input.addEventListener("change", () => { chosen = value; });
+      return h("label", { class: "template-choice" }, input, content);
+    };
+    grid.replaceChildren(
+      choice("", h("span", { class: "stack" }, plain ? templateImg(plain.ref, { alt: "Uncleared badge" }) : null, h("span", { class: "small-text", text: "Uncleared" }))),
+      ...list.map((t, i) => choice(t.ref, templateImg(t.ref, { alt: `Cleared badge, choice ${i + 1}` }))));
     note.textContent = list.length
-      ? "Pick the image the badge matches. Only someone whose clearance covers it can be given it."
-      : "There are no images of cleared badges yet; an administrator adds them under Settings > Badges and clearances.";
+      ? "Uncleared, or the image the badge matches. Only someone whose clearance covers a cleared badge can be given it."
+      : "There are no images of cleared badges yet, so it can only be Uncleared; an administrator adds them under Settings > Badges and clearances.";
   }
   render();
   return { node, setKind: (k) => { kind = k; render(); }, value: () => chosen, changed: () => chosen !== current };
@@ -101,7 +109,7 @@ function temporaryText(a) {
 
 async function loadBadges() {
   const table = $("badges-table");
-  const head = ["Facility code", "Badge", "Type", "Classification", ...(multiSite() ? ["Valid at"] : []), "Status", "Held by", "Since"];
+  const head = ["Facility code", "Badge", "Type", "Clearance level", ...(multiSite() ? ["Valid at"] : []), "Status", "Held by", "Since"];
   const picking = canManageBadges();
   const all = h("input", { type: "checkbox", "aria-label": "Choose every badge on this page" });
   table.tHead.replaceChildren(h("tr", {}, picking ? h("th", { class: "pick-cell" }, all) : null, head.map((t) => h("th", { text: t }))));
@@ -122,7 +130,7 @@ async function loadBadges() {
       h("td", { class: "mono", text: b.facilityCode || "" }),
       h("td", {}, h("strong", { class: "mono", text: b.number }), b.temporary ? h("span", { class: "badge muted", text: "Temporary" }) : null),
       h("td", { text: BADGE_TYPE_LABELS[b.type] }),
-      h("td", { class: "small-text" }, h("span", { class: "with-thumb" }, templateImg(b.template), h("span", { text: badgeClassText(b) }))),
+      h("td", { class: "small-text" }, h("span", { class: "with-thumb" }, templateImg(b.template), h("span", { text: badgeLevelText(b) }))),
       multiSite() ? h("td", { class: "small-text", text: badgeSitesText(b) }) : null,
       h("td", {}, badgeStateBadge(b)),
       h("td", {}, b.holder ? [h("span", { text: b.holder.name }), b.holder.company ? h("div", { class: "muted small-text", text: b.holder.company }) : null, b.holder.temporary ? h("div", { class: `small-text ${b.holder.overdue ? "bad-text" : "muted"}`, text: temporaryText(b.holder) }) : null] : ""),
@@ -163,16 +171,13 @@ $("badges-next").addEventListener("click", () => { badgesView.offset += BADGES_P
 // --- adding and editing ---------------------------------------------------------------------
 
 /**
- * The type, classification, level and site fields (the level shown only when the
- * classification needs one). Staff who see clearance levels choose a level by name; the rest
- * by the badge's image. Returns { fields, body(values) }: body() gives the request's type,
- * classification, level, sites and temporary flag.
+ * The type, clearance level and site fields. Staff who see clearance levels choose a level by
+ * name (Uncleared, the lowest, for none); the rest by the badge's image. Returns
+ * { fields, body(values) }: body() gives the request's type, level, sites and temporary flag.
  */
 async function badgeKindFields(badge = null) {
   const info = await clearanceInfo(true);
-  const needs = (id) => Boolean(info.classifications.find((c) => String(c.id) === String(id))?.requiresClearance);
-  const byImage = canSeeClearances() ? null : templatePicker((await api("/api/badge-templates")).templates, { kind: templateKind(badge?.type || "tenant"), current: badge?.template || null });
-  const levelBox = (inputs) => (byImage ? byImage.node : inputs.clearanceLevelId.closest("label"));
+  const byImage = canSeeClearances() ? null : templatePicker((await api("/api/badge-templates")).templates, { kind: templateKind(badge?.type || "tenant"), current: badge ? (badge.cleared ? badge.template : "") : null });
   const mine = state.config.sites.map((s) => s.id);
   // A limited account starts with its own sites ticked: it can't make a badge valid everywhere.
   const current = badge ? (badge.sites.length ? badge.sites.map((s) => s.id).filter((id) => mine.includes(id)) : null) : (state.config.access.sitesLimited ? mine : null);
@@ -181,12 +186,9 @@ async function badgeKindFields(badge = null) {
   const fields = [
     { name: "type", label: "Type", type: "select", half: true, value: badge?.type || "tenant", options: info.badgeTypes, hint: "Personnel badges go to building staff, tenant badges to tenants' people, visitor badges to visitors.",
       onChange: (input) => { if (byImage) byImage.setKind(templateKind(input.value)); } },
-    { name: "classificationId", label: "Classification", type: "select", half: true, value: String(badge?.classificationId || info.classifications.find((c) => !c.requiresClearance)?.id || ""),
-      options: info.classifications.map((c) => ({ value: String(c.id), label: c.name })),
-      onChange: (input, inputs) => { levelBox(inputs).hidden = !needs(input.value); } },
     byImage
       ? { node: byImage.node }
-      : { name: "clearanceLevelId", label: "Clearance level", type: "select", half: true, value: String(badge?.clearanceLevelId || ""), options: [{ value: "", label: "Choose a level" }, ...info.levels.map((l) => ({ value: String(l.id), label: l.name }))], hint: "Only someone whose clearance covers it can be given this badge." },
+      : { name: "clearanceLevelId", label: "Clearance level", type: "select", half: true, value: String(badge?.clearanceLevelId || ""), options: [{ value: "", label: info.uncleared }, ...info.levels.map((l) => ({ value: String(l.id), label: l.name }))], hint: "Anyone of the right type may hold an Uncleared badge; a higher level only someone whose clearance covers it." },
     ...(sitesPicker ? [{ node: sitesPicker.node }] : []),
     { name: "temporary", label: "Temporary badge: lent for the day to someone who forgot theirs", type: "checkbox", value: Boolean(badge?.temporary), hint: "Goes only to a person who holds a badge of their own, and is due back by midnight." }
   ];
@@ -196,10 +198,9 @@ async function badgeKindFields(badge = null) {
   // A level picked by image goes as its template ref, and only when it is new or changed.
   const level = (v) => {
     if (!byImage) return { clearanceLevelId: v.clearanceLevelId ? Number(v.clearanceLevelId) : null };
-    if (!needs(v.classificationId)) return {};
     return !badge || byImage.changed() || v.type !== badge.type ? { templateRef: byImage.value() || "" } : {};
   };
-  const body = (v) => ({ type: v.type, classificationId: Number(v.classificationId), ...level(v), temporary: Boolean(v.temporary), ...(sitesPicker ? { siteIds: sitesPicker.value() || [] } : {}), ...custom.collect(v) });
+  const body = (v) => ({ type: v.type, ...level(v), temporary: Boolean(v.temporary), ...(sitesPicker ? { siteIds: sitesPicker.value() || [] } : {}), ...custom.collect(v) });
   return { fields, body };
 }
 
@@ -229,7 +230,7 @@ $("badges-range").addEventListener("click", async () => {
   const result = await formDialog({
     title: "Add a range of badges",
     wide: true,
-    intro: h("p", { class: "muted", text: "For a box of badges numbered in sequence, such as B-0001 to B-0050. All get the same facility code, type and classification." }),
+    intro: h("p", { class: "muted", text: "For a box of badges numbered in sequence, such as B-0001 to B-0050. All get the same facility code, type and clearance level." }),
     fields: [
       { ...facilityCodeField(), half: false },
       { name: "prefix", label: "Prefix", half: true, placeholder: "B-" },
@@ -302,7 +303,7 @@ async function assignBadgeDialog(badge) {
     title: `Give badge ${badge.label}`,
     wide: true,
     body: h("div", { class: "stack" },
-      h("div", { class: "with-thumb" }, templateImg(badge.template), h("p", { class: "muted", text: `${BADGE_TYPE_LABELS[badge.type]} badge, ${badgeClassText(badge)}.${badge.cleared ? " Only someone whose clearance covers it can hold it." : ""}` })),
+      h("div", { class: "with-thumb" }, templateImg(badge.template), h("p", { class: "muted", text: `${BADGE_TYPE_LABELS[badge.type]} badge, ${badgeLevelText(badge)}.${badge.cleared ? " Only someone whose clearance covers it can hold it." : ""}` })),
       message, search, results),
     actions: [{ label: "Cancel", value: null }],
     onOpen: (d) => { dlg = d; setTimeout(() => search.focus(), 50); }
@@ -343,7 +344,7 @@ async function openBadge(id, onChange = () => {}) {
       h("dt", { text: "Facility code" }), h("dd", { class: "mono", text: badge.facilityCode || "None" }),
       h("dt", { text: "Badge number" }), h("dd", { class: "mono", text: badge.number }),
       h("dt", { text: "Type" }), h("dd", { text: BADGE_TYPE_LABELS[badge.type] }),
-      h("dt", { text: "Classification" }), h("dd", { text: badgeClassText(badge) }),
+      h("dt", { text: "Clearance level" }), h("dd", { text: badgeLevelText(badge) }),
       badge.template ? [h("dt", { text: "Looks like" }), h("dd", {}, templateImg(badge.template, { large: true, alt: `Badge ${badge.label}` }))] : null,
       badge.temporary ? [h("dt", { text: "Temporary" }), h("dd", { text: "Lent for the day to people who forgot their own badge" })] : null,
       multiSite() ? [h("dt", { text: "Valid at" }), h("dd", { text: badgeSitesText(badge) })] : null,
@@ -445,7 +446,7 @@ function badgeSection(kind, holderId) {
     const own = data.current.filter((a) => !a.temporary);
     if (canEditBadges() && kind === "person" && own.length && !data.current.some((a) => a.temporary)) {
       if (data.temporary.length) {
-        const tmp = h("select", { "aria-label": "Temporary badge" }, data.temporary.map((b) => h("option", { value: String(b.id), text: `${b.label} · ${badgeClassText(b)}` })));
+        const tmp = h("select", { "aria-label": "Temporary badge" }, data.temporary.map((b) => h("option", { value: String(b.id), text: `${b.label} · ${badgeLevelText(b)}` })));
         const forWhich = own.length > 1 ? h("select", { "aria-label": "In place of" }, own.map((a) => h("option", { value: String(a.badgeId), text: `in place of ${a.badgeLabel}` }))) : null;
         parts.push(h("div", { class: "temp-row" },
           h("span", { class: "small-text", text: "Forgot their badge today?" }),
@@ -482,10 +483,14 @@ async function settingsBadges(body) {
     await badgeImagesPanel(info.levels),
     h("div", { class: "panel" },
       h("div", { class: "panel-head" }, h("h3", { text: "Clearance levels" }), h("button", { type: "button", class: "primary small", text: "Add level", onclick: () => editLevel(null).then((x) => x && changed()) })),
-      h("p", { class: "muted", text: "Higher in the order covers everything below it: someone at TS//SCI FSP may hold a TS//SCI CI badge, not the other way round. People and visitors carry a level, with when it was granted and when it expires, set only by the Security role when it validates one; an expired or unvalidated clearance counts as none." }),
+      h("p", { class: "muted", text: "Higher in the order covers everything below it: someone at TS//SCI FSP may hold a TS//SCI CI badge, not the other way round. Uncleared is built in, below them all: its badges can go to anyone of the right type. People and visitors carry a level, with when it was granted and when it expires, set only by the Security role when it validates one; an expired or unvalidated clearance counts as none." }),
       h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
         h("thead", {}, h("tr", {}, ["Level", "Order", "Used by", ""].map((t) => h("th", { text: t })))),
-        h("tbody", {}, info.levels.map((l) => h("tr", {},
+        h("tbody", {}, h("tr", {},
+          h("td", {}, h("strong", { text: info.uncleared })),
+          h("td", { class: "muted small-text", text: "Lowest" }),
+          h("td", { class: "small-text", text: "—" }),
+          h("td", { class: "muted small-text", text: "Built in" })), info.levels.map((l) => h("tr", {},
           h("td", {}, h("strong", { text: l.name })),
           h("td", { text: String(l.rank) }),
           h("td", { class: "small-text", text: l.inUse ? `${l.inUse}` : "—" }),
@@ -494,21 +499,6 @@ async function settingsBadges(body) {
             h("button", { type: "button", class: "link-btn danger-text", text: "Delete", onclick: async () => {
               if (!(await confirmDialog(`Delete the clearance level ${l.name}?`, { danger: true, confirmLabel: "Delete" }))) return;
               try { await api(`/api/clearance/levels/${l.id}`, { method: "DELETE" }); changed(); } catch (error) { toast(error.message, "error"); }
-            } }))))))))),
-    h("div", { class: "panel" },
-      h("div", { class: "panel-head" }, h("h3", { text: "Badge classifications" }), h("button", { type: "button", class: "primary small", text: "Add classification", onclick: () => editClassification(null).then((x) => x && changed()) })),
-      h("p", { class: "muted", text: "A classification that needs a clearance level (such as Cleared) makes each of its badges carry one; the others (such as Uncleared) carry none and can go to anyone of the right type." }),
-      h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-        h("thead", {}, h("tr", {}, ["Classification", "Clearance level", "Badges", ""].map((t) => h("th", { text: t })))),
-        h("tbody", {}, info.classifications.map((c) => h("tr", {},
-          h("td", {}, h("strong", { text: c.name })),
-          h("td", { class: "small-text", text: c.requiresClearance ? "Needs one" : "None" }),
-          h("td", { text: String(c.inUse || 0) }),
-          h("td", {}, h("div", { class: "btn-row" },
-            h("button", { type: "button", class: "link-btn", text: "Edit", onclick: () => editClassification(c).then((x) => x && changed()) }),
-            h("button", { type: "button", class: "link-btn danger-text", text: "Delete", onclick: async () => {
-              if (!(await confirmDialog(`Delete the classification ${c.name}?`, { danger: true, confirmLabel: "Delete" }))) return;
-              try { await api(`/api/clearance/classifications/${c.id}`, { method: "DELETE" }); changed(); } catch (error) { toast(error.message, "error"); }
             } }))))))))));
 }
 
@@ -569,19 +559,6 @@ function editLevel(level) {
     onSubmit: async (v) => (level
       ? await api(`/api/clearance/levels/${level.id}`, { method: "PUT", body: { name: v.name, rank: v.rank === "" ? undefined : Number(v.rank) } })
       : await api("/api/clearance/levels", { method: "POST", body: { name: v.name, ...(v.rank === "" ? {} : { rank: Number(v.rank) }) } })).level
-  });
-}
-
-function editClassification(c) {
-  return formDialog({
-    title: c ? `Edit ${c.name}` : "Add classification",
-    fields: [
-      { name: "name", label: "Name", required: true, value: c?.name },
-      { name: "requiresClearance", label: "Its badges carry a clearance level", type: "checkbox", value: c ? c.requiresClearance : false, hint: c?.inUse ? "Can't change while badges use it." : null }
-    ],
-    onSubmit: async (v) => (c
-      ? await api(`/api/clearance/classifications/${c.id}`, { method: "PUT", body: v })
-      : await api("/api/clearance/classifications", { method: "POST", body: v })).classification
   });
 }
 

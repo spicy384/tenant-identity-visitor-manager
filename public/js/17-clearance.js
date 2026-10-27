@@ -149,7 +149,7 @@ async function validateClearance(kind, record, request = null) {
         : "Choose the clearance you confirmed. It counts for badges from now on." }),
       fields: [
         ...extra.map((node) => ({ node })),
-        { name: "levelId", label: "Clearance level", type: "select", value: record.clearanceLevel ? String(record.clearanceLevel) : "", options: [{ value: "", label: "No clearance" }, ...levels.map((l) => ({ value: String(l.id), label: l.name }))] },
+        { name: "levelId", label: "Clearance level", type: "select", value: record.clearanceLevel ? String(record.clearanceLevel) : "", options: [{ value: "", label: "Uncleared" }, ...levels.map((l) => ({ value: String(l.id), label: l.name }))] },
         { name: "granted", label: "Granted", type: "date", half: true, value: record.clearanceGranted || "" },
         { name: "expires", label: "Expires", type: "date", half: true, value: record.clearanceExpires || "" }
       ],
@@ -187,7 +187,7 @@ async function validateClearances(kind, list) {
       names.length ? h("p", { class: "small-text", text: `${names.slice(0, shown).join(", ")}${names.length > shown ? `, and ${names.length - shown} more` : ""}.` }) : null),
     fields: [
       { name: "levelId", label: "Clearance level", type: "select", required: true, value: "",
-        options: [{ value: "", label: "Choose a level" }, ...levels.map((l) => ({ value: String(l.id), label: l.name })), { value: "none", label: "No clearance" }] },
+        options: [{ value: "", label: "Choose a level" }, ...levels.map((l) => ({ value: String(l.id), label: l.name })), { value: "none", label: "Uncleared" }] },
       { name: "granted", label: "Granted", type: "date", half: true, hint: "Optional; the same for each." },
       { name: "expires", label: "Expires", type: "date", half: true, hint: "Optional; the same for each." }
     ],

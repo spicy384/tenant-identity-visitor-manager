@@ -170,7 +170,7 @@ async function main() {
   check("visitors: a host who isn't in the company stops the lot", r.status === 400 && /Nobody at Acme Corp is called "Nobody Here"/.test(r.data.error));
 
   // --- badges -----------------------------------------------------------------------------------------------
-  const stock = { number: { column: "BadgeNo" }, type: { column: "Kind" }, classification: { column: "Class" }, level: { column: "Lvl" }, sites: { column: "ValidAt" }, temporary: { column: "Spare" } };
+  const stock = { number: { column: "BadgeNo" }, type: { column: "Kind" }, level: { column: "Lvl" }, sites: { column: "ValidAt" }, temporary: { column: "Spare" } };
   token = (await manager.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
   check("badges: a manager issues badges but doesn't import them", (await manager.post(`/api/import/${token}/run`, { table: "Badge Stock", target: "badges", mapping: stock })).status === 403);
   token = (await office.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
@@ -182,18 +182,18 @@ async function main() {
   const blist = (await security.get("/api/badges?limit=50")).data.badges;
   const by = (n) => blist.find((b) => b.number === n);
   check("badges: types from their own names (Staff is personnel)", by("P-0001").type === "personnel" && by("V-0002").type === "visitor" && by("T-0100").type === "tenant");
-  check("badges: classification and level by name", by("V-0002").classificationName === "Cleared" && by("V-0002").clearanceLevelName === "Secret" && by("V-0001").clearanceLevelName === null);
+  check("badges: the level by name, and empty for Uncleared", by("V-0002").cleared === true && by("V-0002").clearanceLevelName === "Secret" && by("V-0001").clearanceLevelName === null && by("V-0001").cleared === false);
   check("badges: the sites they're valid at, and every site when none", by("T-0100").sites.map((x) => x.name).sort().join() === `${SITE_NAME},Riverside` && by("P-0001").sites.length === 0);
   check("badges: temporary from a yes/no column", by("T-0100").temporary === true && by("V-0001").temporary === false);
   token = (await security.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
-  r = await security.post(`/api/import/${token}/run`, { table: "Badge Stock", target: "badges", mapping: { ...stock, classification: { value: "Unknown" } } });
-  check("badges: an unknown classification stops the lot", r.status === 400 && /no classification called "Unknown"/.test(r.data.error));
+  r = await security.post(`/api/import/${token}/run`, { table: "Badge Stock", target: "badges", mapping: { ...stock, level: { value: "Unknown" } } });
+  check("badges: an unknown level stops the lot", r.status === 400 && /no clearance level called "Unknown"/.test(r.data.error) && /Uncleared/.test(r.data.error));
   r = await security.post(`/api/import/${token}/run`, { table: "Badge Stock", target: "badges", mapping: stock });
   check("badges: importing again updates them by number", r.data.added === 0 && r.data.updated === 4);
   check("badges: in the audit log", (await admin.get("/api/audit?action=import.badges")).data.entries.length === 2);
   // Facility codes: the same number under two codes is two badges; importing again matches code and number.
   const coded = Buffer.from("FC,Card,Kind,Class\n101,55501,visitor,Uncleared\n205,55501,visitor,Uncleared\n", "utf8");
-  const codedMap = { facility_code: { column: "FC" }, number: { column: "Card" }, type: { column: "Kind" }, classification: { column: "Class" } };
+  const codedMap = { facility_code: { column: "FC" }, number: { column: "Card" }, type: { column: "Kind" }, level: { column: "Class" } };
   r = await security.post(`/api/import/${(await security.upload("/api/import/read?name=coded.csv", coded)).data.token}/run`, { table: "CSV", target: "badges", mapping: codedMap });
   check("badges: the same number under two facility codes is two badges", r.status === 200 && r.data.added === 2, JSON.stringify(r.data));
   r = await security.post(`/api/import/${(await security.upload("/api/import/read?name=coded.csv", coded)).data.token}/run`, { table: "CSV", target: "badges", mapping: codedMap });

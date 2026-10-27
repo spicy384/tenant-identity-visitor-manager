@@ -1,6 +1,6 @@
 /**
  * Staff routes for badges (who holds which, assigning and taking back), the clearance
- * levels and badge classifications (administrators), and visitor events (expected guests).
+ * levels (administrators), and visitor events (expected guests).
  * Mounted after the sign-in check, so req.user and req.ctx are set.
  *
  * Badges need the role's badge access (read to look, edit to add, assign and take back);
@@ -15,6 +15,7 @@ const express = require("express");
 const { TYPES, TYPE_LABELS, STATUSES } = require("./badges");
 const { kindFor, KINDS, KIND_LABELS } = require("./badge-templates");
 const { normalizeValue } = require("./fields");
+const { UNCLEARED } = require("./clearance");
 
 function fail(status, message) {
   const error = new Error(message);
@@ -67,7 +68,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
    */
   function badgeOut(req, b, values = null) {
     if (!b) return b;
-    // cleared says only what the classification already does: whether it carries a level.
+    // cleared says only whether it carries a level (else it is Uncleared), which everyone may know.
     const out = { ...b, cleared: Boolean(b.clearanceLevelId), template: templates.refFor(b.type, b.clearanceLevelId) };
     if (!seesLevels(req)) {
       delete out.clearanceLevelId;
@@ -103,26 +104,27 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
 
   /**
    * A badge's level from a request body. Those who don't see level names choose it by its
-   * template image (templateRef); a level id from them is refused.
+   * template image (templateRef; empty, or the uncleared image, for Uncleared); a level id
+   * from them is refused, other than null (Uncleared).
    */
   function levelInput(req, body, badgeType) {
     const out = { ...body };
     if (out.templateRef !== undefined) {
       const t = out.templateRef ? templates.byRef(out.templateRef) : null;
-      if (out.templateRef && (!t || !t.levelId)) throw fail(400, "Choose one of the cleared badges' images.");
+      if (out.templateRef && !t) throw fail(400, "Choose one of the badges' images.");
       if (t && t.kind !== kindFor(badgeType)) throw fail(400, "That image is for another kind of badge.");
-      out.clearanceLevelId = t ? t.levelId : null;
+      out.clearanceLevelId = t?.levelId || null;
       delete out.templateRef;
-    } else if (out.clearanceLevelId !== undefined && !seesLevels(req)) {
+    } else if (out.clearanceLevelId !== undefined && out.clearanceLevelId !== null && !seesLevels(req)) {
       throw fail(403, "Choose a cleared badge's level by its image.");
     }
     return out;
   }
 
-  // --- clearance levels and classifications -----------------------------------------------
+  // --- clearance levels ---------------------------------------------------------------------
 
   router.get("/api/clearance", (req, res) => {
-    res.json({ levels: seesLevels(req) ? clearance.levels() : [], classifications: clearance.classifications(), badgeTypes: TYPES.map((t) => ({ value: t, label: TYPE_LABELS[t] })), badgeStatuses: STATUSES });
+    res.json({ levels: seesLevels(req) ? clearance.levels() : [], uncleared: UNCLEARED, badgeTypes: TYPES.map((t) => ({ value: t, label: TYPE_LABELS[t] })), badgeStatuses: STATUSES });
   });
 
   router.post("/api/clearance/levels", admin, (req, res) => {
@@ -143,24 +145,6 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     res.json({ ok: true });
   });
 
-  router.post("/api/clearance/classifications", admin, (req, res) => {
-    const c = clearance.createClassification(req.body || {});
-    auditFrom(req, "clearance.classification_add", c.name, c.requiresClearance ? "needs a clearance level" : "no clearance level");
-    res.json({ ok: true, classification: c });
-  });
-
-  router.put("/api/clearance/classifications/:id", admin, (req, res) => {
-    const c = clearance.updateClassification(positiveInt(req.params.id), req.body || {});
-    auditFrom(req, "clearance.classification_update", c.name, c.requiresClearance ? "needs a clearance level" : "no clearance level");
-    res.json({ ok: true, classification: c });
-  });
-
-  router.delete("/api/clearance/classifications/:id", admin, (req, res) => {
-    const c = clearance.removeClassification(positiveInt(req.params.id));
-    auditFrom(req, "clearance.classification_remove", c.name);
-    res.json({ ok: true });
-  });
-
   // --- badges ------------------------------------------------------------------------------
 
   router.get("/api/badges", readBadges, (req, res) => {
@@ -168,8 +152,8 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
       q: str(req.query.q),
       type: str(req.query.type),
       state: str(req.query.state),
-      classificationId: positiveInt(req.query.classificationId),
-      levelId: seesLevels(req) ? positiveInt(req.query.levelId) : null,
+      // "none" (Uncleared) for anyone; a level only for those who see levels.
+      levelId: req.query.levelId === "none" ? "none" : seesLevels(req) ? positiveInt(req.query.levelId) : null,
       siteId: siteParam(req, req.query.site),
       sites: req.ctx.sites,
       limit: Math.min(positiveInt(req.query.limit, 200), 5000),
@@ -189,7 +173,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const values = customValues(req, body, { creating: true });
     const badge = badges.create(levelInput(req, body, body.type), { sites: req.ctx.sites });
     fields.writeValues(badge.id, values);
-    auditFrom(req, "badge.add", badge.label, `${badge.type}; ${badge.classificationName}${badge.clearanceLevelName ? ` ${badge.clearanceLevelName}` : ""}`);
+    auditFrom(req, "badge.add", badge.label, `${badge.type}; ${badge.clearanceLevelName || UNCLEARED}`);
     res.json({ ok: true, badge: badgeOut(req, badge) });
   });
 
@@ -254,12 +238,12 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     return done;
   }
 
-  const BULK_KEYS = ["facilityCode", "type", "classificationId", "clearanceLevelId", "templateRef", "siteIds", "temporary", "status", "notes"];
+  const BULK_KEYS = ["facilityCode", "type", "clearanceLevelId", "templateRef", "siteIds", "temporary", "status", "notes"];
 
   /**
    * Changes the same things on several badges: their facility code, move them to another type
-   * (visitor, tenant, personnel), classification or level, the sites they are valid at, temporary, status, notes.
-   * A badge that is out can't change its type, classification, level or temporary flag.
+   * (visitor, tenant, personnel), clearance level, the sites they are valid at, temporary, status, notes.
+   * A badge that is out can't change its type, level or temporary flag.
    */
   router.post("/api/badges/bulk", manageBadges, (req, res) => {
     const ids = badgeIds(req.body);
@@ -309,7 +293,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const held = badges.forHolder(kind, id);
     const short = (b) => {
       const out = badgeOut(req, b);
-      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, type: out.type, classificationName: out.classificationName, clearanceLevelName: out.clearanceLevelName, template: out.template, sites: out.sites };
+      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, type: out.type, cleared: out.cleared, clearanceLevelName: out.clearanceLevelName, template: out.template, sites: out.sites };
     };
     const canGive = access.canEditBadges(req.ctx);
     // ?site= offers only badges valid at that site (where they are checking in).
@@ -371,7 +355,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const visitor = visitors.get(visit.visitor.id);
     const short = (b) => {
       const out = badgeOut(req, b);
-      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, type: out.type, classificationName: out.classificationName, clearanceLevelName: out.clearanceLevelName, template: out.template, sites: out.sites };
+      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, type: out.type, cleared: out.cleared, clearanceLevelName: out.clearanceLevelName, template: out.template, sites: out.sites };
     };
     const picked = events.badgeForVisit(visit.id);
     const keptFor = picked ? { id: picked.id, source: "event", eventTitle: picked.eventTitle } : visitor.reservedBadge ? { id: visitor.reservedBadge.id, source: "reserved" } : null;

@@ -139,7 +139,7 @@ function guestBadgeCell(e, g) {
       badges.sort((a, b) => exact(b) - exact(a));
       results.replaceChildren(...(badges.length
         ? badges.map((b) => h("button", { type: "button", class: "pick-row", onclick: () => choose(b) },
-          h("strong", { class: "mono", text: b.label }), " ", h("span", { class: "muted small-text", text: badgeClassText(b) })))
+          h("strong", { class: "mono", text: b.label }), " ", h("span", { class: "muted small-text", text: badgeLevelText(b) })))
         : [h("p", { class: "muted small-text", text: "No free visitor badge here with that number." })]));
       return null;
     }, 200);

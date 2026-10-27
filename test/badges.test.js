@@ -42,9 +42,7 @@ const L = Object.fromEntries(levels.map((l) => [l.name, l]));
 check("levels: higher covers lower", clearance.covers(L["TS//SCI FSP"], L["TS//SCI CI"]) && clearance.covers(L.TS, L.Secret) && clearance.covers(L.TS, L.TS));
 check("levels: lower doesn't cover higher", !clearance.covers(L["TS//SCI CI"], L["TS//SCI FSP"]) && !clearance.covers(L.Secret, L.TS) && !clearance.covers(null, L.Secret));
 check("levels: no level needed is covered by anyone", clearance.covers(null, null));
-check("classifications: Cleared needs a level, Uncleared doesn't", clearance.classifications().find((c) => c.name === "Cleared").requiresClearance && !clearance.classifications().find((c) => c.name === "Uncleared").requiresClearance);
-const cleared = clearance.classifications().find((c) => c.name === "Cleared");
-const uncleared = clearance.classifications().find((c) => c.name === "Uncleared");
+check("levels: Uncleared is built in, and no level takes its name", throwsStatus(() => clearance.createLevel({ name: "uncleared" }), 409) === true && throwsStatus(() => clearance.updateLevel(clearance.levels()[0].id, { name: "Uncleared" }), 409) === true);
 check("levels: a duplicate name is refused", throwsStatus(() => clearance.createLevel({ name: "ts" }), 409) === true);
 const conf = clearance.createLevel({ name: "Confidential", rank: 5 });
 check("levels: a new one can go anywhere in the order", clearance.levels()[0].name === "Confidential");
@@ -75,18 +73,18 @@ for (const [kind, rec] of [["person", guard], ["person", fsp], ["person", ci], [
 check("validation: validated, it is marked so", directory.getPerson(guard.id).clearanceStatus === "validated" && directory.getPerson(guard.id).clearanceValidatedBy === "security" && directory.getPerson(guard.id).clearanceGranted === "2024-01-10");
 
 // --- badges -----------------------------------------------------------------------------------
-const make = (number, type, cls, level = null, extra = {}) => badges.create({ number, type, classificationId: cls.id, clearanceLevelId: level ? level.id : null, ...extra });
-const pUncl = make("P-001", "personnel", uncleared);
-const pTs = make("P-002", "personnel", cleared, L.TS);
-const tFsp = make("T-001", "tenant", cleared, L["TS//SCI FSP"]);
-const tCi = make("T-002", "tenant", cleared, L["TS//SCI CI"]);
-const tUncl = make("T-003", "tenant", uncleared);
-const vTs = make("V-001", "visitor", cleared, L.TS);
-const vUncl = make("V-002", "visitor", uncleared);
-check("badges: a cleared badge needs a level", throwsStatus(() => make("X-1", "tenant", cleared), 400) === true);
-check("badges: an uncleared badge drops a level it was given", make("X-2", "tenant", uncleared, L.TS).clearanceLevelId === null);
-check("badges: a duplicate number is refused", throwsStatus(() => make("p-001", "tenant", uncleared), 409) === true);
-check("badges: an unknown type is refused", throwsStatus(() => make("X-3", "contractor", uncleared), 400) === true);
+const make = (number, type, level = null, extra = {}) => badges.create({ number, type, clearanceLevelId: level ? level.id : null, ...extra });
+const pUncl = make("P-001", "personnel");
+const pTs = make("P-002", "personnel", L.TS);
+const tFsp = make("T-001", "tenant", L["TS//SCI FSP"]);
+const tCi = make("T-002", "tenant", L["TS//SCI CI"]);
+const tUncl = make("T-003", "tenant");
+const vTs = make("V-001", "visitor", L.TS);
+const vUncl = make("V-002", "visitor");
+check("badges: without a level, Uncleared", make("X-1", "tenant").clearanceLevelId === null && badges.list({ levelId: "none", q: "X-1" }).total === 1 && badges.list({ levelId: "none", q: "P-002" }).total === 0);
+check("badges: an unknown level is refused", throwsStatus(() => badges.create({ number: "X-2", type: "tenant", clearanceLevelId: 9999 }), 400) === true);
+check("badges: a duplicate number is refused", throwsStatus(() => make("p-001", "tenant"), 409) === true);
+check("badges: an unknown type is refused", throwsStatus(() => make("X-3", "contractor"), 400) === true);
 
 const give = (badge, kind, holder) => () => badges.assign(badge.id, { kind, holderId: holder.id }, { by: "desk" });
 check("type: a personnel badge goes to building staff", Boolean(give(pTs, "person", guard)()));
@@ -105,7 +103,7 @@ check("clearance: an uncleared visitor may not", throwsStatus(() => badges.assig
 
 check("holding: a badge held can't be given again", throwsStatus(give(tCi, "person", ci), 409, /is with/) === true);
 check("holding: the holder is named on the badge", badges.get(tCi.id).holder.name === "Fran Poly" && badges.get(tCi.id).holder.company === "Acme Corp");
-check("available: only badges the holder may hold are offered", badges.availableFor("person", fsp.id).map((b) => b.number).join() === "T-001,X-2");
+check("available: only badges the holder may hold are offered", badges.availableFor("person", fsp.id).map((b) => b.number).join() === "T-001,X-1");
 check("available: building staff are offered personnel badges", badges.availableFor("person", guard.id).map((b) => b.number).join() === "P-001");
 check("available: a visitor is offered visitor badges their clearance covers", badges.availableFor("visitor", visitorNone.id).map((b) => b.number).join() === "V-002");
 
@@ -121,10 +119,10 @@ check("history: a badge with history can't be deleted", throwsStatus(() => badge
 check("changing: a held badge's level can't change", throwsStatus(() => badges.update(pTs.id, { clearanceLevelId: L.Secret.id }), 409) === true);
 check("changing: nor can it be retired while held", throwsStatus(() => badges.update(pTs.id, { status: "retired" }), 409) === true);
 
-const range = badges.createRange({ prefix: "B-", from: 1, to: 25, width: 4, type: "visitor", classificationId: uncleared.id });
+const range = badges.createRange({ prefix: "B-", from: 1, to: 25, width: 4, type: "visitor" });
 check("range: badges are numbered and padded", range.length === 25 && range[0].number === "B-0001" && range[24].number === "B-0025");
-check("range: all or nothing", throwsStatus(() => badges.createRange({ prefix: "B-", from: 20, to: 30, width: 4, type: "visitor", classificationId: uncleared.id }), 409) === true && !badges.list({ q: "B-0030" }).total);
-check("range: at most 1,000 at once", throwsStatus(() => badges.createRange({ prefix: "Z", from: 1, to: 2000, type: "visitor", classificationId: uncleared.id }), 400) === true);
+check("range: all or nothing", throwsStatus(() => badges.createRange({ prefix: "B-", from: 20, to: 30, width: 4, type: "visitor" }), 409) === true && !badges.list({ q: "B-0030" }).total);
+check("range: at most 1,000 at once", throwsStatus(() => badges.createRange({ prefix: "Z", from: 1, to: 2000, type: "visitor" }), 400) === true);
 
 // Visitor badges stay out until taken back, and are listed when their visitor has left.
 const visit = visitors.checkIn({ visitorId: visitorNone.id, siteId: site.id, companyId: acme.id }).visit;
@@ -136,8 +134,8 @@ check("left: it is listed as out with a visitor who has left", badges.list({ sta
 
 // Sites: a badge is valid at the sites listed for it, or everywhere; anyone may hold one.
 const third = sites.create({ name: "Lakeside", timeZone: "America/New_York" });
-const riverBadge = make("R-001", "tenant", uncleared, null, { siteIds: [other.id] });
-const twoSites = make("R-002", "tenant", uncleared, null, { siteIds: [other.id, third.id] });
+const riverBadge = make("R-001", "tenant", null, { siteIds: [other.id] });
+const twoSites = make("R-002", "tenant", null, { siteIds: [other.id, third.id] });
 check("sites: a badge can be valid at several sites", twoSites.sites.map((x) => x.name).join() === "Lakeside,Riverside");
 check("sites: a badge with no sites is valid everywhere", tCi.sites.length === 0);
 check("sites: staff see badges valid at one of their sites", badges.list({ sites: new Set([third.id]) }).badges.some((b) => b.id === twoSites.id) && badges.get(twoSites.id, { sites: new Set([third.id]) }) !== null);
@@ -146,23 +144,23 @@ check("sites: badges valid everywhere are seen by all", badges.list({ sites: new
 check("sites: anyone may be given a badge, whatever site they work at", Boolean(badges.assign(riverBadge.id, { kind: "person", holderId: plain.id })));
 badges.takeBack(riverBadge.id);
 check("sites: the site filter finds badges valid there, and those valid everywhere", badges.list({ siteId: third.id }).badges.some((b) => b.id === twoSites.id) && badges.list({ siteId: third.id }).badges.some((b) => b.id === tCi.id) && !badges.list({ siteId: third.id }).badges.some((b) => b.id === riverBadge.id));
-check("sites: a limited account must make a badge valid at one of its sites", throwsStatus(() => badges.create({ number: "S-1", type: "tenant", classificationId: uncleared.id }, { sites: new Set([site.id]) }), 403) === true);
-check("sites: nor at a site it doesn't see", throwsStatus(() => badges.create({ number: "S-1", type: "tenant", classificationId: uncleared.id, siteIds: [other.id] }, { sites: new Set([site.id]) }), 403) === true);
+check("sites: a limited account must make a badge valid at one of its sites", throwsStatus(() => badges.create({ number: "S-1", type: "tenant" }, { sites: new Set([site.id]) }), 403) === true);
+check("sites: nor at a site it doesn't see", throwsStatus(() => badges.create({ number: "S-1", type: "tenant", siteIds: [other.id] }, { sites: new Set([site.id]) }), 403) === true);
 const limitedEdit = badges.update(twoSites.id, { siteIds: [] }, { sites: new Set([other.id, site.id]) });
 check("sites: a limited account changing sites keeps those it doesn't see", limitedEdit.sites.map((x) => x.name).join() === "Lakeside");
 check("sites: a site with badges valid there can't be removed", throwsStatus(() => sites.remove(third.id), 409) === true);
-check("sites: an unknown site is refused", throwsStatus(() => badges.create({ number: "S-9", type: "tenant", classificationId: uncleared.id, siteIds: [9999] }), 400) === true);
+check("sites: an unknown site is refused", throwsStatus(() => badges.create({ number: "S-9", type: "tenant", siteIds: [9999] }), 400) === true);
 
 // --- temporary badges ----------------------------------------------------------------------------
-const tmp1 = make("TMP-1", "tenant", uncleared, null, { temporary: true });
-const tmp2 = make("TMP-2", "tenant", uncleared, null, { temporary: true });
-const tmpSci = make("TMP-S", "tenant", cleared, L["TS//SCI"], { temporary: true });
+const tmp1 = make("TMP-1", "tenant", null, { temporary: true });
+const tmp2 = make("TMP-2", "tenant", null, { temporary: true });
+const tmpSci = make("TMP-S", "tenant", L["TS//SCI"], { temporary: true });
 check("temporary: a badge can be marked temporary", tmp1.temporary === true && pTs.temporary === false);
-check("temporary: not a visitor badge", throwsStatus(() => make("TMP-V", "visitor", uncleared, null, { temporary: true }), 400) === true);
+check("temporary: not a visitor badge", throwsStatus(() => make("TMP-V", "visitor", null, { temporary: true }), 400) === true);
 const forgetful = directory.createPerson({ firstName: "Fay", lastName: "Forgetful", companyId: acme.id, siteId: site.id, clearanceLevel: L.TS.id });
 check("temporary: only for someone who holds a badge of their own", throwsStatus(() => badges.assign(tmp1.id, { kind: "person", holderId: forgetful.id }), 409, /doesn't hold a badge/) === true);
 check("temporary: not offered to someone without a badge", badges.availableFor("person", forgetful.id, { temporary: true }).length === 0);
-const own = make("T-020", "tenant", uncleared);
+const own = make("T-020", "tenant");
 badges.assign(own.id, { kind: "person", holderId: forgetful.id }, { by: "desk" });
 check("temporary: regular offers leave temporary badges out", !badges.availableFor("person", forgetful.id).some((b) => b.temporary));
 check("temporary: offered once they hold one, within their clearance", badges.availableFor("person", forgetful.id, { temporary: true }).map((b) => b.number).sort().join() === "TMP-1,TMP-2");

@@ -54,8 +54,7 @@ const IMPORT_FIELDS = {
     { key: "facility_code", label: "Facility code", hint: "2 or 3 digits, if the badge has one", names: ["facilitycode", "facility", "fc", "sitecode", "facilitycodenumber"] },
     { key: "number", label: "Badge number", required: true, names: ["number", "badgenumber", "badgeno", "badge", "no", "cardnumber"] },
     { key: "type", label: "Type", required: true, hint: "personnel (or staff), tenant or visitor", names: ["type", "kind", "badgetype"] },
-    { key: "classification", label: "Classification", required: true, hint: "A classification's name, such as Cleared or Uncleared.", names: ["classification", "class"] },
-    { key: "level", label: "Clearance level", clearance: true, hint: "A level's name, for cleared badges.", names: ["level", "lvl", "clearance", "clearancelevel"] },
+    { key: "level", label: "Clearance level", clearance: true, hint: "A level's name, or Uncleared. Empty is Uncleared for a new badge, and leaves an existing one's as it is.", names: ["level", "lvl", "clearance", "clearancelevel", "classification", "class"] },
     { key: "sites", label: "Valid at", hint: "Site names separated by ;. Empty for every site.", names: ["sites", "site", "validat", "building", "location"] },
     { key: "temporary", label: "Temporary", hint: "yes or no", names: ["temporary", "temp", "spare", "loaner"] },
     { key: "status", label: "Status", hint: "active, lost or retired", names: ["status", "state"] },
@@ -274,7 +273,7 @@ async function importDialog(kind) {
         people: "Someone already in the company with the same email (or, without one, the same name) is updated rather than added twice.",
         companies: "A company with the same name is updated.",
         visitors: "A visitor with the same email (or, without one, the same name) is updated rather than added twice. Imported visitors count as checked by staff. Clearances aren't imported: Security validates them.",
-        badges: "A badge with the same number is updated. One that is out can't change its type, classification, level or whether it is temporary."
+        badges: "A badge with the same number is updated. One that is out can't change its type, clearance level or whether it is temporary."
       }[target]} Rows with nothing in them are passed over. Otherwise, if any row has a problem, nothing is imported and the problems are listed, unless you skip rows with problems.` }),
       message,
       h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary", text: "Back", onclick: () => { clearError(); stepFile(); } }), importBtn));

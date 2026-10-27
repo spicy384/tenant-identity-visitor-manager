@@ -455,7 +455,7 @@ function checkInWizard(start = {}) {
         await give({ number: number.value.trim(), facilityCode: code.value.trim() || undefined });
       });
       for (const input of [code, number]) input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); issue.click(); } });
-      const kinds = [...new Set(plan.available.map((b) => badgeClassText(b)).filter(Boolean))];
+      const kinds = [...new Set(plan.available.map((b) => badgeLevelText(b)).filter(Boolean))];
       const free = h("div", { class: "free-badges", hidden: true }, plan.available.map((b) => h("button", { type: "button", class: "chip mono", text: b.label, onclick: () => { code.value = b.facilityCode || ""; number.value = b.number; number.focus(); } })));
       const entry = h("div", { class: "stack badge-entry" },
         h("div", { class: "badge-give" }, suggestedBadge(plan.suggested),
