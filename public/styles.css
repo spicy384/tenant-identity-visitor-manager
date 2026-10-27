@@ -532,8 +532,10 @@ a.brand:hover { text-decoration: none; }
 .site-chip { min-height: 32px; padding: 0 12px; border-radius: 999px; background: var(--secondary-bg); color: var(--secondary-text); font-size: 0.85rem; font-weight: 600; }
 .site-chip.is-current { background: var(--primary); color: var(--primary-fg); }
 .dashboard-edit-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 14px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
+/* Columns of cards (19-dashboard.js sets how many): each stacks its own, so a long card only
+   moves the cards below it in its column. */
 .dashboard { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-items: start; }
-@media (max-width: 400px) { .dashboard { grid-template-columns: 1fr; } }
+.dash-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .dash-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; box-shadow: var(--shadow-sm); min-width: 0; }
 .dash-card.needs-attention { border-top: 3px solid var(--warn); }
 .dash-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }

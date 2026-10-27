@@ -25,7 +25,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
   (for those who see the books), and for Security the clearance
   queue, visitor re-checks, clearances expiring and recent validations (administrators get
   all but the queue). Only modules the role can see are offered, every role starts with a
-  layout that suits it, and the choice is kept with the account, on any device.
+  layout that suits it, and the choice is kept with the account, on any device. The cards
+  stand in columns (as many as fit), so a long one only moves the cards below it in its column.
 - **Sites.** The site button in the header (and the buttons on Home) switch site at once:
   every page, count and module follows it, or "All sites". The choice is kept with the
   account too, so it follows you to another desk.

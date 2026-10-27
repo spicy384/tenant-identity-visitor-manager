@@ -5,7 +5,10 @@
 
 const DASHBOARD_REFRESH_MS = 60 * 1000;
 const DASHBOARD_LIST_MAX = 8;
-const dashboard = { editing: false, draft: null, timer: null, tenantsQuery: "" };
+const dashboard = { editing: false, draft: null, timer: null, tenantsQuery: "", cards: [], columns: 0 };
+// The narrowest a column of cards gets, and the space between columns (as in styles.css).
+const DASHBOARD_COLUMN_MIN = 320;
+const DASHBOARD_GAP = 16;
 
 const siteParams = (extra = {}) => new URLSearchParams({ ...siteQuery(), ...extra });
 
@@ -325,7 +328,36 @@ function renderDashboard() {
   const cards = list.map((id, i) => moduleCard(id, i, list));
   if (dashboard.editing) cards.push(addModuleCard());
   else if (!list.length) cards.push(h("section", { class: "dash-card" }, h("p", { class: "muted", text: "Your dashboard is empty. Customize it to add modules." })));
-  $("home-modules").replaceChildren(...cards);
+  dashboard.cards = cards;
+  placeCards();
+}
+
+/** How many columns of cards fit the dashboard's width (one on a phone). */
+function dashboardColumns() {
+  const width = $("home-modules").clientWidth;
+  return Math.max(1, Math.floor((width + DASHBOARD_GAP) / (DASHBOARD_COLUMN_MIN + DASHBOARD_GAP)));
+}
+
+/**
+ * Puts the cards in columns, each stacking its own, so a long card only moves the ones below
+ * it in its column. Card n goes in column n modulo the count, so they read across as before.
+ */
+function placeCards() {
+  const box = $("home-modules");
+  const n = dashboardColumns();
+  const columns = Array.from({ length: n }, () => h("div", { class: "dash-column" }));
+  dashboard.cards.forEach((card, i) => columns[i % n].append(card));
+  box.style.gridTemplateColumns = `repeat(${n}, minmax(0, 1fr))`;
+  box.replaceChildren(...columns);
+  dashboard.columns = n;
+}
+
+// A wider or narrower window (or Home first shown) may fit a different number of columns: the
+// same cards move, already loaded.
+if (typeof ResizeObserver === "function") {
+  new ResizeObserver(() => {
+    if ($("home-modules").clientWidth && dashboardColumns() !== dashboard.columns) placeCards();
+  }).observe($("home-modules"));
 }
 
 /** Reloads every module (after a change, a site switch, or on the timer). */
