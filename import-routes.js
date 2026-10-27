@@ -45,16 +45,30 @@ function cellText(value) {
   return String(value).trim();
 }
 
-/** A CSV file as one table, keeping its header's own names. */
+/**
+ * The delimiter of a CSV file, from its header line: a comma, or a semicolon or tab when the
+ * header has more of those (spreadsheets set to some regions save "CSV" with semicolons).
+ */
+function csvDelimiter(text) {
+  const header = text.slice(0, text.search(/\r|\n|$/)).replace(/"[^"]*"/g, "");
+  const count = (c) => header.split(c).length - 1;
+  return [";", "\t"].find((c) => count(c) > count(",")) || ",";
+}
+
+/**
+ * A CSV file as one table, keeping its header's own names. lines: the line of the file each
+ * row starts on (a quoted cell may run over several), for naming a row with a problem.
+ */
 function csvTable(buffer) {
   let text = buffer.toString("utf8");
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-  const [header, ...rows] = parseCsv(text);
+  const [header, ...rows] = parseCsv(text, { delimiter: csvDelimiter(text) });
   if (!header || !header.length) throw fail(400, "The CSV file is empty.");
   const names = header.map((h, i) => String(h).trim() || `Column ${i + 1}`);
   const columns = names.map((name) => ({ name, type: "text" }));
-  const data = rows.filter((r) => r.some((c) => String(c).trim() !== "")).map((r) => Object.fromEntries(names.map((n, i) => [n, r[i] ?? ""])));
-  return { name: "CSV", columns, rowCount: data.length, rows: () => data };
+  const kept = rows.filter((r) => r.some((c) => String(c).trim() !== ""));
+  const data = kept.map((r) => Object.fromEntries(names.map((n, i) => [n, r[i] ?? ""])));
+  return { name: "CSV", columns, rowCount: data.length, rows: () => data, lines: kept.map((r) => r.line) };
 }
 
 /** An Access database's tables (system tables left out), each read only when asked for. */
@@ -170,7 +184,7 @@ function createImportRoutes({ access, importCompanies, importPeople, importVisit
     if (all.length > MAX_ROWS) throw fail(400, `The table has ${all.length.toLocaleString("en-US")} rows; import at most ${MAX_ROWS.toLocaleString("en-US")} at a time (split it with a query in Access).`);
     const rows = all.map((r) => Object.fromEntries(sources.map(([key, get]) => [key, get(r)])));
     const from = h.format === "access" ? `Access table "${table.name}"${h.fileName ? ` in ${h.fileName}` : ""}` : `CSV${h.fileName ? ` ${h.fileName}` : ""}`;
-    const where = h.format === "access" ? (i) => `Row ${i + 1}` : (i) => `Line ${i + 2}`;
+    const where = h.format === "access" ? (i) => `Row ${i + 1}` : (i) => `Line ${table.lines?.[i] ?? i + 2}`;
     // skipProblems: import the rows that can be, and list the ones left out, rather than none.
     const skipProblems = body.skipProblems === true;
     const result = target === "companies" ? importCompanies(req, rows, { where, from, skipProblems })
@@ -189,4 +203,4 @@ function createImportRoutes({ access, importCompanies, importPeople, importVisit
   return router;
 }
 
-module.exports = { createImportRoutes, cellText, csvTable };
+module.exports = { createImportRoutes, cellText, csvTable, csvDelimiter };

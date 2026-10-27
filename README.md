@@ -679,11 +679,15 @@ level (Security).
    problems** before importing. Either way you get the skipped rows with the reason for each,
    and can download them as a CSV with a problem column, to fix and import again. Each row is
    saved on its own, so one that fails part-way (say after adding its new company) leaves
-   nothing behind.
+   nothing behind. When some rows updated records already here, or were empty, the result
+   accounts for every row of the file (so many added, so many updated, so many passed over).
 
 The file is read on the server and held in its memory only, for 15 minutes or until the
 import is done or canceled, by the account that sent it; it is never written to disk. Yes/no
-columns become yes or no, and dates become YYYY-MM-DD. At most 20,000 rows at a time.
+columns become yes or no, and dates become YYYY-MM-DD. At most 20,000 rows at a time. A CSV
+file may use commas, or semicolons or tabs (as some spreadsheets save it); a quote that opens
+a cell and is never closed (a stray " for inches, say) is refused with its line, rather than
+the rest of the file read as one cell. Problems name the line of the file a row starts on.
 
 A company's site can come from one column (a site's name) and its suite from another.
 
@@ -696,7 +700,11 @@ A company's site can come from one column (a site's name) and its suite from ano
   as it is; a level's name only from roles that see clearance levels; a column called
   Classification is matched to it too), the sites it
   is valid at (names separated by ;, empty for every site), temporary (yes/no), status
-  (active, lost, retired), notes and custom badge fields. A badge with the same number is updated. The CSV
+  (active, lost, retired), notes and custom badge fields. A badge with the same facility code
+  and number is updated. A file that gives the same badge twice is refused, naming both lines
+  (most often the facility code column was left out, or a spreadsheet shortened long numbers),
+  and so is a number in scientific notation (1.23457E+11: Excel did that, and the real number is
+  lost; format the column as Text). The CSV
 column names below are what a CSV file is matched to automatically, and what the CSV import
 API takes.
 

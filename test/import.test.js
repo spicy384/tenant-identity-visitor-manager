@@ -10,7 +10,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { createChecker } = require("./helpers/assert");
-const { cellText } = require("../import-routes");
+const { cellText, csvTable } = require("../import-routes");
 
 // The site as the sample Access file (test/fixtures) spells it: its rows name it, and a binary file isn't rewritten.
 const SITE_NAME = "Harbour Point";
@@ -201,6 +201,25 @@ async function main() {
   check("badges: listed with their facility codes", (await security.get("/api/badges?q=55501")).data.badges.map((b) => b.label).sort().join() === "101-55501,205-55501");
   r = await security.post(`/api/import/${(await security.upload("/api/import/read?name=bad.csv", Buffer.from("FC,Card,Kind,Class\n1234,55502,visitor,Uncleared\n"))).data.token}/run`, { table: "CSV", target: "badges", mapping: codedMap });
   check("badges: a facility code that isn't 2-3 digits is refused", r.status === 400 && /2 or 3 digits/.test(r.data.error));
+
+  // Nothing in a file is passed over without saying so.
+  const plainMap = { number: { column: "Card" }, type: { column: "Kind" }, level: { column: "Class" } };
+  const csvRun = async (name, text, mapping = plainMap) => security.post(`/api/import/${(await security.upload(`/api/import/read?name=${name}`, Buffer.from(text, "utf8"))).data.token}/run`, { table: "CSV", target: "badges", mapping });
+  r = await csvRun("twice.csv", "Card,Kind,Class\n600,visitor,Uncleared\n601,visitor,Uncleared\n600,visitor,Uncleared\n");
+  check("badges: a file that gives the same badge twice is refused, naming both lines", r.status === 400 && /Line 4: Badge 600 is in the file already, on line 2/.test(r.data.error) && /facility code column/.test(r.data.error)
+    && !(await security.get("/api/badges?q=601")).data.total);
+  r = await csvRun("sci.csv", "Card,Kind,Class\n1.23457E+11,visitor,Uncleared\n");
+  check("badges: a number a spreadsheet put in scientific notation is refused", r.status === 400 && /scientific notation/.test(r.data.error));
+  r = await security.upload("/api/import/read?name=quote.csv", Buffer.from('Card,Kind,Notes\n700,visitor,fine\n701,visitor,"12 in\n702,visitor,lost\n', "utf8"));
+  check("csv: a quote never closed is refused, naming its line, not read as one long cell", r.status === 400 && /line 3 is never closed/.test(r.data.error));
+  const semi = csvTable(Buffer.from("Card;Kind;Notes\n800;visitor;a, b\n801;tenant;\n", "utf8"));
+  check("csv: semicolons, as some spreadsheets save CSV", semi.columns.map((c) => c.name).join() === "Card,Kind,Notes" && semi.rowCount === 2 && semi.rows()[0].Notes === "a, b");
+  const tabbed = csvTable(Buffer.from("Card\tKind\n900\tvisitor\n", "utf8"));
+  check("csv: or tabs", tabbed.rows()[0].Kind === "visitor");
+  const multi = csvTable(Buffer.from('Card,Notes\n1,"two\nlines"\n\n2,x\n', "utf8"));
+  check("csv: each row knows the line it starts on", multi.lines.join() === "2,5");
+  r = await csvRun("multi.csv", 'Card,Kind,Notes\n910,visitor,"a\nb"\n911,nobody,x\n', { number: { column: "Card" }, type: { column: "Kind" }, notes: { column: "Notes" } });
+  check("csv: so a problem names the line it is really on", r.status === 400 && /Line 4:/.test(r.data.error));
 
   // --- CSV through the same steps, with a value for every row -----------------------------------------------
   const csv = Buffer.from("﻿Given Name,Family Name,E-mail\r\nKay,Kiosk,kay@acme.example\r\nLee,Lobby,\r\n", "utf8");

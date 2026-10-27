@@ -64,10 +64,10 @@ const IMPORT_FIELDS = {
 
 /** What this account may import, and the words for it. */
 const IMPORT_KINDS = {
-  people: { label: "People", one: "person", many: "people", may: () => canEditDirectory(), entity: "person" },
-  companies: { label: "Companies", one: "company", many: "companies", may: () => canEditDirectory(), entity: "company" },
-  visitors: { label: "Visitors", one: "visitor", many: "visitors", may: () => canEditVisitors(), entity: "visitor" },
-  badges: { label: "Badges", one: "badge", many: "badges", may: () => canManageBadges(), entity: null }
+  people: { label: "People", one: "person", many: "people", may: () => canEditDirectory(), entity: "person", matched: "same company and email, or without one the same name" },
+  companies: { label: "Companies", one: "company", many: "companies", may: () => canEditDirectory(), entity: "company", matched: "same name" },
+  visitors: { label: "Visitors", one: "visitor", many: "visitors", may: () => canEditVisitors(), entity: "visitor", matched: "same email, or without one the same name" },
+  badges: { label: "Badges", one: "badge", many: "badges", may: () => canManageBadges(), entity: null, matched: "same facility code and number" }
 };
 
 const normalizeName = (s) => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -273,7 +273,7 @@ async function importDialog(kind) {
         people: "Someone already in the company with the same email (or, without one, the same name) is updated rather than added twice.",
         companies: "A company with the same name is updated.",
         visitors: "A visitor with the same email (or, without one, the same name) is updated rather than added twice. Imported visitors count as checked by staff. Clearances aren't imported: Security validates them.",
-        badges: "A badge with the same number is updated. One that is out can't change its type, clearance level or whether it is temporary."
+        badges: "A badge with the same facility code and number is updated; a file that gives the same badge twice is refused. One that is out can't change its type, clearance level or whether it is temporary."
       }[target]} Rows with nothing in them are passed over. Otherwise, if any row has a problem, nothing is imported and the problems are listed, unless you skip rows with problems.` }),
       message,
       h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary", text: "Back", onclick: () => { clearError(); stepFile(); } }), importBtn));
@@ -292,8 +292,30 @@ async function importDialog(kind) {
   if (read && !result) api(`/api/import/${read.token}`, { method: "DELETE" }).catch(() => {});
   if (!result) return false;
   if (result.skippedCount) await showSkippedRows(kind, result);
-  else toast(`${result.added} added, ${result.updated} updated.${result.ignored.length ? ` Columns left out: ${result.ignored.join(", ")}.` : ""}`);
+  else if (result.updated || result.blank) await showImportCounts(kind, result);
+  else toast(`${result.added} added.${result.ignored.length ? ` Columns left out: ${result.ignored.join(", ")}.` : ""}`);
   return true;
+}
+
+/**
+ * After an import that updated records already here or passed over empty rows: every row of
+ * the file accounted for, so a file that added fewer than it had rows says why.
+ */
+async function showImportCounts(kind, result) {
+  const many = IMPORT_KINDS[kind].many;
+  const total = result.added + result.updated + result.blank;
+  const line = (n, text) => (n ? h("li", { text: `${n.toLocaleString()} ${text}` }) : null);
+  await openDialog({
+    title: `Imported ${many}`,
+    body: h("div", { class: "stack" },
+      h("p", { text: `The file had ${total.toLocaleString()} ${total === 1 ? "row" : "rows"}:` }),
+      h("ul", {},
+        line(result.added, "added"),
+        line(result.updated, `already here, and updated (${IMPORT_KINDS[kind].matched || "matched"})`),
+        line(result.blank, `empty in every column imported, passed over`)),
+      result.ignored.length ? h("p", { class: "muted small-text", text: `Columns left out: ${result.ignored.join(", ")}.` }) : null),
+    actions: [{ label: "OK", value: true, kind: "primary" }]
+  });
 }
 
 /**

@@ -749,7 +749,7 @@ function importRows(rows, fn, where = (i) => `Line ${i + 2}`, verb = "imported",
         }
         try {
           let outcome;
-          db.transaction(() => { outcome = fn(row); });
+          db.transaction(() => { outcome = fn(row, i); });
           counts[outcome] += 1;
         } catch (error) {
           if (skipProblems) {
@@ -930,7 +930,19 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
   const levels = clearance.levels();
   // Custom badge fields the caller may change, by their key.
   const customDefs = new Map(access.fieldsFor(req.ctx, "badge").filter((f) => !f.builtIn && f.access === "edit" && f.recordId === null).map((f) => [f.apiKey, f]));
-  const counts = importRows(rows, (row) => {
+  // Where each badge (facility code and number) first comes in the file: a file that gives the
+  // same badge twice has a mistake in it (most often a facility code column left out, or
+  // numbers a spreadsheet shortened), and would otherwise quietly update the one it added.
+  const seen = new Map();
+  const counts = importRows(rows, (row, i) => {
+    const number = String(row.number || "").trim();
+    if (/^\d+(\.\d+)?e\+?\d+$/i.test(number)) {
+      throw fail(400, `"${number}" is a number a spreadsheet shortened to scientific notation, so the badge's real number is lost. Format the column as Text in the spreadsheet, put the full numbers back, and save the CSV again.`);
+    }
+    const code = String(row.facility_code || "").trim();
+    const key = `${code}|${number.toLowerCase()}`;
+    if (number && seen.has(key)) throw fail(400, `Badge ${code ? `${code}-` : ""}${number} is in the file already, on ${seen.get(key).toLowerCase()}${code ? "" : " (if the same number is under several facility codes, import the facility code column too)"}.`);
+    if (number) seen.set(key, where(i));
     const input = { number: row.number, facilityCode: row.facility_code || null };
     const values = new Map();
     for (const [key, def] of customDefs) if (row[key] !== undefined && row[key] !== "") values.set(def.id, normalizeFieldValue(def, row[key]));
