@@ -66,7 +66,7 @@ function peopleColumns(withCompany = false) {
  * The people table. With `selection` ({ has(id), set(ids, on) }), each row and the header
  * get a tick box for choosing several (21-bulk.js).
  */
-function peopleTable(people, { withCompany = false, onOpen, selection = null } = {}) {
+function peopleTable(people, { withCompany = false, onOpen, selection = null, empty = "No people yet." } = {}) {
   const cols = peopleColumns(withCompany);
   const tick = (checked, label, onToggle) => {
     const box = h("input", { type: "checkbox", "aria-label": label });
@@ -85,7 +85,27 @@ function peopleTable(people, { withCompany = false, onOpen, selection = null } =
         cols.map((c, i) => h("td", {}, c.cell(p), i === 0 && !p.active ? h("span", { class: "badge muted", text: "Inactive" }) : null)));
       row.addEventListener("click", () => onOpen(p));
       return row;
-    }) : emptyRow(cols.length + (selection ? 1 : 0), "No people yet."))));
+    }) : emptyRow(cols.length + (selection ? 1 : 0), empty))));
+}
+
+// Whether a company's page lists its inactive people too: off unless chosen, kept in this browser.
+const SHOW_INACTIVE_PEOPLE_KEY = "ivm-company-inactive-people";
+
+function showInactivePeople() {
+  try {
+    return localStorage.getItem(SHOW_INACTIVE_PEOPLE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setShowInactivePeople(on) {
+  try {
+    if (on) localStorage.setItem(SHOW_INACTIVE_PEOPLE_KEY, "1");
+    else localStorage.removeItem(SHOW_INACTIVE_PEOPLE_KEY);
+  } catch {
+    // Storage blocked: it still applies until the page is reloaded.
+  }
 }
 
 async function showCompanyDetail(id) {
@@ -112,13 +132,35 @@ async function showCompanyDetail(id) {
         isAdmin() ? h("button", { type: "button", class: "secondary small", text: "Delete", onclick: () => deleteCompany(company) }) : null)),
     recordFacts(fields, company, ["name", "active"]));
 
+  // Inactive people are left out unless "Show inactive" is ticked (as on the People page).
+  const inactive = people.filter((p) => !p.active).length;
+  const title = h("h3");
+  const showBox = h("input", { type: "checkbox" });
+  showBox.checked = showInactivePeople();
+  let table = null;
+  const renderPeople = () => {
+    const shown = showBox.checked ? people : people.filter((p) => p.active);
+    title.textContent = `People (${shown.length})`;
+    const fresh = peopleTable(shown, {
+      onOpen: (p) => openPerson(p.id, () => showCompanyDetail(id)),
+      empty: inactive && !showBox.checked ? `No active people. Tick Show inactive to see the ${inactive === 1 ? "one inactive person" : `${inactive} inactive people`}.` : "No people yet."
+    });
+    if (table) table.replaceWith(fresh);
+    table = fresh;
+  };
+  showBox.addEventListener("change", () => {
+    setShowInactivePeople(showBox.checked);
+    renderPeople();
+  });
+  renderPeople();
   const peoplePanel = h("div", { class: "panel" },
     h("div", { class: "panel-head" },
-      h("h3", { text: `People (${people.length})` }),
+      title,
       h("div", { class: "btn-row" },
+        inactive ? h("label", { class: "check-row inline-check" }, showBox, h("span", { text: `Show inactive (${inactive})` })) : null,
         isAdmin() && people.length ? h("button", { type: "button", class: "secondary small", text: "Export CSV", onclick: () => download(`/api/people.csv?companyId=${company.id}`).catch((e) => toast(e.message, "error")) }) : null,
         canEditDirectory() ? h("button", { type: "button", class: "primary small", text: "Add person", onclick: async () => { if (await newPersonDialog({ companyId: company.id })) showCompanyDetail(id); } }) : null)),
-    peopleTable(people, { onOpen: (p) => openPerson(p.id, () => showCompanyDetail(id)) }));
+    table);
   pane.append(head, peoplePanel, canReadFacilities() ? companyOfficesPanel(company) : "");
   loadCompanies();
 }

@@ -50,6 +50,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Companies** with contact details, placed at one or more sites with a suite or floor at each.
 - **People** in a company: names, job title, email, phones, the site they work at, whether they
   can host visitors.
+- **Inactive** companies and people stay on record but are left out of the lists: Companies,
+  People and a company's own people each have **Show inactive** to bring them back (on a
+  company's page it says how many, and the choice is kept in that browser).
 - **Several at once.** On Companies, **Select** turns the list into tick boxes: **Merge** the
   chosen companies into one (choose which to keep, then edit its name and details, with each
   other company's different value offered under its field; its sites become everywhere any of
