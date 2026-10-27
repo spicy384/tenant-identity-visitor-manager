@@ -383,7 +383,11 @@ today who haven't arrived.
 
 An event's **point of contact** is picked by typing their name: the person comes with their
 company (type a company's name instead for no one in particular), across every site the
-account sees, and the site list follows that company's sites.
+account sees. Every site is offered, and the company needn't be at the event's site: a tenant
+may use another site's conference room. On the event's date the company counts as at that site,
+so its guests check in there (the kiosk offers it, with the event's host). On a new event,
+picking the point of contact moves the site to one of their company's until a site is chosen
+by hand.
 
 An event can **repeat**: every day, every weekday, weekly on chosen days (every week or every
 other week), or monthly (on the same date, or the same weekday such as the second Tuesday;

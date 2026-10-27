@@ -473,8 +473,21 @@ function createVisitors({ db, fields }) {
   }
 
   /**
+   * An active company that may be visited at `siteId`: one at that site, or for the day one
+   * with a visitor event there today (a tenant using another site's conference room).
+   */
+  function companyHere(companyId, siteId, now = Date.now()) {
+    const site = raw.prepare("SELECT time_zone FROM sites WHERE id = ?").get(Number(siteId));
+    if (!site) return null;
+    return raw.prepare(`SELECT c.* FROM companies c WHERE c.id = ? AND c.active = 1
+      AND (EXISTS (SELECT 1 FROM company_sites cs WHERE cs.company_id = c.id AND cs.site_id = ?)
+        OR EXISTS (SELECT 1 FROM visitor_events e WHERE e.company_id = c.id AND e.site_id = ? AND e.date = ?))`)
+      .get(Number(companyId), Number(siteId), Number(siteId), today(site.time_zone, now)) || null;
+  }
+
+  /**
    * Checks a visitor in at `siteId` to see `companyId` (and `hostId`, optional). The
-   * company must be at that site and the host in that company. A visitor already in the
+   * company must be at that site (or have an event there today) and the host in that company. A visitor already in the
    * building at that site gets their open visit back rather than a second one.
    * Links the visitor to the company, with the host as their usual one when given.
    */
@@ -483,8 +496,8 @@ function createVisitors({ db, fields }) {
     if (!visitor) throw fail(404, "No such visitor.");
     const site = raw.prepare("SELECT * FROM sites WHERE id = ?").get(siteId);
     if (!site || !site.active) throw fail(400, "That site isn't open.");
-    const company = raw.prepare("SELECT c.* FROM companies c JOIN company_sites cs ON cs.company_id = c.id WHERE c.id = ? AND cs.site_id = ? AND c.active = 1").get(companyId, siteId);
-    if (!company) throw fail(400, "That company isn't at this site.");
+    const company = companyHere(companyId, siteId, now);
+    if (!company) throw fail(400, "That company isn't at this site, and has no visitor event here today.");
     let host = null;
     if (hostId !== null && hostId !== undefined && hostId !== "") {
       host = raw.prepare("SELECT * FROM people WHERE id = ? AND company_id = ? AND active = 1").get(Number(hostId), company.id);
@@ -538,8 +551,8 @@ function createVisitors({ db, fields }) {
   function updateVisit(visitId, { companyId, hostId, purpose } = {}, { sites = null } = {}) {
     const visit = getVisit(visitId, { sites });
     if (!visit || visit.checkedOutAt) throw fail(404, "No such visit in the building.");
-    const company = raw.prepare("SELECT c.* FROM companies c JOIN company_sites cs ON cs.company_id = c.id WHERE c.id = ? AND cs.site_id = ? AND c.active = 1").get(Number(companyId ?? visit.companyId), visit.siteId);
-    if (!company) throw fail(400, "That company isn't at this site.");
+    const company = companyHere(companyId ?? visit.companyId, visit.siteId);
+    if (!company) throw fail(400, "That company isn't at this site, and has no visitor event here today.");
     const host = raw.prepare("SELECT * FROM people WHERE id = ? AND company_id = ? AND active = 1").get(Number(hostId ?? visit.hostId), company.id);
     if (!host) throw fail(400, "Choose the point of contact, someone at that company.");
     raw.prepare("UPDATE visits SET company_id = ?, company_name = ?, host_id = ?, host_name = ?, purpose = ? WHERE id = ?")
@@ -617,7 +630,7 @@ function createVisitors({ db, fields }) {
   }
 
   return {
-    verifyId, setStage, updateVisit, setReservedBadge, companyOfPerson,
+    verifyId, setStage, updateVisit, setReservedBadge, companyOfPerson, companyHere,
     list,
     get,
     findMatch,

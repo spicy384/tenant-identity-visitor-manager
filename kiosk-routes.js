@@ -15,6 +15,7 @@ const { COUNTRIES, countryCode } = require("./countries");
 const { VISITOR_TYPES } = require("./visitors");
 const { createRateLimiter } = require("./rate-limit");
 const { isFullName } = require("./names");
+const { today } = require("./clearance");
 
 const COOKIE = "ivm_kiosk";
 const COOKIE_MAX_AGE_S = 400 * 24 * 60 * 60; // the longest browsers keep a cookie
@@ -120,21 +121,31 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
     res.send(logo.data);
   });
 
-  /** The site's tenants, names only: what a lobby directory board shows. */
+  /** Today's date at the kiosk's site (YYYY-MM-DD). */
+  const siteToday = (siteId) => today(raw.prepare("SELECT time_zone FROM sites WHERE id = ?").get(siteId)?.time_zone, Date.now());
+
+  /**
+   * The site's tenants, names only: what a lobby directory board shows. With them, for the
+   * day, companies from elsewhere holding a visitor event here.
+   */
   router.get("/companies", (req, res) => {
-    const rows = raw.prepare("SELECT c.id, c.name FROM companies c JOIN company_sites cs ON cs.company_id = c.id WHERE cs.site_id = ? AND c.active = 1 ORDER BY c.name").all(req.site.id);
+    const rows = raw.prepare(`SELECT c.id, c.name FROM companies c WHERE c.active = 1
+      AND (c.id IN (SELECT company_id FROM company_sites WHERE site_id = ?) OR c.id IN (SELECT company_id FROM visitor_events WHERE site_id = ? AND date = ?))
+      ORDER BY c.name`).all(req.site.id, req.site.id, siteToday(req.site.id));
     res.json({ companies: rows });
   });
 
   function hostsOf(companyId, siteId) {
     return raw.prepare(`SELECT p.id, p.first_name, p.last_name, p.preferred_name FROM people p
-      WHERE p.company_id = ? AND p.active = 1 AND p.can_host = 1 AND (p.site_id IS NULL OR p.site_id = ?)
-      ORDER BY coalesce(p.preferred_name, p.first_name) COLLATE NOCASE, p.last_name COLLATE NOCASE`).all(companyId, siteId)
+      WHERE p.company_id = ? AND p.active = 1 AND p.can_host = 1
+        AND (p.site_id IS NULL OR p.site_id = ? OR p.id IN (SELECT host_id FROM visitor_events WHERE company_id = p.company_id AND site_id = ? AND date = ?))
+      ORDER BY coalesce(p.preferred_name, p.first_name) COLLATE NOCASE, p.last_name COLLATE NOCASE`).all(companyId, siteId, siteId, siteToday(siteId))
       .map((p) => ({ id: p.id, name: visitors.hostDisplayName(p) }));
   }
 
   function companyAtSite(companyId, siteId) {
-    return raw.prepare("SELECT c.id, c.name FROM companies c JOIN company_sites cs ON cs.company_id = c.id WHERE c.id = ? AND cs.site_id = ? AND c.active = 1").get(Number(companyId), siteId);
+    const c = visitors.companyHere(companyId, siteId, Date.now());
+    return c && { id: c.id, name: c.name };
   }
 
   router.get("/companies/:id/hosts", (req, res) => {

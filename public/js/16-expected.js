@@ -294,20 +294,37 @@ async function editEvent(event, scope = "one") {
   const single = usable.length <= 1;
   let picked = event?.companyId ? { companyId: event.companyId, companyName: event.companyName, hostId: event.hostId, hostName: event.hostName } : null;
   let siteInput = null;
-  // The sites to offer: the company's (of those in use), or every one when there's no company.
-  const fitSites = async (preferred) => {
-    if (!siteInput) return;
-    let list = usable;
-    if (picked) {
-      const { company } = await api(`/api/companies/${picked.companyId}`).catch(() => ({ company: null }));
-      const at = new Set((company?.sites || []).map((s) => s.siteId));
-      if (usable.some((s) => at.has(s.id))) list = usable.filter((s) => at.has(s.id));
+  // Every site in use is offered, and the point of contact may be from a company at another
+  // site (a tenant using a conference room elsewhere): on the event's date their guests check in
+  // here. Until the site is chosen by hand (a new event), picking a point of contact moves it to
+  // one of their company's. companySites: the picked company's sites, or null when unknown.
+  let siteChosen = Boolean(event);
+  let companySites = null;
+  const elsewhere = h("p", { class: "muted small-text full-row", hidden: true });
+  const noteElsewhere = () => {
+    const away = picked && siteInput && companySites?.length && !companySites.some((x) => String(x.siteId) === siteInput.value);
+    elsewhere.hidden = !away;
+    if (away) {
+      const here = usable.find((x) => String(x.id) === siteInput.value)?.name || "this site";
+      elsewhere.textContent = `${picked.companyName} is at ${companySites.map((x) => x.siteName).join(" and ")}. Its guests check in at ${here} on the event's date.`;
     }
-    const keep = [preferred, siteInput.value, state.site].filter(Boolean).map(String).find((v) => list.some((s) => String(s.id) === v));
-    siteInput.replaceChildren(...list.map((s) => h("option", { value: String(s.id), text: s.name })));
-    siteInput.value = keep || String(list[0].id);
   };
-  const contact = eventContactPicker(picked, { siteId: single ? usable[0]?.id : null, onPick: (value) => { picked = value; fitSites(value?.siteId); } });
+  const followContact = async (preferred = null) => {
+    companySites = null;
+    noteElsewhere();
+    if (!picked) return;
+    const want = picked.companyId;
+    const { company } = await api(`/api/companies/${want}`).catch(() => ({ company: null }));
+    if (picked?.companyId !== want || !company) return; // picked again meanwhile, or unknown
+    companySites = company.sites || [];
+    const at = (id) => companySites.some((x) => String(x.siteId) === String(id)) && usable.some((x) => String(x.id) === String(id));
+    if (siteInput && !siteChosen && !at(siteInput.value)) {
+      const to = [preferred, ...usable.map((x) => x.id)].find((id) => id && at(id));
+      if (to) siteInput.value = String(to);
+    }
+    noteElsewhere();
+  };
+  const contact = eventContactPicker(picked, { siteId: single ? usable[0]?.id : null, onPick: (value) => { picked = value; followContact(value?.siteId); } });
 
   // Repeating (a new event only): which weekdays, for weekly.
   const dayBoxes = WEEKDAY_NAMES.map((name, i) => h("input", { type: "checkbox", value: String(i), "aria-label": name }));
@@ -333,8 +350,14 @@ async function editEvent(event, scope = "one") {
 
   const fields = [
     ...(single ? [] : [{ name: "siteId", label: "Site", type: "select", value: String(event?.siteId || state.site || usable[0]?.id || ""), half: true, options: usable.map((s) => ({ value: String(s.id), label: s.name })),
-      hint: "Follows the point of contact's company.",
-      onChange: (input, inputs, dlg) => { if (dlg) { siteInput = input; fitSites(event?.siteId); } } }]),
+      onChange: (input, inputs, dlg) => {
+        if (!dlg) {
+          siteChosen = true;
+          return noteElsewhere();
+        }
+        siteInput = input;
+        return followContact(event?.siteId);
+      } }]),
     { name: "title", label: "Event", required: true, value: event?.title, placeholder: "Quarterly review, interviews, delivery…", half: !single },
     scope === "following"
       ? { name: "date", label: "Date", type: "readonly", value: `${eventDay(event.date)} (later dates keep their own)`, half: true }
@@ -342,6 +365,7 @@ async function editEvent(event, scope = "one") {
     { name: "startTime", label: "From", type: "time", value: event?.startTime || "", half: true },
     { name: "endTime", label: "Until", type: "time", value: event?.endTime || "", half: true },
     { node: contact.node },
+    { node: elsewhere },
     ...(event ? [] : [
       { name: "repeat", label: "Repeats", type: "select", value: "", half: true, onChange: (input, inputs) => showRepeat(inputs),
         options: [{ value: "", label: "Doesn't repeat" }, { value: "daily", label: "Every day" }, { value: "weekdays", label: "Every weekday (Monday to Friday)" }, { value: "weekly", label: "Weekly" }, { value: "monthly", label: "Monthly" }] },

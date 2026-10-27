@@ -213,7 +213,6 @@ const day = today("America/New_York");
 const meeting = events.create({ siteId: site.id, title: "Quarterly review", date: day, startTime: "10:00", companyId: acme.id, hostId: plain.id }, { by: "desk" });
 check("events: added with company and host", meeting.companyName === "Acme Corp" && meeting.hostName === "Pat Plain");
 check("events: the host must be in the company", throwsStatus(() => events.create({ siteId: site.id, title: "X", date: day, companyId: acme.id, hostId: guard.id }), 400) === true);
-check("events: the company must be at the site", throwsStatus(() => events.create({ siteId: other.id, title: "X", date: day, companyId: acme.id }), 400) === true);
 check("events: a bad time is refused", throwsStatus(() => events.create({ siteId: site.id, title: "X", date: day, startTime: "25:00" }), 400) === true);
 check("events: a limited account only adds them at its sites", throwsStatus(() => events.create({ siteId: other.id, title: "X", date: day }, { sites: new Set([site.id]) }), 403) === true);
 const guest = visitors.create({ firstName: "Gus", lastName: "Guest" });
@@ -233,6 +232,19 @@ events.addGuest(tomorrow.id, visitorTs.id);
 visitors.checkIn({ visitorId: visitorTs.id, siteId: site.id, companyId: acme.id });
 check("arrival: checking in today doesn't count for another day's event", events.get(tomorrow.id).guests[0].status === "expected");
 check("events: listed by day", events.list({ from: day }).map((e) => e.title).join() === "Quarterly review" && events.list({ from: "2099-01-01" }).length === 1);
+
+// A tenant using another site's room: the event may be there, and on its date the company
+// counts as at that site for checking in.
+const roamer = visitors.create({ firstName: "Rory", lastName: "Roamer" });
+check("events: before one, a company from elsewhere can't be visited at the other site", throwsStatus(() => visitors.checkIn({ visitorId: roamer.id, siteId: other.id, companyId: acme.id }), 400) === true);
+const borrowed = events.create({ siteId: other.id, title: "Board meeting", date: day, companyId: acme.id, hostId: plain.id }, { by: "desk" });
+check("events: a company may hold one at another site", borrowed.siteId === other.id && borrowed.companyName === "Acme Corp" && borrowed.hostName === "Pat Plain");
+check("events: that day its guests check in there", visitors.checkIn({ visitorId: roamer.id, siteId: other.id, companyId: acme.id, hostId: plain.id }).visit.siteId === other.id);
+const nextDay = new Date(Date.parse(`${day}T12:00:00Z`) + 86400000).toISOString().slice(0, 10);
+events.update(borrowed.id, { date: nextDay });
+const latecomer = visitors.create({ firstName: "Lee", lastName: "Latecomer" });
+check("events: on another day, not", throwsStatus(() => visitors.checkIn({ visitorId: latecomer.id, siteId: other.id, companyId: acme.id }), 400) === true);
+events.remove(borrowed.id);
 const merged = visitors.create({ firstName: "Gus", lastName: "Guest", phone: "555" });
 const late = events.create({ siteId: site.id, title: "Later", date: "2099-02-02" });
 events.addGuest(late.id, merged.id);

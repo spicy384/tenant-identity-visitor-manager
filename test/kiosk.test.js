@@ -150,6 +150,16 @@ async function main() {
 
   // --- a new visitor ------------------------------------------------------------------------------------
   check("kiosk: a check-in needs a company at this site", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper" }, companyId: riverCo.id })).status === 400);
+  // A tenant from another site holding a visitor event here today (a borrowed conference room):
+  // for the day the kiosk offers the company, with its event's host.
+  const riverRep = (await admin.post("/api/people", { firstName: "Rob", lastName: "Rivers", companyId: riverCo.id, siteId: river.id })).data.person;
+  const harborToday = require("../clearance").today(harbor.timeZone);
+  const borrowed = (await admin.post("/api/events", { siteId: harbor.id, title: "Board meeting", date: harborToday, companyId: riverCo.id, hostId: riverRep.id })).data.event;
+  check("kiosk: a company from elsewhere with an event here today is offered", borrowed?.siteId === harbor.id && (await kiosk.get("/kiosk/api/companies")).data.companies.some((c) => c.name === "River Co"));
+  check("kiosk: with its event's host, though they work at another site", (await kiosk.get(`/kiosk/api/companies/${riverCo.id}/hosts`)).data.hosts.map((h) => h.name).join() === "Rob Rivers");
+  await admin.del(`/api/events/${borrowed.id}`);
+  check("kiosk: once the event is gone, so is the company", !(await kiosk.get("/kiosk/api/companies")).data.companies.some((c) => c.name === "River Co")
+    && (await kiosk.get(`/kiosk/api/companies/${riverCo.id}/hosts`)).status === 404);
   check("kiosk: a host who can't host is refused", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organization: "US Navy", citizenship: "US" }, companyId: acme.id, hostId: riverHost.id, purpose: "Meeting" })).status === 400);
   check("kiosk: what the visit is for is needed", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", organization: "US Navy", citizenship: "US" }, companyId: acme.id, hostId: bob.id, purpose: " " })).status === 400);
   check("kiosk: so is a new visitor's company", (await kiosk.post("/kiosk/api/checkin", { visitor: { firstName: "Grace", lastName: "Hopper", citizenship: "US" }, companyId: acme.id, hostId: bob.id, purpose: "Meeting" })).status === 400);

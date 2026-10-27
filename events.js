@@ -215,13 +215,14 @@ function createEvents({ db, now = Date.now }) {
         out[key] = v || null;
       }
     }
-    const siteId = out.siteId ?? existing?.siteId;
-    if (input.companyId !== undefined || (out.siteId && existing?.companyId)) {
-      const cid = input.companyId !== undefined ? input.companyId : existing.companyId;
+    // The company needn't be at the event's site: a tenant may use another site's rooms. On
+    // the event's date it counts as at that site for checking in (visitors.companyHere).
+    if (input.companyId !== undefined) {
+      const cid = input.companyId;
       if (cid === null || cid === "" || cid === undefined) out.companyId = null;
       else {
-        const c = raw.prepare("SELECT c.id FROM companies c JOIN company_sites cs ON cs.company_id = c.id WHERE c.id = ? AND cs.site_id = ?").get(Number(cid), siteId);
-        if (!c) throw fail(400, "That company isn't at the event's site.");
+        const c = raw.prepare("SELECT id FROM companies WHERE id = ?").get(Number(cid));
+        if (!c) throw fail(400, "That company doesn't exist.");
         out.companyId = c.id;
       }
     }
