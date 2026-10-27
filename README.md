@@ -129,6 +129,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Visitors** lists everyone, with those who registered themselves at a kiosk marked "To
   check": staff confirm them, correct them, or merge them into an existing visitor. A visitor
   can be blocked: the kiosk then sends them to reception, and the desk needs a manager's say-so.
+- **Notes.** A visitor's dialog shows their notes (or None), with **Add notes** or **Edit
+  notes** for those who may change visitors and the notes field (field access grid).
 - **Checking in at the desk** (Check in a visitor, on Home and In the building; Check in
   beside an expected guest) walks through one step per page:
   1. **Find** them in the visitor list, or add them: name, company, type, citizenship, the
@@ -208,6 +210,12 @@ The design and decisions are in [PLAN.md](PLAN.md).
   cancels, when the person is deleted, after 36 hours (`CLEARANCE_DIGITS_HOURS`, up to 168), or when the server stops (a restart
   loses them, and the request then shows "Wiped"; ask again). The audit trail records that
   digits were given or viewed, never what they were.
+- **Validating several at once.** For people already checked outside the app, Security ticks
+  them on **People** or **Visitors** (one box for the whole page; picks carry across pages and
+  searches) and chooses **Validate clearance**: one level (or no clearance), and optional
+  granted and expiry dates, the same for each, up to 1,000 at a time. It is all or nothing:
+  if one of them can't be validated, none are. Waiting requests for them close and their digits
+  are wiped; the audit trail gets an entry for each person, as when validated one at a time.
 - **Visitor re-checks.** A visitor's validation lasts 90 days, then shows Re-check due and
   counts as none until Security validates it again. Change the period under Settings >
   Badges and clearances. People's validations don't lapse; their clearance's expiry date
@@ -383,6 +391,10 @@ a month without the date is skipped), until a date at most a year after the firs
 is an event of its own. Guests added when it's made are expected on every date; later, a
 guest can be added to or taken off one date, or that date and the later ones. Editing or
 canceling works the same way (later dates keep their own dates).
+
+Each event has **notes**, shown under its name. **Add notes** or **Edit notes** changes them
+without opening the whole event form; for a repeating event, on that date or on it and the
+later dates.
 
 ## The kiosk
 

@@ -91,6 +91,18 @@ function inProcess() {
   check("validate: an expiry before the grant is refused", throwsStatus(() => clearance.validate({ kind: "person", id: person.id, levelId: L.TS.id, granted: "2025-01-02", expires: "2024-01-01" }), 400) === true);
   check("validate: an unknown level is refused", throwsStatus(() => clearance.validate({ kind: "person", id: person.id, levelId: 9999 }), 400) === true);
 
+  // Several at once, for people already checked: all or nothing.
+  const sam = directory.createPerson({ firstName: "Sam", lastName: "Second", companyId: acme.id });
+  const samRequest = clearance.requestValidation({ kind: "person", id: sam.id, last4: OTHER });
+  check("validate many: one that doesn't exist changes none of them", throwsStatus(() => clearance.validateMany({ kind: "person", ids: [sam.id, 99999], levelId: L.Secret.id, by: "sec" }), 404) === true
+    && directory.getPerson(sam.id).clearanceStatus === "requested" && clearance.digitsOf(samRequest.id) !== null);
+  const many = clearance.validateMany({ kind: "person", ids: [sam.id, person.id], levelId: L.TS.id, granted: "2025-01-02", expires: "2030-01-02", by: "sec" });
+  const samNow = directory.getPerson(sam.id);
+  check("validate many: each gets the level and dates, validated by whom", many.holders.length === 2 && many.level.name === "TS" && many.closed === 1
+    && samNow.clearanceLevel === L.TS.id && samNow.clearanceExpires === "2030-01-02" && samNow.clearanceValidatedBy === "sec" && samNow.clearanceStatus === "validated");
+  check("validate many: their waiting requests close and the digits are wiped", clearance.digitsOf(samRequest.id) === null && !clearance.hasOpen("person", sam.id));
+  check("validate many: none chosen is refused", throwsStatus(() => clearance.validateMany({ kind: "person", ids: [], levelId: L.TS.id }), 400) === true);
+
   const canceled = clearance.requestValidation({ kind: "visitor", id: visitor.id, last4: DIGITS });
   clearance.cancelRequest(canceled.id, "sec");
   check("cancel: the request goes and its digits are wiped", clearance.openCount() === 0 && clearance.digitsOf(canceled.id) === null);
@@ -280,6 +292,18 @@ async function overHttp() {
   check("http: Security limited to another site can't validate them", (await riverSecurity.post("/api/clearance/validate", { kind: "person", id: person.id, levelId: L.Secret.id })).status === 404);
   check("http: canceling is Security's too", (await manager.post(`/api/clearance/requests/${visitorReq.id}/cancel`)).status === 403);
   check("http: Security cancels a request", (await security.post(`/api/clearance/requests/${visitorReq.id}/cancel`)).status === 200 && (await security.get("/api/clearance/requests")).data.requests.length === 0);
+
+  // Several at once: Security only, people it can see, all or nothing.
+  check("http: a manager can't validate several at once, nor an administrator", (await manager.post("/api/clearance/validate-bulk", { kind: "person", ids: [person.id], levelId: L.Secret.id })).status === 403
+    && (await admin.post("/api/clearance/validate-bulk", { kind: "person", ids: [person.id], levelId: L.Secret.id })).status === 403);
+  check("http: Security at another site can't validate them in a batch", (await riverSecurity.post("/api/clearance/validate-bulk", { kind: "person", ids: [person.id], levelId: L.Secret.id })).status === 404);
+  check("http: one unknown in the batch changes none", (await security.post("/api/clearance/validate-bulk", { kind: "person", ids: [person.id, 99999], levelId: L.Secret.id })).status === 404
+    && (await manager.get(`/api/people/${person.id}`)).data.person.clearanceLevelName === "TS");
+  check("http: more than 1,000 is refused", (await security.post("/api/clearance/validate-bulk", { kind: "person", ids: Array.from({ length: 1001 }, (_, n) => n + 1), levelId: L.TS.id })).status === 400);
+  r = await security.post("/api/clearance/validate-bulk", { kind: "person", ids: [person.id], levelId: L.TS.id, granted: "2025-01-02" });
+  check("http: Security validates a batch", r.status === 200 && r.data.validated === 1 && r.data.level.name === "TS");
+  r = await security.post("/api/clearance/validate-bulk", { kind: "visitor", ids: [visitor.id], levelId: null });
+  check("http: visitors too, and no clearance is a validation", r.status === 200 && r.data.level === null && (await manager.get(`/api/visitors/${visitor.id}`)).data.visitor.clearanceStatus === "validated");
 
   // The re-check period is an administrator's setting.
   check("http: Security can't change the re-check period", (await security.put("/api/clearance/settings", { visitorRecheckDays: 30 })).status === 403);

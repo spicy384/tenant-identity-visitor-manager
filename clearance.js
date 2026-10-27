@@ -402,6 +402,27 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     return { holder: h, level: lvl ? level(lvl) : null, closed };
   }
 
+  /**
+   * The Security role validates the same clearance for several people (or visitors) at once,
+   * all or nothing: for those already checked outside this system. Returns each holder and
+   * how many requests were closed.
+   */
+  function validateMany({ kind, ids, levelId = null, granted, expires, by }) {
+    if (!Array.isArray(ids) || !ids.length) throw fail(400, "Choose at least one.");
+    // Everything checked first: validating wipes digits held in memory, which a rollback
+    // wouldn't bring back.
+    if (ids.some((id) => !holderRow(kind, id))) throw fail(404, "One of them doesn't exist.");
+    cleanLevelId(levelId);
+    const g = cleanDate(granted, "Clearance granted");
+    const e = cleanDate(expires, "Clearance expires");
+    if (g && e && e < g) throw fail(400, "The clearance can't expire before it was granted.");
+    const results = [];
+    db.transaction(() => {
+      for (const id of ids) results.push(validate({ kind, id, levelId, granted, expires, by }));
+    });
+    return { holders: results.map((r) => r.holder), level: results[0].level, closed: results.reduce((n, r) => n + r.closed, 0) };
+  }
+
   /** Cancels a request (and wipes its digits). */
   function cancelRequest(requestId, by) {
     const r = raw.prepare("SELECT * FROM clearance_requests WHERE id = ? AND status = 'open'").get(Number(requestId));
@@ -490,6 +511,7 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     digitsOf: digitsFor,
     DIGITS_TTL_HOURS: digitsHours,
     validate,
+    validateMany,
     cancelRequest,
     forgetHolder,
     sweepDigits,

@@ -166,6 +166,44 @@ async function validateClearance(kind, record, request = null) {
   }
 }
 
+/**
+ * The Security role validates the same clearance for everyone chosen on People or Visitors:
+ * for those already checked outside this system. All or nothing. `list` is the records as
+ * listed. Returns true when done.
+ */
+async function validateClearances(kind, list) {
+  const n = list.length;
+  const noun = kind === "visitor" ? (n === 1 ? "visitor" : "visitors") : (n === 1 ? "person" : "people");
+  const names = list.filter((r) => r.lastName).map((r) => (kind === "visitor" ? visitorName(r) : personName(r)));
+  const shown = 12;
+  const levels = state.config.clearanceLevels || [];
+  const done = await formDialog({
+    title: `Validate ${n} ${noun}`,
+    wide: true,
+    intro: h("div", { class: "stack full-row" },
+      h("p", { class: "muted", text: `Each gets the clearance chosen here, validated by you now: use it for ${noun} already checked. ${kind === "visitor"
+        ? `A visitor's validation lasts ${state.config.clearance?.visitorRecheckDays || 90} days, then needs re-checking. `
+        : ""}Any request waiting for them is closed and its digits wiped. If one of them can't be validated, none are.` }),
+      names.length ? h("p", { class: "small-text", text: `${names.slice(0, shown).join(", ")}${names.length > shown ? `, and ${names.length - shown} more` : ""}.` }) : null),
+    fields: [
+      { name: "levelId", label: "Clearance level", type: "select", required: true, value: "",
+        options: [{ value: "", label: "Choose a level" }, ...levels.map((l) => ({ value: String(l.id), label: l.name })), { value: "none", label: "No clearance" }] },
+      { name: "granted", label: "Granted", type: "date", half: true, hint: "Optional; the same for each." },
+      { name: "expires", label: "Expires", type: "date", half: true, hint: "Optional; the same for each." }
+    ],
+    submitLabel: `Validate ${n}`,
+    onSubmit: (v) => {
+      if (!v.levelId) throw new Error("Choose the clearance level.");
+      return api("/api/clearance/validate-bulk", { method: "POST", body: { kind, ids: list.map((r) => r.id), levelId: v.levelId === "none" ? null : Number(v.levelId), granted: v.granted || null, expires: v.expires || null } });
+    }
+  });
+  if (done) {
+    toast(`Validated ${done.validated} ${noun}: ${done.level ? done.level.name : "no clearance"}.${done.closed ? ` ${done.closed} waiting ${done.closed === 1 ? "request" : "requests"} closed.` : ""}`);
+    refreshCounts();
+  }
+  return Boolean(done);
+}
+
 // --- the Security role's queue -------------------------------------------------------------------
 
 async function showClearance() {

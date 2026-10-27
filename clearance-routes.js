@@ -185,6 +185,22 @@ function createClearanceRoutes({ access, clearance, directory, visitors, admin, 
     res.json({ ok: true, level: result.level, closed: result.closed });
   });
 
+  /** The same clearance for up to 1,000 people (or visitors) already checked: all or nothing. */
+  router.post("/api/clearance/validate-bulk", security, (req, res) => {
+    const body = req.body || {};
+    const kind = kindOf(body.kind);
+    const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map((v) => positiveInt(v)))];
+    if (!ids.length || ids.includes(null)) throw fail(400, "Choose at least one.");
+    if (ids.length > 1000) throw fail(400, "At most 1,000 at once.");
+    const holders = ids.map((id) => visibleHolder(req, kind, id));
+    if (holders.some((x) => !x)) throw fail(404, kind === "person" ? "One of those people doesn't exist, or is at a site this account can't see." : "One of those visitors doesn't exist, or visits a site this account can't see.");
+    const result = clearance.validateMany({ kind, ids, levelId: body.levelId, granted: body.granted, expires: body.expires, by: staffName(req) });
+    // One entry each, as when validated one at a time.
+    const detail = `${kind}; ${result.level ? result.level.name : "no clearance"}${body.expires ? `, expires ${body.expires}` : ""}; one of ${ids.length} validated together`;
+    for (const holder of holders) auditFrom(req, "clearance.validate", nameOf(holder), detail);
+    res.json({ ok: true, validated: ids.length, level: result.level, closed: result.closed });
+  });
+
   // --- settings --------------------------------------------------------------------------------
 
   // --- what is coming up: the Security pages and dashboard (Security and administrators) --------

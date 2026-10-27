@@ -1,4 +1,4 @@
-// 09-visitors.js: the Visitors page, the visitor dialog (details, the companies they
+// 09-visitors.js: the Visitors page, the visitor dialog (details, notes, the companies they
 // visit, their visits), adding, checking, merging and blocking visitors.
 
 const VISITORS_PAGE = 100;
@@ -23,7 +23,6 @@ async function loadVisitors() {
   const table = $("visitors-table");
   const showOrg = Boolean(visitorField("organization"));
   const head = ["Name", ...(showOrg ? ["Company"] : []), "Visits", "Last visit"];
-  table.tHead.replaceChildren(h("tr", {}, head.map((t) => h("th", { text: t }))));
   let data;
   try {
     data = await api(`/api/visitors?${new URLSearchParams({ limit: String(VISITORS_PAGE), offset: String(visitorsView.offset), ...(q ? { q } : {}), ...(filter ? { filter } : {}) })}`);
@@ -31,8 +30,39 @@ async function loadVisitors() {
     clear(table.tBodies[0]).append(emptyRow(head.length, error.message));
     return;
   }
-  const rows = data.visitors.map((v) => {
-    const row = h("tr", { class: "clickable" },
+  visitorsView.visitors = data.visitors;
+  visitorsView.empty = q || filter ? "Nobody matches." : "No visitors yet. They appear here when they check in at a kiosk, or add one.";
+  drawVisitors();
+  const from = data.total ? visitorsView.offset + 1 : 0;
+  $("visitors-page").textContent = `${from}-${visitorsView.offset + data.visitors.length} of ${data.total}`;
+  $("visitors-prev").disabled = visitorsView.offset === 0;
+  $("visitors-next").disabled = visitorsView.offset + VISITORS_PAGE >= data.total;
+}
+
+/**
+ * Draws the page of visitors already loaded. For the Security role each row has a tick box,
+ * to validate several clearances at once (21-bulk.js).
+ */
+function drawVisitors() {
+  const table = $("visitors-table");
+  const list = visitorsView.visitors || [];
+  const showOrg = Boolean(visitorField("organization"));
+  const selection = isSecurity() ? visitorsSelection : null;
+  const tick = (checked, label, onToggle) => {
+    const box = h("input", { type: "checkbox", "aria-label": label });
+    box.checked = checked;
+    box.addEventListener("click", (e) => e.stopPropagation());
+    box.addEventListener("change", () => onToggle(box.checked));
+    return box;
+  };
+  const head = ["Name", ...(showOrg ? ["Company"] : []), "Visits", "Last visit"];
+  const all = selection && list.length > 0 && list.every((v) => selection.has(v.id));
+  table.tHead.replaceChildren(h("tr", {},
+    selection ? h("th", { class: "pick-cell" }, tick(all, "Choose everyone on this page", (on) => selection.set(list.map((v) => v.id), on))) : null,
+    head.map((t) => h("th", { text: t }))));
+  const rows = list.map((v) => {
+    const row = h("tr", { class: `clickable${selection?.has(v.id) ? " is-picked" : ""}` },
+      selection ? h("td", { class: "pick-cell", onclick: (e) => e.stopPropagation() }, tick(selection.has(v.id), `Choose ${visitorName(v)}`, (on) => selection.set([v.id], on))) : null,
       h("td", {}, h("strong", { text: visitorName(v) }), visitorBadges(v)),
       showOrg ? h("td", { text: v.organization || "" }) : null,
       h("td", { class: "small-text", text: (v.companies || []).map((c) => c.companyName).join(", ") }),
@@ -40,11 +70,8 @@ async function loadVisitors() {
     row.addEventListener("click", () => { location.hash = `#visitor/${v.id}`; });
     return row;
   });
-  clear(table.tBodies[0]).append(...(rows.length ? rows : [emptyRow(head.length, q || filter ? "Nobody matches." : "No visitors yet. They appear here when they check in at a kiosk, or add one.")]));
-  const from = data.total ? visitorsView.offset + 1 : 0;
-  $("visitors-page").textContent = `${from}-${visitorsView.offset + data.visitors.length} of ${data.total}`;
-  $("visitors-prev").disabled = visitorsView.offset === 0;
-  $("visitors-next").disabled = visitorsView.offset + VISITORS_PAGE >= data.total;
+  clear(table.tBodies[0]).append(...(rows.length ? rows : [emptyRow(head.length + (selection ? 1 : 0), visitorsView.empty || "")]));
+  renderVisitorActions();
 }
 
 const reloadVisitors = debounce(() => { visitorsView.offset = 0; loadVisitors(); }, 250);
@@ -229,6 +256,26 @@ function reservedBadgeSection(visitor, refresh) {
         may ? h("button", { type: "button", class: "secondary small", text: "Reserve a badge", onclick: reserve }) : null));
 }
 
+/** The visitor's notes, shown even when there are none, and changed in place by those who may. */
+function visitorNotesSection(visitor, refresh) {
+  const field = visitorField("notes");
+  if (!field) return null;
+  const may = field.access === "edit" && canEditVisitors();
+  const edit = async () => {
+    const saved = await formDialog({
+      title: `Notes on ${visitorName(visitor)}`,
+      fields: [{ name: "notes", label: "Notes", type: "textarea", rows: 6, value: visitor.notes || "", autofocus: true }],
+      submitLabel: "Save",
+      onSubmit: async (v) => (await api(`/api/visitors/${visitor.id}`, { method: "PUT", body: { notes: v.notes } })).visitor
+    });
+    if (saved) refresh();
+  };
+  return h("div", { class: "stack" },
+    h("div", { class: "row-between" }, h("h4", { text: "Notes" }),
+      may ? h("button", { type: "button", class: "link-btn", text: visitor.notes ? "Edit notes" : "Add notes", onclick: edit }) : null),
+    visitor.notes ? h("p", { class: "pre", text: visitor.notes }) : h("p", { class: "muted", text: "None." }));
+}
+
 async function openVisitor(id, onChange = () => {}) {
   let data;
   try {
@@ -256,7 +303,8 @@ async function openVisitor(id, onChange = () => {}) {
   let dlgRef = null;
   const body = h("div", { class: "detail" },
     h("p", {}, visitorBadges({ ...visitor, clearanceStatus: undefined }), visitor.source === "kiosk" && visitor.verified === false ? h("span", { class: "muted small-text", text: " Registered themselves at a kiosk. Check the details, merge them with an existing visitor, or mark them checked." }) : null),
-    recordFacts(fields, visitor, ["firstName", "lastName", "companies", "verified", "blocked", ...CLEARANCE_KEYS]),
+    recordFacts(fields, visitor, ["firstName", "lastName", "companies", "verified", "blocked", "notes", ...CLEARANCE_KEYS]),
+    visitorNotesSection(visitor, () => dlgRef?.finish("refresh")),
     clearanceSection("visitor", visitor, () => dlgRef?.finish("refresh")),
     linksBlock,
     reservedBadgeSection(visitor, () => dlgRef?.finish("refresh")),

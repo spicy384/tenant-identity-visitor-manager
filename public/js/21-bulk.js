@@ -2,8 +2,9 @@
 // boxes: merge the chosen companies into one (choosing which to keep, and editing its name and
 // details with the others' values to hand), make them inactive or active, or delete them. On
 // People, tick boxes beside each row: change chosen fields for all of them at once (custom
-// fields included), make them inactive or active, or delete them. The server does each as all
-// or nothing.
+// fields included), make them inactive or active, delete them, or (Security) validate the same
+// clearance for them all; on Visitors, Security does that too. The server does each as all or
+// nothing.
 
 // --- companies ------------------------------------------------------------------------------------
 
@@ -171,12 +172,16 @@ function renderPeopleActions() {
   const n = peopleSelection.ids.size;
   bar.hidden = !n;
   if (!n) return bar.replaceChildren();
+  const edits = canEditDirectory();
   bar.replaceChildren(
     h("span", { class: "small-text", text: `${n} ${n === 1 ? "person" : "people"} chosen` }),
     h("div", { class: "btn-row" },
-      h("button", { type: "button", class: "primary small", text: "Edit…", onclick: () => bulkEditPeople() }),
-      h("button", { type: "button", class: "secondary small", text: "Make inactive", onclick: () => bulkPeople({ active: false }, "made inactive") }),
-      h("button", { type: "button", class: "secondary small", text: "Make active", onclick: () => bulkPeople({ active: true }, "made active") }),
+      edits ? h("button", { type: "button", class: "primary small", text: "Edit…", onclick: () => bulkEditPeople() }) : null,
+      edits ? h("button", { type: "button", class: "secondary small", text: "Make inactive", onclick: () => bulkPeople({ active: false }, "made inactive") }) : null,
+      edits ? h("button", { type: "button", class: "secondary small", text: "Make active", onclick: () => bulkPeople({ active: true }, "made active") }) : null,
+      isSecurity() ? h("button", { type: "button", class: edits ? "secondary small" : "primary small", text: "Validate clearance…", onclick: async () => {
+        if (await validateClearances("person", [...peopleSelection.ids.values()])) { peopleSelection.ids.clear(); loadPeople(); }
+      } }) : null,
       isAdmin() ? h("button", { type: "button", class: "secondary small danger-text", text: "Delete", onclick: () => deletePeople() }) : null,
       h("button", { type: "button", class: "link-btn small-text", text: "Clear", onclick: () => peopleSelection.clear() })));
   return null;
@@ -276,6 +281,37 @@ async function bulkEditPeople() {
   toast(`${result.updated} ${result.updated === 1 ? "person" : "people"} changed.`);
   peopleSelection.ids.clear();
   loadPeople();
+  return null;
+}
+
+// --- visitors (Security) --------------------------------------------------------------------------
+
+/** The visitors chosen on the Visitors page, across its pages: Security validates their clearances together. */
+const visitorsSelection = {
+  ids: new Map(), // id -> the visitor as listed
+  has(id) { return this.ids.has(id); },
+  set(ids, on) {
+    for (const id of ids) {
+      if (on) this.ids.set(id, (visitorsView.visitors || []).find((v) => v.id === id) || this.ids.get(id) || { id });
+      else this.ids.delete(id);
+    }
+    drawVisitors();
+  },
+  clear() { this.ids.clear(); drawVisitors(); }
+};
+
+function renderVisitorActions() {
+  const bar = $("visitors-actions");
+  const n = visitorsSelection.ids.size;
+  bar.hidden = !n;
+  if (!n) return bar.replaceChildren();
+  bar.replaceChildren(
+    h("span", { class: "small-text", text: `${n} ${n === 1 ? "visitor" : "visitors"} chosen` }),
+    h("div", { class: "btn-row" },
+      h("button", { type: "button", class: "primary small", text: "Validate clearance…", onclick: async () => {
+        if (await validateClearances("visitor", [...visitorsSelection.ids.values()])) { visitorsSelection.ids.clear(); loadVisitors(); }
+      } }),
+      h("button", { type: "button", class: "link-btn small-text", text: "Clear", onclick: () => visitorsSelection.clear() })));
   return null;
 }
 

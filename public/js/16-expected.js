@@ -82,7 +82,7 @@ function eventPanel(e) {
           loadExpected();
           refreshCounts();
         } })) : null),
-    e.notes ? h("p", { class: "pre small-text", text: e.notes }) : null,
+    eventNotes(e),
     h("p", { class: "small-text muted", text: `${e.guests.length} expected: ${counts.here} here, ${counts.left} left, ${counts.expected} not arrived yet.` }),
     e.guests.length
       ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
@@ -189,6 +189,26 @@ const repeatPhrase = (e) => e.repeatText.replace(/^Every/, "every").replace(/unt
  * and its later dates ("following"); null if backed out. "one" at once for an event that
  * doesn't repeat.
  */
+/** An event's notes, with a way to add or change them without the rest of the event form. */
+function eventNotes(e) {
+  const may = canEditVisitors();
+  if (!e.notes && !may) return "";
+  const edit = async () => {
+    const scope = await seriesScope(e, { title: `Notes on ${e.title}`, one: "This date only", following: "This and later dates" });
+    if (!scope) return;
+    const saved = await formDialog({
+      title: `Notes on ${e.title}`,
+      fields: [{ name: "notes", label: "Notes", type: "textarea", rows: 6, value: e.notes || "", autofocus: true }],
+      submitLabel: "Save",
+      onSubmit: (v) => api(`/api/events/${e.id}`, { method: "PUT", body: { notes: v.notes, scope } })
+    });
+    if (saved) loadExpected();
+  };
+  return h("div", { class: "event-notes" },
+    e.notes ? h("p", { class: "pre small-text", text: e.notes }) : null,
+    may ? h("button", { type: "button", class: "link-btn small-text", text: e.notes ? "Edit notes" : "Add notes", onclick: edit }) : null);
+}
+
 function seriesScope(e, { title, one, following, danger = false }) {
   if (!e.seriesId) return Promise.resolve("one");
   return openDialog({

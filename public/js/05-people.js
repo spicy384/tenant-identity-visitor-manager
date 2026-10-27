@@ -29,7 +29,7 @@ async function loadPeople() {
 function drawPeople() {
   const table = $("people-table");
   const people = peopleView.people || [];
-  const fresh = peopleTable(people, { withCompany: true, onOpen: (p) => { location.hash = `#person/${p.id}`; }, selection: canEditDirectory() ? peopleSelection : null }).querySelector("table");
+  const fresh = peopleTable(people, { withCompany: true, onOpen: (p) => { location.hash = `#person/${p.id}`; }, selection: canEditDirectory() || isSecurity() ? peopleSelection : null }).querySelector("table");
   table.replaceChildren(...fresh.children);
   if (!people.length) clear(table.tBodies[0]).append(emptyRow(table.tHead.rows[0].cells.length, peopleView.query ? "Nobody matches." : "Nobody yet. Add a company, then its people."));
   renderPeopleActions();
