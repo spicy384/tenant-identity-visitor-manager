@@ -160,6 +160,35 @@ const DASHBOARD_MODULES = {
       })), "Nothing waiting.", { more: "#clearance" }) };
     }
   },
+  alarms: {
+    title: "Alarms not opened",
+    description: "Alarm notices from the monitoring center that no one has opened yet.",
+    href: "#alarms",
+    async load() {
+      const { alarms, total } = await api(`/api/security/alarms?${siteParams({ unread: "1", limit: "50" })}`);
+      return { count: total, attention: total > 0, body: dashList(alarms.map((a) => dashRow({
+        href: `#alarm/${a.id}`,
+        main: a.event || "Alarm",
+        sub: [a.accountName || a.account, a.zone ? `Zone ${a.zone}${a.zoneName ? ` · ${a.zoneName}` : ""}` : null, multiSite() && !state.site ? a.siteName : null].filter(Boolean).join(" · "),
+        right: h("span", { class: "muted small-text", text: agoText(a.receivedAt) })
+      })), "Every alarm has been opened.", { more: "#alarms" }) };
+    }
+  },
+  guardReports: {
+    title: "Guard reports not opened",
+    description: "Guard daily reports that no one has opened yet, with anything that needs a look.",
+    href: "#guard-reports",
+    async load() {
+      const { reports, total } = await api(`/api/security/guard-reports?${siteParams({ unread: "1", limit: "50" })}`);
+      return { count: total, attention: reports.some((r) => r.incidents || r.missed), body: dashList(reports.map((r) => dashRow({
+        href: `#guard-report/${r.id}`,
+        main: guardDateText(r.date) || fmtDate(r.receivedAt),
+        sub: [r.site, multiSite() && !state.site ? r.siteName : null].filter(Boolean).join(" · ") || null,
+        right: r.incidents ? h("span", { class: "badge bad", text: `${r.incidents} ${r.incidents === 1 ? "incident" : "incidents"}` })
+          : r.missed ? h("span", { class: "badge warn", text: `${r.missed} missed` }) : null
+      })), "Every guard report has been opened.", { more: "#guard-reports" }) };
+    }
+  },
   rechecks: {
     title: "Visitor re-checks",
     description: "Visitors whose validated clearance runs out within 30 days, or already has.",
@@ -386,6 +415,10 @@ async function saveDashboard(list) {
     toast(error.message, "error");
   }
 }
+
+$("home-lend").addEventListener("click", async () => {
+  if (await lendBadgeDialog()) loadDashboard();
+});
 
 $("home-checkin").addEventListener("click", async () => {
   if (await checkInWizard()) loadDashboard();

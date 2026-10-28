@@ -90,7 +90,11 @@ const give = (badge, kind, holder) => () => badges.assign(badge.id, { kind, hold
 check("type: a personnel badge goes to building staff", Boolean(give(pTs, "person", guard)()));
 check("type: not to a tenant's person", throwsStatus(give(pUncl, "person", plain), 409, /building staff/) === true);
 check("type: a tenant badge doesn't go to building staff", throwsStatus(give(tUncl, "person", guard), 409, /personnel badge/) === true);
-check("type: a visitor badge doesn't go to a person", throwsStatus(give(vUncl, "person", plain), 409, /visitor badge/) === true);
+check("type: a visitor badge goes to a person only lent for the day", (() => {
+  const b = give(vUncl, "person", plain)();
+  badges.takeBack(vUncl.id);
+  return b.holder.temporary === true && b.holder.dueAt > Date.now() && b.holder.replacesNumber === null;
+})());
 check("type: a person's badge doesn't go to a visitor", throwsStatus(give(tUncl, "visitor", visitorNone), 409, /visitor badges/) === true);
 
 check("clearance: FSP may hold a CI badge", Boolean(give(tCi, "person", fsp)()));
@@ -114,7 +118,7 @@ const lost = badges.takeBack(tUncl.id, { outcome: "lost" }, { by: "desk" });
 check("lost: the badge is marked lost and can't be given", lost.badge.status === "lost" && throwsStatus(give(tUncl, "person", plain), 409, /lost/) === true);
 const hist = badges.history(tCi.id);
 check("history: who had it, when, given and taken back by whom", hist.length === 1 && hist[0].holderName === "Fran Poly" && hist[0].assignedBy === "desk" && hist[0].returnedBy === "desk" && hist[0].note === "end of contract" && hist[0].outcome === "returned");
-check("history: a holder's badges, now and before", badges.forHolder("person", plain.id).length === 1 && badges.forHolder("person", plain.id)[0].outcome === "lost");
+check("history: a holder's badges, now and before", badges.forHolder("person", plain.id).length === 2 && badges.forHolder("person", plain.id)[0].outcome === "lost" && badges.forHolder("person", plain.id)[1].temporary);
 check("history: a badge with history can't be deleted", throwsStatus(() => badges.remove(tCi.id), 409, /retire/) === true);
 check("changing: a held badge's level can't change", throwsStatus(() => badges.update(pTs.id, { clearanceLevelId: L.Secret.id }), 409) === true);
 check("changing: nor can it be retired while held", throwsStatus(() => badges.update(pTs.id, { status: "retired" }), 409) === true);
@@ -155,20 +159,30 @@ check("sites: an unknown site is refused", throwsStatus(() => badges.create({ nu
 const tmp1 = make("TMP-1", "tenant", null, { temporary: true });
 const tmp2 = make("TMP-2", "tenant", null, { temporary: true });
 const tmpSci = make("TMP-S", "tenant", L["TS//SCI"], { temporary: true });
+const vSpare = make("V-SPARE", "visitor");
 check("temporary: a badge can be marked temporary", tmp1.temporary === true && pTs.temporary === false);
 check("temporary: not a visitor badge", throwsStatus(() => make("TMP-V", "visitor", null, { temporary: true }), 400) === true);
 const forgetful = directory.createPerson({ firstName: "Fay", lastName: "Forgetful", companyId: acme.id, siteId: site.id, clearanceLevel: L.TS.id });
-check("temporary: only for someone who holds a badge of their own", throwsStatus(() => badges.assign(tmp1.id, { kind: "person", holderId: forgetful.id }), 409, /doesn't hold a badge/) === true);
-check("temporary: not offered to someone without a badge", badges.availableFor("person", forgetful.id, { temporary: true }).length === 0);
+const lendable = (person) => badges.availableFor("person", person.id, { temporary: true });
+check("temporary: offered to someone with no badge on record, the temporary stock first, then visitor badges",
+  lendable(forgetful).filter((b) => b.type === "tenant").map((b) => b.number).sort().join() === "TMP-1,TMP-2" && lendable(forgetful).some((b) => b.type === "visitor")
+  && lendable(forgetful).findIndex((b) => b.type === "visitor") > lendable(forgetful).findIndex((b) => b.temporary));
+check("temporary: lent without a badge on record, in place of nothing", (() => {
+  const b = badges.assign(tmp1.id, { kind: "person", holderId: forgetful.id });
+  badges.takeBack(tmp1.id);
+  return b.holder.temporary && b.holder.replacesNumber === null;
+})());
 const own = make("T-020", "tenant");
 badges.assign(own.id, { kind: "person", holderId: forgetful.id }, { by: "desk" });
 check("temporary: regular offers leave temporary badges out", !badges.availableFor("person", forgetful.id).some((b) => b.temporary));
-check("temporary: offered once they hold one, within their clearance", badges.availableFor("person", forgetful.id, { temporary: true }).map((b) => b.number).sort().join() === "TMP-1,TMP-2");
+check("temporary: offered within their clearance", lendable(forgetful).filter((b) => b.type === "tenant").map((b) => b.number).sort().join() === "TMP-1,TMP-2");
 const lent = badges.assign(tmp1.id, { kind: "person", holderId: forgetful.id }, { by: "desk" });
 const p = localParts(Date.now(), "America/New_York");
 check("temporary: lent in place of their badge, due back at midnight where they work", lent.holder.temporary && lent.holder.replacesNumber === "T-020" && lent.holder.dueAt === zonedTime(p.year, p.month, p.day + 1, 0, 0, "America/New_York"), JSON.stringify(lent.holder));
 check("temporary: their own badge stays theirs", badges.get(own.id).holder?.id === forgetful.id);
-check("temporary: one at a time", throwsStatus(() => badges.assign(tmp2.id, { kind: "person", holderId: forgetful.id }), 409, /already has temporary badge TMP-1/) === true);
+check("temporary: one at a time", throwsStatus(() => badges.assign(tmp2.id, { kind: "person", holderId: forgetful.id }), 409, /already has badge TMP-1 for the day/) === true);
+check("temporary: a visitor badge counts as their one", throwsStatus(() => badges.assign(vSpare.id, { kind: "person", holderId: forgetful.id }), 409, /already has badge TMP-1/) === true
+  && !lendable(forgetful).length);
 check("temporary: the clearance rule still applies", throwsStatus(() => badges.assign(tmpSci.id, { kind: "person", holderId: guard.id }), 409) === true);
 check("temporary: listed as out, not yet overdue", badges.list({ state: "temporary" }).badges.map((b) => b.number).join() === "TMP-1" && badges.overdueCount() === 0);
 db.raw.prepare("UPDATE badge_assignments SET due_at = ? WHERE badge_id = ? AND returned_at IS NULL").run(Date.now() - 1000, tmp1.id);
@@ -176,6 +190,16 @@ check("temporary: not back by its time, it is overdue", badges.overdueCount() ==
 check("temporary: overdue is counted per site too", badges.overdueCount(new Set([other.id])) === 1);
 badges.takeBack(tmp1.id, {}, { by: "desk" });
 check("temporary: taken back, nothing is overdue", badges.overdueCount() === 0 && badges.history(tmp1.id)[0].replacesNumber === "T-020");
+const vLend = make("V-LEND", "visitor");
+const vCleared = make("V-LEND-TS", "visitor", L["TS//SCI"]);
+const vLent = badges.assign(vLend.id, { kind: "person", holderId: forgetful.id }, { by: "desk" });
+check("lending a visitor badge: in place of their badge, due back at midnight", vLent.holder.temporary && vLent.holder.replacesNumber === "T-020" && vLent.holder.dueAt === zonedTime(p.year, p.month, p.day + 1, 0, 0, "America/New_York"));
+check("lending a visitor badge: listed as out for the day, not as with a visitor who left", badges.list({ state: "temporary" }).badges.some((b) => b.number === "V-LEND") && !badges.list({ state: "left" }).badges.some((b) => b.number === "V-LEND"));
+check("lending a visitor badge: never offered as their own badge", !badges.availableFor("person", plain.id).some((b) => b.type === "visitor"));
+check("lending a visitor badge: building staff may borrow one too", lendable(guard).some((b) => b.number === "V-SPARE"));
+check("lending a visitor badge: the clearance rule still applies", throwsStatus(() => badges.assign(vCleared.id, { kind: "person", holderId: plain.id }), 409) === true && !lendable(plain).some((b) => b.number === "V-LEND-TS"));
+badges.takeBack(vLend.id);
+check("lending a visitor badge: taken back, it is free for visitors again", badges.availableFor("visitor", visitorNone.id).some((b) => b.number === "V-LEND"));
 check("temporary: can't stop being temporary while lent", (() => {
   badges.assign(tmp2.id, { kind: "person", holderId: forgetful.id });
   const r = throwsStatus(() => badges.update(tmp2.id, { temporary: false }), 409);

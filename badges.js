@@ -11,9 +11,11 @@
  * be given a badge whatever site they work at. Staff limited to some sites see the badges
  * valid at any of their sites.
  *
- * Temporary badges are a stock kept at the desk for people who forgot theirs: one goes only
- * to a person who holds a regular badge, stands in for it, and is due back by the end of
- * that day (midnight where they work). Overdue ones are listed until someone takes them back.
+ * Lending a badge for the day, to a person who forgot theirs: a badge marked temporary (a
+ * stock kept at the desk, of the type they'd wear), or any visitor badge. A visitor badge
+ * given to a person is always such a loan. The loan stands in for the badge they hold, when
+ * one is on record, and is due back by the end of that day (midnight where they work); one
+ * loan at a time. Overdue ones are listed until someone takes them back.
  */
 const { zonedTime, localParts } = require("./visit-clock");
 const { today, cleanDate } = require("./clearance");
@@ -309,6 +311,9 @@ function createBadges({ db, clearance, now = Date.now }) {
 
   // --- who may hold what ----------------------------------------------------------------------
 
+  /** Whether giving `badge` to `h` lends it for the day: a temporary badge, or a visitor badge to a person. */
+  const isLoan = (badge, h) => h.kind === "person" && (badge.temporary || badge.type === "visitor");
+
   /** A holder as the rules need it: name, company, building staff, clearance, active. */
   function holder(kind, id) {
     if (kind === "person") {
@@ -343,18 +348,14 @@ function createBadges({ db, clearance, now = Date.now }) {
   function refusal(badge, h, { levelNames = true } = {}) {
     if (badge.status !== "active") return `Badge ${badge.label} is ${badge.status}.`;
     if (badge.expired) return `Badge ${badge.label} expired on ${badge.expiresOn}; give another, or change its expiry date.`;
-    if (badge.type === "visitor" && h.kind !== "visitor") return `Badge ${badge.label} is a visitor badge; it goes to visitors.`;
     if (badge.type !== "visitor" && h.kind === "visitor") return `Badge ${badge.label} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`;
     if (badge.type === "personnel" && !h.buildingStaff) return `Badge ${badge.label} is a personnel badge, for building staff; ${h.company} isn't marked as building staff.`;
     if (badge.type === "tenant" && h.buildingStaff) return `Badge ${badge.label} is a tenant badge; ${h.name} is building staff and gets a personnel badge.`;
     if (badge.reservedFor && !(h.kind === "visitor" && h.id === badge.reservedFor.id)) return `Badge ${badge.label} is reserved for ${badge.reservedFor.name}.`;
     if (!h.active) return `${h.name} is inactive.`;
     if (h.blocked) return `${h.name} is blocked.`;
-    if (badge.temporary) {
-      if (h.kind !== "person") return `Badge ${badge.label} is temporary, for people who forgot their own; visitors get visitor badges.`;
-      if (!h.regular.length) return `${h.name} doesn't hold a badge for badge ${badge.label} to stand in for; give them a badge of their own instead.`;
-      if (h.temporaryOut.length) return `${h.name} already has temporary badge ${badgeLabel(h.temporaryOut[0].facility_code, h.temporaryOut[0].number)}; take it back first.`;
-    }
+    if (badge.temporary && h.kind !== "person") return `Badge ${badge.label} is temporary, for people who forgot their own; visitors get visitor badges.`;
+    if (isLoan(badge, h) && h.temporaryOut.length) return `${h.name} already has badge ${badgeLabel(h.temporaryOut[0].facility_code, h.temporaryOut[0].number)} for the day; take it back first.`;
     if (badge.clearanceLevelId) {
       const needed = clearance.level(badge.clearanceLevelId);
       if (!clearance.covers(clearance.effectiveLevel(h), needed)) {
@@ -366,11 +367,18 @@ function createBadges({ db, clearance, now = Date.now }) {
     return null;
   }
 
-  /** Active, unheld badges `h` may be given (regular, or with `temporary` the temporary ones), among those `sites` sees. */
+  /**
+   * Active, unheld badges `h` may be given, among those `sites` sees: their own kind, or with
+   * `temporary` (a person only) the ones they may borrow for the day, the temporary stock of
+   * their kind first, then visitor badges.
+   */
   function availableFor(kind, holderId, { sites = null, temporary = false } = {}) {
     const h = holder(kind, holderId);
     if (!h) throw fail(404, "No such person or visitor.");
-    return list({ state: "available", type: kind === "visitor" ? "visitor" : h.buildingStaff ? "personnel" : "tenant", temporary, sites, limit: 5000 }).badges.filter((b) => !refusal(b, h));
+    const own = kind === "visitor" ? "visitor" : h.buildingStaff ? "personnel" : "tenant";
+    const found = list({ state: "available", type: own, temporary: kind === "visitor" ? null : temporary, sites, limit: 5000 }).badges;
+    if (temporary && kind === "person") found.push(...list({ state: "available", type: "visitor", sites, limit: 5000 }).badges);
+    return found.filter((b) => !refusal(b, h));
   }
 
   /** Midnight at the end of today where `timeZone` is (or the server's), as a timestamp. */
@@ -392,15 +400,16 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (visitId && !raw.prepare("SELECT 1 FROM visits WHERE id = ? AND visitor_id = ?").get(visitId, h.id)) throw fail(400, "That visit isn't the visitor's.");
     let replaces = null;
     let dueAt = null;
-    if (badge.temporary) {
-      // Stands in for the badge they forgot: the one named, else their first.
-      replaces = replacesBadgeId ? h.regular.find((x) => x.id === Number(replacesBadgeId)) : h.regular[0];
-      if (!replaces) throw fail(400, `${h.name} doesn't hold that badge.`);
+    const loan = isLoan(badge, h);
+    if (loan) {
+      // Stands in for the badge they forgot: the one named, else their first (if one is on record).
+      replaces = replacesBadgeId ? h.regular.find((x) => x.id === Number(replacesBadgeId)) : h.regular[0] || null;
+      if (replacesBadgeId && !replaces) throw fail(400, `${h.name} doesn't hold that badge.`);
       dueAt = endOfToday(h.timeZone);
     }
     db.transaction(() => {
       raw.prepare(`INSERT INTO badge_assignments (badge_id, holder_kind, holder_id, holder_name, holder_company, visit_id, assigned_at, assigned_by, temporary, replaces_badge_id, due_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(badge.id, kind, h.id, h.name, h.company || null, visitId, now(), by, badge.temporary ? 1 : 0, replaces ? replaces.id : null, dueAt);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(badge.id, kind, h.id, h.name, h.company || null, visitId, now(), by, loan ? 1 : 0, replaces ? replaces.id : null, dueAt);
       // A visitor waiting for a badge has one now: their check-in is done.
       if (kind === "visitor") {
         if (visitId) raw.prepare("UPDATE visits SET checkin_stage = 'done' WHERE id = ? AND checkin_stage IN ('id', 'badge')").run(visitId);

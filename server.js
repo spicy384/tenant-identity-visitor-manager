@@ -346,14 +346,14 @@ app.get("/api/config", (req, res) => {
   const ctx = req.ctx;
   res.json({
     version: pkg.version,
-    access: { role: ctx.role?.id || null, roles: ctx.roles.map((r) => r.id), roleName: ctx.roles.map((r) => r.name).join(", ") || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), facilities: ctx.facilities, finance: ctx.finance, fieldEntities: access.fieldEntitiesFor(ctx), sitesLimited: Boolean(ctx.sites) },
+    access: { role: ctx.role?.id || null, roles: ctx.roles.map((r) => r.id), roleName: ctx.roles.map((r) => r.name).join(", ") || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), facilities: ctx.facilities, finance: ctx.finance, fieldEntities: access.fieldEntitiesFor(ctx), alarms: access.canReadAlarms(ctx), sitesLimited: Boolean(ctx.sites) },
     branding: branding(),
     visits: access.canReadVisitors(ctx) ? { here: visitors.hereNow(ctx.sites), review: visitors.reviewCount(ctx.sites), expected: events.expectedCount(ctx.sites), badgesLeft: access.canReadBadges(ctx) ? badges.leftCount(ctx.sites) : 0, tempOverdue: access.canReadBadges(ctx) ? badges.overdueCount(ctx.sites) : 0 } : null,
     // Level names only for roles that see them; the rest see badge template images.
     clearanceLevels: access.canSeeClearances(ctx) ? clearance.levels().map((l) => ({ id: l.id, name: l.name, rank: l.rank })) : [],
     clearance: { security: access.isSecurity(ctx), queue: clearanceRoutes.queueCount(req), digitsHeldHours: clearance.DIGITS_TTL_HOURS, ...clearance.settings() },
     // Security's mail: how many alarms and guard reports no one has opened, and whether the mailbox is checked.
-    securityMail: access.isSecurity(ctx) ? { ...securityReports.unread({ sites: ctx.sites }), mailbox: Boolean(securityMailbox.settings().enabled && securityMailbox.settings().mailbox) } : null,
+    securityMail: access.canReadAlarms(ctx) ? { ...securityReports.unread({ sites: ctx.sites }), mailbox: Boolean(securityMailbox.settings().enabled && securityMailbox.settings().mailbox) } : null,
     sites: visibleSites(ctx).map((s) => ({ id: s.id, name: s.name, active: s.active, hasLogo: s.hasLogo, logoUpdatedAt: s.logoUpdatedAt })),
     siteCount: sites.count(),
     // For a visitor's citizenship, and the IDs the desk checks at check-in.
@@ -1097,13 +1097,13 @@ app.get("/api/roles", admin, (req, res) => {
 
 app.post("/api/roles", admin, (req, res) => {
   const role = access.createRole(req.body || {});
-  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}, finance ${role.finance}${role.clearances ? ", sees clearance levels" : ""}${role.fields ? ", manages custom fields" : ""}; fields copied from ${req.body?.copyFrom || "viewer"}`);
+  auditFrom(req, "role.add", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}, finance ${role.finance}${role.clearances ? ", sees clearance levels" : ""}${role.fields ? ", manages custom fields" : ""}${role.alarms ? ", reads alarms and guard reports" : ""}; fields copied from ${req.body?.copyFrom || "viewer"}`);
   res.json({ ok: true, role });
 });
 
 app.put("/api/roles/:id", admin, (req, res) => {
   const role = access.updateRole(String(req.params.id), req.body || {});
-  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}, finance ${role.finance}${role.clearances ? ", sees clearance levels" : ""}${role.fields ? ", manages custom fields" : ""}`);
+  auditFrom(req, "role.update", role.name, `directory ${role.directory}, visitors ${role.visitors}, badges ${role.badges}, facilities ${role.facilities}, finance ${role.finance}${role.clearances ? ", sees clearance levels" : ""}${role.fields ? ", manages custom fields" : ""}${role.alarms ? ", reads alarms and guard reports" : ""}`);
   res.json({ ok: true, role });
 });
 

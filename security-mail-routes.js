@@ -3,8 +3,9 @@
  * company's daily activity reports (security-reports.js), and the shared mailbox they come
  * from (security-mailbox.js). Mounted after the sign-in check, so req.user and req.ctx are set.
  *
- * Only the Security role reads them, marks them read or unread, drops a file in, or asks for
- * the mailbox to be checked now. Administrators set the mailbox up and place alarm accounts
+ * Security, and roles given "reads alarms and guard reports" (an alarm responder), read them and
+ * mark them read or unread. Only Security drops a file in or asks for the mailbox to be checked
+ * now. Administrators set the mailbox up and place alarm accounts
  * and guard sites at the app's sites; they see how each check went, never what came in. Staff
  * limited to some sites see what is placed at theirs. Nothing here is cached by the browser.
  */
@@ -22,7 +23,8 @@ function fail(status, message) {
 function createSecurityMailRoutes({ access, reports, mailbox, admin, auditFrom, appInfo = () => null }) {
   const router = express.Router();
   const staffName = (req) => req.user?.displayName || req.user?.username || null;
-  const security = (req, res, next) => (access.isSecurity(req.ctx) ? next() : res.status(403).json({ error: "Only Security reads alarms and guard reports." }));
+  const reader = (req, res, next) => (access.canReadAlarms(req.ctx) ? next() : res.status(403).json({ error: "This account doesn't read alarms and guard reports." }));
+  const security = (req, res, next) => (access.isSecurity(req.ctx) ? next() : res.status(403).json({ error: "Only Security adds alarms and guard reports." }));
   const noStore = (req, res, next) => { res.setHeader("Cache-Control", "no-store"); next(); };
   const positiveInt = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
   const KIND = { alarms: "alarm", "guard-reports": "guard" };
@@ -30,14 +32,14 @@ function createSecurityMailRoutes({ access, reports, mailbox, admin, auditFrom, 
   router.use("/api/security", noStore);
   router.use("/api/settings/security-mail", noStore);
 
-  // --- alarms and guard reports (Security) ------------------------------------------------------
+  // --- alarms and guard reports (Security and alarm responders) ---------------------------------
 
-  router.get("/api/security/mail/unread", security, (req, res) => {
+  router.get("/api/security/mail/unread", reader, (req, res) => {
     res.json(reports.unread({ sites: req.ctx.sites }));
   });
 
   for (const [list, kind] of Object.entries(KIND)) {
-    router.get(`/api/security/${list}`, security, (req, res) => {
+    router.get(`/api/security/${list}`, reader, (req, res) => {
       const found = reports.list(kind, {
         q: String(req.query.q || "").slice(0, 200),
         unread: req.query.unread === "1" || req.query.unread === "true",
@@ -49,14 +51,14 @@ function createSecurityMailRoutes({ access, reports, mailbox, admin, auditFrom, 
       res.json({ [kind === "alarm" ? "alarms" : "reports"]: found.items, total: found.total, unread: reports.unread({ sites: req.ctx.sites }) });
     });
 
-    router.get(`/api/security/${list}/:id`, security, (req, res) => {
+    router.get(`/api/security/${list}/:id`, reader, (req, res) => {
       const item = reports.get(kind, positiveInt(req.params.id), { sites: req.ctx.sites });
       if (!item) throw fail(404, kind === "alarm" ? "No such alarm." : "No such report.");
       res.json({ [kind === "alarm" ? "alarm" : "report"]: item });
     });
 
     /** { read: true } when someone opens it (who first read it is kept), false to make it unread again. */
-    router.post(`/api/security/${list}/:id/read`, security, (req, res) => {
+    router.post(`/api/security/${list}/:id/read`, reader, (req, res) => {
       const read = req.body?.read !== false;
       const item = reports.setRead(kind, positiveInt(req.params.id), read, { by: staffName(req), sites: req.ctx.sites });
       if (!read) auditFrom(req, kind === "alarm" ? "security.alarm_unread" : "security.report_unread", String(item.id));
@@ -65,7 +67,7 @@ function createSecurityMailRoutes({ access, reports, mailbox, admin, auditFrom, 
   }
 
   /** The guard report's original PDF, to open beside the readable version. */
-  router.get("/api/security/guard-reports/:id/pdf", security, (req, res) => {
+  router.get("/api/security/guard-reports/:id/pdf", reader, (req, res) => {
     const file = reports.pdf(positiveInt(req.params.id), { sites: req.ctx.sites });
     if (!file) throw fail(404, "That report has no PDF.");
     res.setHeader("Content-Type", "application/pdf");

@@ -58,6 +58,8 @@ const canReadBadges = () => ["read", "edit", "manage"].includes(state.config?.ac
 const canEditBadges = () => ["edit", "manage"].includes(state.config?.access?.badges);
 /** Keeps the badge stock: adds, changes and removes badges (Security). */
 const canManageBadges = () => state.config?.access?.badges === "manage";
+/** Reads Security's alarms and guard reports (Security, and an alarm responder). */
+const canReadAlarms = () => Boolean(state.config?.access?.alarms);
 /** Sees clearance level names (Settings > Roles); everyone else sees badge template images instead. */
 const canSeeClearances = () => Boolean(state.config?.access?.clearances);
 /** Sees floors, offices, who has them and what they cost (Settings > Roles). */

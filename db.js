@@ -659,6 +659,8 @@ const ADDED_COLUMNS = [
   ["floors", "scale_line", "TEXT"],
   // Roles that add and change custom fields (Settings > Roles).
   ["roles", "fields", "INTEGER NOT NULL DEFAULT 0"],
+  // Roles that read Security's alarms and guard reports (Security always does).
+  ["roles", "alarms", "INTEGER NOT NULL DEFAULT 0"],
   // A room's type and, when classified, its subcategory.
   ["offices", "room_type_id", "INTEGER REFERENCES room_types(id)"],
   ["offices", "class_id", "INTEGER REFERENCES room_classes(id)"],

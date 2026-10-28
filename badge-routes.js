@@ -275,7 +275,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const holderId = positiveInt(body.holderId);
     if (!visibleHolder(req, body.kind, holderId)) throw fail(404, "No such person or visitor.");
     const badge = badges.assign(positiveInt(req.params.id), { kind: body.kind, holderId, visitId: positiveInt(body.visitId), replacesBadgeId: positiveInt(body.replacesBadgeId) }, { by: staffName(req), sites: req.ctx.sites, levelNames: seesLevels(req) });
-    auditFrom(req, "badge.assign", badge.label, `to ${badge.holder.name}${badge.holder.company ? ` (${badge.holder.company})` : ""}${badge.holder.temporary ? `; temporary, in place of ${badge.holder.replacesNumber}, due back ${new Date(badge.holder.dueAt).toISOString()}` : ""}`);
+    auditFrom(req, "badge.assign", badge.label, `to ${badge.holder.name}${badge.holder.company ? ` (${badge.holder.company})` : ""}${badge.holder.temporary ? `; lent for the day${badge.holder.replacesNumber ? `, in place of ${badge.holder.replacesNumber}` : ""}, due back ${new Date(badge.holder.dueAt).toISOString()}` : ""}`);
     res.json({ ok: true, badge: badgeOut(req, badge) });
   });
 
@@ -305,7 +305,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
       current: held.filter((a) => !a.returnedAt),
       past: held.filter((a) => a.returnedAt),
       available: available.map(short),
-      // Temporary badges they could borrow for the day: only someone holding a badge of their own.
+      // Badges they could borrow for the day (a person): the temporary stock of their kind, then visitor badges.
       temporary: canGive && kind === "person" ? badges.availableFor(kind, id, { sites: req.ctx.sites, temporary: true }).map(short) : [],
       suggested: best.ref,
       uncleared: best.uncleared

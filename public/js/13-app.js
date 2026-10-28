@@ -70,11 +70,11 @@ const SECTIONS = [
     { view: "payments", href: "#payments", label: "Payments", show: canReadFinance },
     { view: "finance-settings", href: "#finance-settings", label: "Billing settings", show: canEditFinance }
   ] },
-  { id: "security", label: "Security", pill: "nav-security", show: seesSecurity, pages: [
+  { id: "security", label: "Security", pill: "nav-security", show: () => seesSecurity() || canReadAlarms(), pages: [
     { view: "clearance", href: "#clearance", label: "Clearance queue", pill: "nav-clearance", title: "Clearances waiting to be validated", show: isSecurity },
     { view: "clearances", href: "#clearances", label: "Re-checks and expiry", show: seesSecurity },
-    { view: "alarms", href: "#alarms", label: "Alarms", pill: "nav-alarms", title: "Alarms no one has opened yet", show: isSecurity },
-    { view: "guard-reports", href: "#guard-reports", label: "Guard reports", pill: "nav-guard", title: "Guard reports no one has opened yet", show: isSecurity },
+    { view: "alarms", href: "#alarms", label: "Alarms", pill: "nav-alarms", title: "Alarms no one has opened yet", show: canReadAlarms },
+    { view: "guard-reports", href: "#guard-reports", label: "Guard reports", pill: "nav-guard", title: "Guard reports no one has opened yet", show: canReadAlarms },
     { view: "badges", sub: "all", href: "#badges", label: "All badges", show: canReadBadges }
   ] },
   // Roles that manage custom fields (not administrators) see Settings with Fields only.
@@ -126,6 +126,7 @@ function applyConfig() {
   for (const el of document.querySelectorAll("[data-visitor-editor]")) el.hidden = !canEditVisitors();
   for (const el of document.querySelectorAll("[data-badges]")) el.hidden = !canReadBadges();
   for (const el of document.querySelectorAll("[data-badge-manager]")) el.hidden = !canManageBadges();
+  for (const el of document.querySelectorAll("[data-badge-lender]")) el.hidden = !canLendBadges();
   renderNav();
 
   // The site switcher: only when there is more than one site to choose from.
@@ -232,12 +233,12 @@ function route() {
     openInvoice(Number(sub));
     return;
   }
-  if (name === "alarm" && sub && isSecurity()) {
+  if (name === "alarm" && sub && canReadAlarms()) {
     if (state.view !== "alarms") { showView("alarms"); showAlarms(); }
     openAlarm(Number(sub));
     return;
   }
-  if (name === "guard-report" && sub && isSecurity()) {
+  if (name === "guard-report" && sub && canReadAlarms()) {
     if (state.view !== "guard-reports") { showView("guard-reports"); showGuardReports(); }
     openGuardReport(Number(sub));
     return;
@@ -252,7 +253,8 @@ function route() {
   if ((view === "companies" || view === "people") && !canReadDirectory()) view = "home";
   if (["here", "visitors", "visits", "expected"].includes(view) && !canReadVisitors()) view = "home";
   if (view === "badges" && !canReadBadges()) view = "home";
-  if (["clearance", "alarms", "guard-reports"].includes(view) && !isSecurity()) view = "home";
+  if (view === "clearance" && !isSecurity()) view = "home";
+  if (["alarms", "guard-reports"].includes(view) && !canReadAlarms()) view = "home";
   if (view === "clearances" && !seesSecurity()) view = "home";
   if (["floors", "offices", "roomtypes", "rates"].includes(view) && !canReadFacilities()) view = "home";
   if (["leases", "charges"].includes(view) && !canSeeLeases()) view = "home";
@@ -311,7 +313,7 @@ async function refreshCounts() {
   try {
     if (canReadVisitors()) state.config.visits = await api("/api/visits/summary");
     if (isSecurity()) state.config.clearance.queue = (await api("/api/clearance/queue-count")).count;
-    if (isSecurity()) state.config.securityMail = { ...state.config.securityMail, ...(await api("/api/security/mail/unread")) };
+    if (canReadAlarms()) state.config.securityMail = { ...state.config.securityMail, ...(await api("/api/security/mail/unread")) };
     showCounts();
     loadBadgeAlerts();
   } catch {

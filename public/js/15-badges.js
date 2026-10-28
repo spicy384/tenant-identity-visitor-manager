@@ -29,10 +29,12 @@ const templateKind = (type) => (type === "visitor" ? "visitor" : "tenant");
 
 /**
  * Badges on offer as a list to pick from, each with its image, the one matching
- * `suggested` first. With `allowNone`, "No badge" is the first choice. Returns
- * { node, value() (badge id or ""), chosen() (the badge or null) }.
+ * `suggested` first. With `allowNone`, "No badge" is the first choice. With `filterable`, a
+ * box above the list narrows it to the badges whose number has what is typed, choosing the one
+ * that matches exactly, else the first left. Returns { node, value() (badge id or ""),
+ * chosen() (the badge or null), filter (that box, or null) }.
  */
-function badgePicker(list, { suggested = null, allowNone = false, label = "Badge to give" } = {}) {
+function badgePicker(list, { suggested = null, allowNone = false, label = "Badge to give", showType = false, filterable = false } = {}) {
   const name = `badge-pick-${Math.random().toString(36).slice(2, 8)}`;
   const ordered = [...list].sort((a, b) => Number(b.template === suggested && Boolean(suggested)) - Number(a.template === suggested && Boolean(suggested)));
   const row = (value, children, checked) => {
@@ -45,10 +47,35 @@ function badgePicker(list, { suggested = null, allowNone = false, label = "Badge
     ordered.map((b, i) => row(String(b.id), [
       templateImg(b.template) || h("span", { class: "badge-thumb empty", title: "No image for this badge yet" }),
       h("span", { class: "mono", text: b.label }),
-      h("span", { class: "muted small-text", text: [badgeLevelText(b), multiSite() ? badgeSitesText(b) : null].filter(Boolean).join(" · ") })
+      h("span", { class: "muted small-text", text: [showType ? BADGE_TYPE_LABELS[b.type] : null, badgeLevelText(b), multiSite() ? badgeSitesText(b) : null].filter(Boolean).join(" · ") })
     ], !allowNone && i === 0)));
   const value = () => node.querySelector("input:checked")?.value || "";
-  return { node, value, chosen: () => list.find((b) => String(b.id) === value()) || null };
+  const chosen = () => list.find((b) => String(b.id) === value()) || null;
+  if (!filterable) return { node, value, chosen, filter: null };
+  // "101 4000 1", "101-40001" and "40001" all find 101-40001.
+  const plain = (t) => String(t ?? "").toLowerCase().replace(/[\s-]+/g, "");
+  const filter = h("input", { type: "search", placeholder: "Type a badge number to find it", autocomplete: "off", "aria-label": "Find a badge by number" });
+  const none = h("p", { class: "muted small-text", text: "No badge matches that number.", hidden: true });
+  filter.addEventListener("input", () => {
+    const q = plain(filter.value);
+    let first = null;
+    let exact = null;
+    for (const r of node.querySelectorAll(".badge-pick-row")) {
+      const b = list.find((x) => String(x.id) === r.querySelector("input").value);
+      const names = b ? [plain(b.label), plain(b.number)] : [];
+      r.hidden = Boolean(q) && !names.some((n) => n.includes(q));
+      if (!r.hidden && b) {
+        first ??= r;
+        if (names.includes(q)) exact ??= r;
+      }
+    }
+    const pick = exact || first;
+    const checked = node.querySelector("input:checked");
+    if (pick && (exact || !checked || checked.closest(".badge-pick-row").hidden)) pick.querySelector("input").checked = true;
+    else if (!pick && checked) checked.checked = false;
+    none.hidden = Boolean(first);
+  });
+  return { node: h("div", { class: "stack badge-pick-find" }, filter, node, none), value, chosen, filter };
 }
 
 /** The large image of the badge to hand over, when the server has one for them. */
@@ -100,7 +127,7 @@ function badgeStateBadge(b) {
   if (b.holder?.overdue) return h("span", { class: "badge bad", text: "Overdue" });
   // In stock but past its date: it can't be given out.
   if (!b.holder && b.expired) return h("span", { class: "badge bad", text: "Expired" });
-  return b.holder ? h("span", { class: "badge warn", text: b.holder.temporary ? "Lent for the day" : "Assigned" }) : h("span", { class: "badge ok", text: "Available" });
+  return b.holder ? h("span", { class: "badge warn", text: b.holder.temporary ? "Temporary" : "Assigned" }) : h("span", { class: "badge ok", text: "Available" });
 }
 
 /** Days from today to a YYYY-MM-DD date (negative once it has passed). */
@@ -119,10 +146,114 @@ function badgeExpiryCell(b) {
   return [h("span", { class: "nowrap", text: dateText(b.expiresOn) }), soon];
 }
 
-/** "Temporary, in place of P-001, due back today 11:59 PM" for a temporary loan. */
+/** "Lent for the day, in place of P-001, due back today 11:59 PM" for a badge lent for the day. */
 function temporaryText(a) {
   if (!a?.temporary) return "";
   return `Temporary${a.replacesNumber ? `, in place of ${a.replacesNumber}` : ""}, due back ${fmtDateTime(a.dueAt - 60000)}`;
+}
+
+/** Who may lend badges for the day from anywhere: those who give badges out and can find people. */
+const canLendBadges = () => canEditBadges() && canReadDirectory();
+
+/**
+ * Lending a badge for the day to someone who forgot theirs, from anywhere: find them, pick a
+ * badge (a visitor badge, or one Security marked temporary), and it is due back at midnight.
+ * The badges out for the day are listed underneath, to take back. Resolves true if anything changed.
+ */
+async function lendBadgeDialog() {
+  let changed = false;
+  const search = h("input", { type: "search", placeholder: "Name or company", autocomplete: "off", "aria-label": "Who forgot their badge?" });
+  const results = h("div", { class: "dash-list" });
+  const chosen = h("div", { class: "stack" });
+  const out = h("div", { class: "stack" });
+  const body = h("div", { class: "stack" },
+    h("label", {}, h("span", { text: "Who forgot their badge?" }), search),
+    results, chosen, out);
+
+  async function find() {
+    const q = search.value.trim();
+    chosen.replaceChildren();
+    if (!q) { results.replaceChildren(); return; }
+    try {
+      const { people } = await api(`/api/people?${new URLSearchParams({ q, limit: "8" })}`);
+      results.replaceChildren(...(people.length ? people.map((p) => h("button", { type: "button", class: "dash-row dash-add-row", onclick: () => choose(p) },
+        h("span", { class: "dash-row-main" }, h("span", { class: "dash-row-title", text: personName(p) }), h("span", { class: "muted small-text", text: [p.companyName, p.jobTitle].filter(Boolean).join(" · ") }))))
+        : [h("p", { class: "muted small-text", text: "Nobody by that name." })]));
+    } catch (error) {
+      results.replaceChildren(h("p", { class: "message error", text: error.message }));
+    }
+  }
+
+  async function choose(p) {
+    results.replaceChildren();
+    search.value = personName(p);
+    chosen.replaceChildren(h("p", { class: "muted", text: "Loading…" }));
+    let data;
+    try {
+      data = await api(`/api/badge-holders/person/${p.id}`);
+    } catch (error) {
+      chosen.replaceChildren(h("p", { class: "message error", text: error.message }));
+      return;
+    }
+    const own = data.current.filter((a) => !a.temporary);
+    const onLoan = data.current.find((a) => a.temporary);
+    const head = h("div", {}, h("strong", { text: personName(p) }), p.companyName ? h("span", { class: "muted", text: ` · ${p.companyName}` }) : null,
+      h("div", { class: "muted small-text", text: own.length ? `Their badge: ${own.map((a) => a.badgeLabel).join(", ")}` : "No badge of their own on record." }));
+    if (onLoan) {
+      chosen.replaceChildren(head, h("p", { class: "message", text: `They already have badge ${onLoan.badgeLabel}. ${temporaryText(onLoan)}.` }),
+        h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary small", text: `Take back ${onLoan.badgeLabel}`, onclick: async () => {
+          if (await takeBackBadge(onLoan.badgeId, onLoan.badgeLabel, onLoan.holderName)) { changed = true; choose(p); showOut(); }
+        } })));
+      return;
+    }
+    if (!data.temporary.length) {
+      chosen.replaceChildren(head, h("p", { class: "muted small-text", text: "No badge is free to assign them for the day: a free visitor badge, or one Security marked temporary, that they may hold." }));
+      return;
+    }
+    const pick = badgePicker(data.temporary, { label: "Temporary badge", showType: true, filterable: true });
+    const forWhich = own.length > 1 ? h("select", { "aria-label": "In place of" }, own.map((a) => h("option", { value: String(a.badgeId), text: `in place of ${a.badgeLabel}` }))) : null;
+    const lend = h("button", { type: "button", class: "primary", text: "Assign until midnight", onclick: async () => {
+      const b = pick.chosen();
+      if (!b) return;
+      lend.disabled = true;
+      try {
+        const r = await api(`/api/badges/${b.id}/assign`, { method: "POST", body: { kind: "person", holderId: p.id, ...(own.length ? { replacesBadgeId: forWhich ? Number(forWhich.value) : own[0].badgeId } : {}) } });
+        changed = true;
+        toast(`Badge ${r.badge.label} assigned to ${personName(p)} until midnight.`);
+        // Ready for the next person.
+        search.value = "";
+        chosen.replaceChildren();
+        search.focus();
+        showOut();
+      } catch (error) {
+        toast(error.message, "error");
+        lend.disabled = false;
+      }
+    } });
+    // Typing a number narrows the list; Enter assigns the badge chosen.
+    pick.filter.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); lend.click(); } });
+    chosen.replaceChildren(head, h("span", { class: "label", text: "Temporary badge" }), pick.node, h("div", { class: "btn-row" }, forWhich, lend));
+    pick.filter.focus();
+  }
+
+  async function showOut() {
+    try {
+      const { badges } = await api(`/api/badges?${new URLSearchParams({ state: "temporary", limit: "50", ...siteQuery() })}`);
+      out.replaceChildren(h("h4", { text: badges.length ? `Temporary badges out (${badges.length})` : "Temporary badges out" }),
+        badges.length ? h("ul", { class: "plain-list" }, badges.map((b) => h("li", { class: "row-between" },
+          h("span", {}, h("a", { href: `#badge/${b.id}`, class: "mono", text: b.label }), h("span", { text: ` ${b.holder.name}` }), b.holder.company ? h("span", { class: "muted small-text", text: ` · ${b.holder.company}` }) : null,
+            h("div", { class: `small-text ${b.holder.overdue ? "bad-text" : "muted"}`, text: `${temporaryText(b.holder)}${b.holder.overdue ? " (overdue)" : ""}` })),
+          h("button", { type: "button", class: "link-btn", text: "Take back", onclick: async () => { if (await takeBackBadge(b.id, b.label, b.holder.name)) { changed = true; showOut(); } } }))))
+          : h("p", { class: "muted small-text", text: "No temporary badge is out." }));
+    } catch (error) {
+      out.replaceChildren(h("p", { class: "message error", text: error.message }));
+    }
+  }
+
+  search.addEventListener("input", debounce(find, 250));
+  showOut();
+  await openDialog({ title: "Assign Temporary Badge", body, onOpen: () => search.focus() });
+  return changed;
 }
 
 async function loadBadges() {
@@ -210,7 +341,7 @@ async function badgeKindFields(badge = null) {
       : { name: "clearanceLevelId", label: "Clearance level", type: "select", half: true, value: String(badge?.clearanceLevelId || ""), options: [{ value: "", label: info.uncleared }, ...info.levels.map((l) => ({ value: String(l.id), label: l.name }))], hint: "Anyone of the right type may hold an Uncleared badge; a higher level only someone whose clearance covers it." },
     ...(sitesPicker ? [{ node: sitesPicker.node }] : []),
     { name: "expiresOn", label: "Expires (optional)", type: "date", half: true, value: badge?.expiresOn || "", hint: "Good through this day; after it the badge can't be given out. Security sees it coming under Re-checks and expiry." },
-    { name: "temporary", label: "Temporary badge: lent for the day to someone who forgot theirs", type: "checkbox", value: Boolean(badge?.temporary), hint: "Goes only to a person who holds a badge of their own, and is due back by midnight." }
+    { name: "temporary", label: "Temporary badge: lent for the day to someone who forgot theirs", type: "checkbox", value: Boolean(badge?.temporary), hint: "Kept for lending only, and due back by midnight. Visitor badges can be lent to tenants for the day too, without this." }
   ];
   // Custom badge fields (Settings > Fields), as the role sees them.
   const custom = recordForm((state.schema.badge || []).filter((f) => !f.builtIn), badge);
@@ -229,6 +360,10 @@ function facilityCodeField(value = "") {
   return { name: "facilityCode", label: "Facility code (optional)", half: true, value: value || "", placeholder: "2-3 digits",
     hint: "Kept apart from the number, as in CCURE 9000. The same number can be under several facility codes." };
 }
+
+$("badges-lend").addEventListener("click", async () => {
+  if (await lendBadgeDialog()) loadBadges();
+});
 
 $("badges-add").addEventListener("click", async () => {
   const kind = await badgeKindFields();
@@ -445,7 +580,7 @@ function badgeSection(kind, holderId) {
     }
     if (canEditBadges()) {
       if (data.available.length) {
-        const pick = badgePicker(data.available, { suggested: data.suggested });
+        const pick = badgePicker(data.available, { suggested: data.suggested, filterable: data.available.length > 8 });
         parts.push(h("div", { class: "badge-give" },
           suggestedBadge(data.suggested),
           h("div", { class: "stack" }, pick.node, h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary small", text: "Give badge", onclick: async () => {
@@ -463,25 +598,25 @@ function badgeSection(kind, holderId) {
         parts.push(h("p", { class: "muted small-text", text: `No ${kind === "visitor" ? "visitor " : ""}badge is free that they may hold${kind === "person" ? " (personnel badges are for building staff, tenant badges for everyone else, and a cleared badge needs a clearance that covers it)" : " (a cleared badge needs a clearance that covers it)"}.` }));
       }
     }
-    // Forgot their badge today: a temporary one, standing in for the badge they hold.
+    // Forgot their badge today: one lent for the day (a visitor badge, or a temporary one), standing in for theirs.
     const own = data.current.filter((a) => !a.temporary);
-    if (canEditBadges() && kind === "person" && own.length && !data.current.some((a) => a.temporary)) {
+    if (canEditBadges() && kind === "person" && !data.current.some((a) => a.temporary)) {
       if (data.temporary.length) {
-        const tmp = h("select", { "aria-label": "Temporary badge" }, data.temporary.map((b) => h("option", { value: String(b.id), text: `${b.label} · ${badgeLevelText(b)}` })));
+        const tmp = h("select", { "aria-label": "Temporary badge" }, data.temporary.map((b) => h("option", { value: String(b.id), text: `${b.label} · ${BADGE_TYPE_LABELS[b.type]}${b.cleared ? ` · ${badgeLevelText(b)}` : ""}` })));
         const forWhich = own.length > 1 ? h("select", { "aria-label": "In place of" }, own.map((a) => h("option", { value: String(a.badgeId), text: `in place of ${a.badgeLabel}` }))) : null;
         parts.push(h("div", { class: "temp-row" },
           h("span", { class: "small-text", text: "Forgot their badge today?" }),
-          h("div", { class: "btn-row" }, tmp, forWhich, h("button", { type: "button", class: "secondary small", text: "Lend for today", onclick: async () => {
+          h("div", { class: "btn-row" }, tmp, forWhich, h("button", { type: "button", class: "secondary small", text: "Assign temporary badge", onclick: async () => {
             try {
-              const r = await api(`/api/badges/${tmp.value}/assign`, { method: "POST", body: { kind, holderId, replacesBadgeId: forWhich ? Number(forWhich.value) : own[0].badgeId } });
-              toast(`Badge ${r.badge.label} lent until midnight.`);
+              const r = await api(`/api/badges/${tmp.value}/assign`, { method: "POST", body: { kind, holderId, ...(own.length ? { replacesBadgeId: forWhich ? Number(forWhich.value) : own[0].badgeId } : {}) } });
+              toast(`Badge ${r.badge.label} assigned until midnight.`);
               render();
             } catch (error) {
               toast(error.message, "error");
             }
           } }))));
       } else {
-        parts.push(h("p", { class: "muted small-text", text: "Forgot their badge today? No temporary badge is free that they may hold. Security marks badges as temporary under Badges." }));
+        parts.push(h("p", { class: "muted small-text", text: "Forgot their badge today? No badge is free to assign them for the day: a free visitor badge, or one Security marked temporary, that they may hold." }));
       }
     }
     if (data.past.length) {

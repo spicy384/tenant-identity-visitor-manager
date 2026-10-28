@@ -288,14 +288,18 @@ async function httpTests() {
   const admin = client();
   await admin.post("/api/auth/setup", { username: "admin", password: password(), siteName: "Main" });
   const annex = (await admin.post("/api/sites", { name: "Annex", timeZone: "UTC" })).data.site;
-  const pw = { sec: password(), annexsec: password(), manny: password() };
+  const pw = { sec: password(), annexsec: password(), manny: password(), resp: password(), deskresp: password() };
   await admin.post("/api/users", { username: "sec", password: pw.sec, role: "security" });
   await admin.post("/api/users", { username: "annexsec", password: pw.annexsec, role: "security", sites: [annex.id] });
   await admin.post("/api/users", { username: "manny", password: pw.manny, role: "manager" });
+  await admin.post("/api/users", { username: "resp", password: pw.resp, role: "responder" });
+  await admin.post("/api/users", { username: "deskresp", password: pw.deskresp, roles: ["frontdesk", "responder"] });
   const as = async (u) => { const c = client(); await c.post("/api/auth/login", { username: u, password: pw[u] }); return c; };
   const security = await as("sec");
   const annexSecurity = await as("annexsec");
   const manager = await as("manny");
+  const responder = await as("resp");
+  const deskResponder = await as("deskresp");
 
   const alarmMsg = fx.msgFile({ subject: ALARM_SUBJECT, html: alarmHtml, from: "notify@monitoring.example", messageId: "<a1@monitoring.example>", receivedAt: Date.UTC(2027, 0, 3, 14, 16) });
   let r = await manager.upload("/api/security/mail/upload?name=alarm.msg", alarmMsg);
@@ -328,6 +332,37 @@ async function httpTests() {
   check("http: the guard report, read", r.data.report.report.summary.shifts[0].officer === "Jo Guard" && r.data.report.hasPdf);
   r = await security.get(`/api/security/guard-reports/${reportId}/pdf`);
   check("http: and its PDF", r.status === 200 && r.headers.get("content-type") === "application/pdf" && r.buf.equals(guardPdf));
+
+  // An alarm responder reads them, and nothing else.
+  r = await responder.get("/api/config");
+  check("http: a responder's config: alarms, and no other area", r.data.access.alarms === true && r.data.securityMail?.alarms === 1
+    && r.data.access.directory === "none" && r.data.access.visitors === "none" && r.data.access.badges === "none" && r.data.access.clearances === false && r.data.clearance.security === false && r.data.visits === null);
+  check("http: a responder reads the alarms, the guard reports and the PDF", (await responder.get("/api/security/alarms")).data.total === 1
+    && (await responder.get(`/api/security/alarms/${alarmId}`)).data.alarm.id === alarmId
+    && (await responder.get(`/api/security/guard-reports/${reportId}`)).status === 200
+    && (await responder.get(`/api/security/guard-reports/${reportId}/pdf`)).status === 200);
+  check("http: a responder doesn't add them or check the mailbox", (await responder.upload("/api/security/mail/upload?name=alarm.msg", alarmMsg)).status === 403
+    && (await responder.post("/api/security/mail/check")).status === 403 && (await responder.get("/api/settings/security-mail")).status === 403);
+  check("http: nor reach the directory, visitors, badges or clearances", (await responder.get("/api/people")).status === 403 && (await responder.get("/api/visits")).status === 403
+    && (await responder.get("/api/badges")).status === 403 && (await responder.get("/api/clearance/requests")).status === 403);
+  r = await responder.get("/api/me/prefs");
+  check("http: a responder's Home starts with what's unread", r.data.dashboard.join() === "alarms,guardReports" && !r.data.available.includes("here"));
+  check("http: Security's Home gains the alarms; a manager's doesn't", (await security.get("/api/me/prefs")).data.dashboard.includes("alarms") && !(await manager.get("/api/me/prefs")).data.available.includes("alarms"));
+  r = await deskResponder.get("/api/config");
+  check("http: front desk and responder together: both", r.data.access.alarms === true && r.data.access.visitors === "edit" && (await deskResponder.get("/api/security/guard-reports")).status === 200);
+  r = await responder.post(`/api/security/alarms/${alarmId}/read`, { read: true });
+  check("http: a responder opening it marks it read, by them", r.data.read && (await security.get("/api/security/mail/unread")).data.alarms === 0);
+  await security.post(`/api/security/alarms/${alarmId}/read`, { read: false });
+
+  // Any staff role can be given it; Security can't lose it.
+  check("http: Security always reads them", (await admin.put("/api/roles/security", { alarms: false })).status === 400);
+  r = await admin.put("/api/roles/manager", { alarms: true });
+  check("http: a role given it reads them", r.data.role.alarms === true && (await manager.get("/api/security/alarms")).status === 200 && (await manager.post("/api/security/mail/check")).status === 403);
+  await admin.put("/api/roles/manager", { alarms: false });
+  check("http: and taken away, doesn't", (await manager.get("/api/security/alarms")).status === 403
+    && (await admin.get("/api/audit?action=role.update")).data.entries.some((e) => /reads alarms and guard reports/.test(e.detail || "")));
+  r = await admin.post("/api/roles", { name: "Night patrol", directory: "none", alarms: true });
+  check("http: a new role made with it", r.status === 200 && r.data.role.alarms === true && (await admin.get("/api/roles")).data.roles.find((x) => x.id === "responder")?.builtIn === true);
 
   // Sites: two sites, so nothing is placed until an administrator does it.
   check("http: limited Security doesn't see what isn't placed", (await annexSecurity.get("/api/security/alarms")).data.total === 0 && (await annexSecurity.get(`/api/security/alarms/${alarmId}`)).status === 404);

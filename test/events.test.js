@@ -203,16 +203,22 @@ async function main() {
   const own = (await security.post("/api/badges", { number: "T-200", type: "tenant" })).data.badge;
   const tmp = (await security.post("/api/badges", { number: "TMP-1", type: "tenant", temporary: true })).data.badge;
   r = await desk.get(`/api/badge-holders/person/${host.id}`);
-  check("temporary: not offered to someone without a badge", r.data.temporary.length === 0 && !r.data.available.some((b) => b.number === "TMP-1"));
+  check("temporary: offered to lend, not to give for good", r.data.temporary.some((b) => b.number === "TMP-1") && !r.data.available.some((b) => b.number === "TMP-1"));
   await desk.post(`/api/badges/${own.id}/assign`, { kind: "person", holderId: host.id });
   r = await desk.get(`/api/badge-holders/person/${host.id}`);
-  check("temporary: offered once they hold one", r.data.temporary.map((b) => b.number).join() === "TMP-1");
+  check("temporary: the temporary stock offered first, then visitor badges", r.data.temporary[0].number === "TMP-1" && r.data.temporary.slice(1).every((b) => b.type === "visitor"));
   r = await desk.post(`/api/badges/${tmp.id}/assign`, { kind: "person", holderId: host.id, replacesBadgeId: own.id });
   check("temporary: lent for the day, in place of their badge", r.status === 200 && r.data.badge.holder.temporary && r.data.badge.holder.replacesNumber === "T-200" && r.data.badge.holder.dueAt > Date.now());
-  check("temporary: the loan is in the audit log", (await admin.get("/api/audit?action=badge.assign")).data.entries.some((e) => /temporary, in place of T-200/.test(e.detail)));
+  check("temporary: the loan is in the audit log", (await admin.get("/api/audit?action=badge.assign")).data.entries.some((e) => /lent for the day, in place of T-200/.test(e.detail)));
   check("temporary: not overdue yet", (await desk.get("/api/visits/summary")).data.tempOverdue === 0 && (await desk.get("/api/badges?state=temporary")).data.total === 1);
   await desk.post(`/api/badges/${tmp.id}/return`);
   check("temporary: back, nothing out", (await desk.get("/api/badges?state=temporary")).data.total === 0);
+  // Or a visitor badge, lent the same way.
+  const vLend = (await security.post("/api/badges", { number: "V-LEND", type: "visitor" })).data.badge;
+  r = await desk.post(`/api/badges/${vLend.id}/assign`, { kind: "person", holderId: host.id });
+  check("temporary: a visitor badge lent to a tenant for the day", r.status === 200 && r.data.badge.holder.temporary && r.data.badge.holder.replacesNumber === "T-200"
+    && (await desk.get("/api/badges?state=temporary")).data.badges.map((b) => b.number).join() === "V-LEND");
+  await desk.post(`/api/badges/${vLend.id}/return`);
 
   // --- repeating events -------------------------------------------------------------------------------
   const { datesOf, cleanRule } = require("../events");

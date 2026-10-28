@@ -77,7 +77,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Field access.** A grid of roles × fields, each cell hidden, read only or can change. The
   server leaves hidden fields out of every response, CSV export and search: searching for a
   value in a field you can't see finds nothing.
-- **Roles.** Administrator, Manager, Front desk, Viewer, and any you add. Each role reaches
+- **Roles.** Administrator, Manager, Front desk, Security, Viewer, Finance, Alarm responder,
+  and any you add. Each role reaches
   the directory and visitors separately (none, read, or read and change). Equipment
   Checkout has a column in the grid already, for phase 3.
 - **Site limits.** An account can be limited to some sites. It then sees only the companies at
@@ -233,11 +234,15 @@ The design and decisions are in [PLAN.md](PLAN.md).
   (returned or lost). Visitor badges stay out until someone takes them back; the Badges page
   and In the building show those still out with visitors who have left. Someone who holds a
   badge can't be deleted until it comes back.
-- **Temporary badges.** A badge can be marked temporary: a stock kept at the desk for people
-  who forgot theirs. One goes only to a person who holds a badge of their own ("Forgot their
-  badge today?" on their dialog), records which badge it stands in for, and is due back by
-  midnight where they work. Their own badge stays theirs. One not back in time shows as
-  overdue on the Badges page and in the navigation until someone takes it back.
+- **Temporary badges.** For a tenant who forgot theirs: **Assign Temporary Badge** on Home
+  and on the Badges pages finds them by name, offers the badges they may have for the day, and
+  lists the temporary badges out, each with **Take back**. Any free visitor badge can be
+  assigned this way, as can a badge Security marks temporary (a stock kept at the desk, of the
+  type the person wears, offered first). The same is under "Forgot their badge today?" on the
+  person's dialog. It records the badge it stands in for, when one is on record, and is due
+  back by midnight where they work; one at a time, and the clearance rule still applies. Their
+  own badge stays theirs. One not back in time shows as overdue on the Badges page and in the
+  navigation until someone takes it back.
 - **Several badges at once** (Security): tick boxes on the Badges page, then **Change** to move
   them to another type (visitor, tenant or personnel), clearance level, the sites they are
   valid at, temporary, expiry date, status or notes, or **Retire** or **Delete** them. A badge that is out
@@ -273,7 +278,16 @@ The design and decisions are in [PLAN.md](PLAN.md).
 Two kinds of email reach Security's shared mailbox: the monitoring center's alarm notices (the
 DMP intrusion panel's events, as the monitoring center sends them) and the guard company's
 daily activity report (a PDF). The app brings them in and shows them, to the Security role
-only, as easy-to-read reports under **Security > Alarms** and **Security > Guard reports**.
+and alarm responders only, as easy-to-read reports under **Security > Alarms** and **Security >
+Guard reports**.
+
+- **Alarm responders.** The built-in **Alarm responder** role reads the alarms and guard reports
+  and nothing else: no directory, visitors, badges or clearances. Their Home starts with the
+  alarms and guard reports no one has opened. Opening one marks it read for everyone, as it does
+  for Security. Only Security adds them from a file or checks the mailbox. Any other staff role
+  can be given **Reads alarms and guard reports** under Settings > Roles (Security always has
+  it), and an account with several roles, Front desk and Alarm responder say, can do both.
+  Site limits apply as they do for Security.
 
 - **Unread until opened.** A new alarm or report is in bold, with a dot, and counted beside
   Alarms (and on Security) until someone opens it, like mail. Who first opened it, and when,

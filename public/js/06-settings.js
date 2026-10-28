@@ -311,9 +311,9 @@ async function settingsRoles(body) {
   const staff = roles.filter((r) => r.kind === "user");
   body.append(h("div", { class: "panel" },
     h("div", { class: "panel-head" }, h("h3", { text: "Roles" }), h("button", { type: "button", class: "primary small", text: "Add role", onclick: () => editRole(null, staff) })),
-    h("p", { class: "muted", text: "A role sets how far an account reaches: whether it can see or change the directory (companies and people), visitors (visitors, visits, checking in and out), badges, facilities (floors, offices, rates, leases and charges) and finance (invoices, payments and balances). Which fields each role sees is set under Field access; clearance details only ever reach roles that see clearance levels, and the rest see badge images instead. Administrators can do everything. The kiosk only ever shows names; Equipment Checkout's fields are set under Field access." }),
+    h("p", { class: "muted", text: "A role sets how far an account reaches: whether it can see or change the directory (companies and people), visitors (visitors, visits, checking in and out), badges, facilities (floors, offices, rates, leases and charges) and finance (invoices, payments and balances), and whether it reads Security's alarms and guard reports. Which fields each role sees is set under Field access; clearance details only ever reach roles that see clearance levels, and the rest see badge images instead. Administrators can do everything. The kiosk only ever shows names; Equipment Checkout's fields are set under Field access." }),
     h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-      h("thead", {}, h("tr", {}, ["Role", "For", "Directory", "Visitors", "Badges", "Facilities", "Finance", "Clearance levels", "Custom fields", "Accounts", ""].map((t) => h("th", { text: t })))),
+      h("thead", {}, h("tr", {}, ["Role", "For", "Directory", "Visitors", "Badges", "Facilities", "Finance", "Clearance levels", "Custom fields", "Alarms", "Accounts", ""].map((t) => h("th", { text: t })))),
       h("tbody", {}, roles.map((r) => h("tr", {},
         h("td", {}, h("strong", { text: r.name }), r.builtIn ? h("span", { class: "badge muted", text: "Built in" }) : null),
         h("td", { class: "small-text", text: r.kind === "api" && r.builtIn ? "Template for new API clients" : KIND_LABELS[r.kind] }),
@@ -324,6 +324,7 @@ async function settingsRoles(body) {
         h("td", { class: "small-text", text: r.kind === "user" ? AREA_LABELS[r.finance || "none"] : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? (r.clearances ? "Sees them" : "Badge images") : "—" }),
         h("td", { class: "small-text", text: r.kind === "user" ? (r.id === "admin" ? "Adds, changes, deletes" : r.fields ? "Adds and changes" : "—") : "—" }),
+        h("td", { class: "small-text", text: r.kind === "user" && r.alarms ? "Reads them" : "—" }),
         h("td", { text: r.kind === "user" ? String(r.accounts) : "—" }),
         h("td", {}, r.id === "admin" || r.kind !== "user" ? (r.kind === "api" && !r.builtIn ? h("a", { href: "#settings/api", class: "small-text", text: "Set under API clients" }) : null) : h("div", { class: "btn-row" },
           h("button", { type: "button", class: "link-btn", text: "Edit", onclick: () => editRole(r, staff) }),
@@ -345,11 +346,13 @@ async function editRole(role, staff) {
         hint: "Adds custom fields, and changes their names, choices and whether they're required, for the records this role can change, and badge fields if it issues or manages badges (Settings > Fields). Filling in a badge's fields stays with roles that manage badges; deleting a field and Field access stay with administrators." },
       { name: "clearances", label: "Sees clearance levels", type: "checkbox", value: Boolean(role?.clearances), disabled: role?.id === "security",
         hint: role?.id === "security" ? "Security validates clearances, so it always sees them." : "Level names on people, visitors and badges. Without it the role sees each badge's image instead, and clearance details stay hidden whatever the field access grid says." },
+      { name: "alarms", label: "Reads alarms and guard reports", type: "checkbox", value: Boolean(role?.alarms), disabled: role?.id === "security",
+        hint: role?.id === "security" ? "Security always reads them, and is the only role that adds them from a file." : "Opens the alarm notices and guard daily reports under Security (at the account's sites), as an alarm responder does. Only Security adds them from a file; the mailbox is set up under Security mail." },
       ...(role ? [] : [{ name: "copyFrom", label: "Start its field access from", type: "select", value: "viewer", options: staff.map((r) => ({ value: r.id, label: r.name })), hint: "You can change any cell afterwards under Field access." }])
     ],
     submitLabel: role ? "Save" : "Add role",
     onSubmit: async (v) => (role
-      ? await api(`/api/roles/${role.id}`, { method: "PUT", body: role.builtIn ? { directory: v.directory, visitors: v.visitors, badges: v.badges, facilities: v.facilities, finance: v.finance, fields: v.fields, ...(role.id === "security" ? {} : { clearances: v.clearances }) } : v })
+      ? await api(`/api/roles/${role.id}`, { method: "PUT", body: role.builtIn ? { directory: v.directory, visitors: v.visitors, badges: v.badges, facilities: v.facilities, finance: v.finance, fields: v.fields, ...(role.id === "security" ? {} : { clearances: v.clearances, alarms: v.alarms }) } : v })
       : await api("/api/roles", { method: "POST", body: v })).role
   });
   if (saved) {

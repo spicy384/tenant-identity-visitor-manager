@@ -90,7 +90,9 @@ function alarmOutcomeText(a) {
 }
 
 function showAlarms() {
-  $("alarms-check").hidden = !state.config.securityMail?.mailbox;
+  // Alarm responders only read; Security adds files and checks the mailbox.
+  $("alarms-check").hidden = !isSecurity() || !state.config.securityMail?.mailbox;
+  $("alarms-add").hidden = !isSecurity();
   loadAlarms();
 }
 
@@ -108,6 +110,7 @@ async function loadAlarms() {
   }
   $("alarms-hint").textContent = state.config.securityMail?.mailbox
     ? "Alarm notices from the monitoring center come in from the shared mailbox every few minutes. Bold ones haven't been opened yet."
+    : !isSecurity() ? "Alarm notices from the monitoring center, as Security adds them. Bold ones haven't been opened yet."
     : "No mailbox is set up yet (an administrator does that under Settings > Security mail), so add alarm emails here from a file: drag them out of Outlook and save them.";
   const rows = data.alarms.map((a) => h("tr", { class: mailRowClass(a), onclick: () => { location.hash = `#alarm/${a.id}`; } },
     unreadDot(a),
@@ -223,7 +226,8 @@ function guardDateText(date) {
 }
 
 function showGuardReports() {
-  $("guard-check").hidden = !state.config.securityMail?.mailbox;
+  $("guard-check").hidden = !isSecurity() || !state.config.securityMail?.mailbox;
+  $("guard-add").hidden = !isSecurity();
   loadGuardReports();
 }
 
