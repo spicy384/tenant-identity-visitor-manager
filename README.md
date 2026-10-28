@@ -15,7 +15,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
   the building, expected, visitors, the visit log, visitor badges), Facilities (floor plans,
   offices, rates, leases and charges: for roles given facilities access, and Finance), Finance
   (invoices, balances, payments, billing settings: for roles given finance access), Security (the clearance queue,
-  re-checks and expiry, all badges: for Security and administrators) and Settings
+  re-checks and expiry, alarms and guard reports, all badges: for Security and administrators,
+  alarms and guard reports for Security only) and Settings
   (administrators). The pages of the chosen section are in the bar under the header; a
   section or page the account can't open isn't shown.
 - **Home** is each person's dashboard. **Customize** adds, removes and reorders modules: who
@@ -177,6 +178,13 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Badges** have a number, a type (personnel, tenant or visitor), a clearance level
   (Uncleared, or one of the levels), and the sites it is valid at (any number, or every site). Add them one at a time
   or as a numbered range (B-0001 to B-0050). Statuses: active, lost, retired.
+- **Expiry dates.** Any badge (personnel, tenant, visitor, temporary) can have an expiry date,
+  set when it is added, edited, changed with others, or imported. It is good through that day;
+  after it the badge can't be given out (it isn't offered, and the app refuses it), and one in
+  stock shows Expired. One already out stays with its holder until taken back. **Security >
+  Re-checks and expiry** lists, first, the expired badges (with who has each) and those expiring
+  in the next 30 days; the Badges page has an Expires column and shows either list on its own.
+  Clear the date, or give a later one, to renew a badge.
 - **Facility codes.** A badge can also have a facility code (2 or 3 digits), kept apart from
   its number as CCURE 9000 keeps it. It is optional, Security sets it (one at a time, for a
   range, by changing several badges at once, or from an import's facility code column), and
@@ -232,7 +240,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
   overdue on the Badges page and in the navigation until someone takes it back.
 - **Several badges at once** (Security): tick boxes on the Badges page, then **Change** to move
   them to another type (visitor, tenant or personnel), clearance level, the sites they are
-  valid at, temporary, status or notes, or **Retire** or **Delete** them. A badge that is out
+  valid at, temporary, expiry date, status or notes, or **Retire** or **Delete** them. A badge that is out
   can't change type, level or temporary until it is taken back, and one that
   has been given out can only be retired; if any chosen badge can't take the change, none does.
 - **Access.** Each role has a badge level as well as directory and visitor levels: read to
@@ -259,6 +267,49 @@ The design and decisions are in [PLAN.md](PLAN.md).
   and edit forms, in Change for several badges and in the badge import. Like the badges
   themselves, only roles that manage badges (Security and Administrator to start with) change
   them; roles that issue or read badges can be given read-only or hidden under Field access.
+
+## Alarms and guard reports
+
+Two kinds of email reach Security's shared mailbox: the monitoring center's alarm notices (the
+DMP intrusion panel's events, as the monitoring center sends them) and the guard company's
+daily activity report (a PDF). The app brings them in and shows them, to the Security role
+only, as easy-to-read reports under **Security > Alarms** and **Security > Guard reports**.
+
+- **Unread until opened.** A new alarm or report is in bold, with a dot, and counted beside
+  Alarms (and on Security) until someone opens it, like mail. Who first opened it, and when,
+  is kept; **Mark unread** puts it back.
+- **An alarm** shows what it was, the zone and area, the account and its address, and **What
+  happened**, oldest first: what the panel signaled, each call the monitoring center made and how
+  it went (voicemail, verified with a passcode or not, with the operator's note), who disarmed it
+  (with their panel user number), whether dispatch was asked for, and when it was cleared.
+  Every step the monitoring center logged is underneath.
+- **A guard report** shows the site, the time it covers and its totals; who was on duty (clock
+  in to clock out); what the officers wrote; incidents; each patrol with its checkpoints and
+  summary; missed checkpoints; and checkpoint questions answered No (a SCIF not armed, say).
+  Every entry is underneath, and **Open the original PDF** shows the report as it came, photos
+  and all.
+- **From the mailbox.** Under Settings > Security mail an administrator gives the mailbox's
+  address and how often to check it (every 5 minutes to start with). The app reads it through
+  Microsoft Graph as itself, with the app registration under Settings > Microsoft Entra ID, and
+  only reads: nothing is moved, marked or deleted. Other mail in the mailbox is passed over. The
+  registration needs Microsoft Graph's Mail.Read application permission (with admin consent),
+  limited to that mailbox by an Exchange application access policy; the page shows the
+  PowerShell command with the app's client ID filled in. It says how each check went (how many
+  emails, alarms and reports came), never what was in them: administrators aren't Security.
+- **From a file.** **Add from a file** on either page takes an alarm or report email dragged out
+  of Outlook (.msg) or saved as .eml, or the guard report's PDF on its own. Each email is kept
+  once, by its Message-ID, so the mailbox and a file of the same email don't make two.
+- **Sites.** Under Settings > Security mail, **Alarm accounts** ties each monitoring account
+  number (Account: K1234567 at the top of its emails) to one of the app's sites; a site may have
+  any number of accounts. Add an account ahead of its first alarm (with a name, such as the wing it
+  covers), or place it when it first comes in: every account seen is listed. Rename or remove one
+  there too (removing it leaves its alarms, no longer at a site). Each site named on a guard report
+  is listed the same way. With only one site, everything is at it. Security limited to some sites
+  sees what is at theirs; what isn't placed yet, only Security who sees every site.
+- **Kept for a year** (Settings > Security mail), then deleted, however it came in.
+- The emails are read by what is in them, not by who sent them: the alarm notice by its log's
+  header line, the guard report by its PDF's title. The PDF is read by the app itself (its text
+  and where each piece sits on the page), so nothing is sent elsewhere to be read.
 
 ## Facilities
 
@@ -700,7 +751,8 @@ A company's site can come from one column (a site's name) and its suite from ano
   (a level's name or Uncleared; empty is Uncleared for a new badge and leaves an existing one's
   as it is; a level's name only from roles that see clearance levels; a column called
   Classification is matched to it too), the sites it
-  is valid at (names separated by ;, empty for every site), temporary (yes/no), status
+  is valid at (names separated by ;, empty for every site), temporary (yes/no), expires
+  (YYYY-MM-DD or M/D/YYYY; empty leaves an existing badge's as it is), status
   (active, lost, retired), notes and custom badge fields. A badge with the same facility code
   and number is updated. A file that gives the same badge twice is refused, naming both lines
   (most often the facility code column was left out, or a spreadsheet shortened long numbers),
@@ -729,7 +781,7 @@ is imported. Columns for fields the importer can't change are skipped and listed
 npm test
 ```
 
-Fifteen suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
+Nineteen suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
 field access and site limits (the most important), visitors (name matching, end of day across
 time zones and daylight-saving changes, retention, merging), Entra sign-in against a fake
 Microsoft, the HTTP API end to end, the kiosk and visitor routes end to end, the API for other
@@ -738,7 +790,9 @@ sees the queue, and that the SSN digits never reach the database, the audit trai
 log, and are wiped on time), and badge images (that roles without clearance levels never
 receive a level name, pick levels by image, and are shown the right badge), importing from Access and CSV (against a small Access
 database in test/fixtures, made by make-access-fixture.ps1), merging and bulk changes (custom badge fields too), and facilities
-(floors and plans, offices, overlapping dates refused, which rate wins, who may see and change them), and accounts with several roles. Equipment Checkout's own tests run its directory mode against this app.
+(floors and plans, offices, overlapping dates refused, which rate wins, who may see and change them), accounts with several roles, and Security's mail (alarm notices and guard report PDFs made
+up in the real ones' shapes, the .msg and .eml files they come in, unread until opened, by site,
+and the mailbox check against a stand-in for Microsoft Graph). Equipment Checkout's own tests run its directory mode against this app.
 
 ## Not yet tried
 
@@ -748,6 +802,9 @@ database in test/fixtures, made by make-access-fixture.ps1), merging and bulk ch
   stand-in for systemd-creds, not on a real Debian or Ubuntu host with a TPM
 - Microsoft Entra sign-in against a real tenant (only a fake Microsoft), including signing in
   with a certificate and the Test button
+- Reading Security's mailbox through Microsoft Graph against a real tenant (only a stand-in),
+  with the Mail.Read permission and the application access policy; and guard reports or alarm
+  notices in layouts other than the two examples they were built from
 - Passkeys on a real device
 - The kiosk on a real iPad (only a desktop browser at iPad sizes): the on-screen keyboard,
   Home Screen mode, Guided Access

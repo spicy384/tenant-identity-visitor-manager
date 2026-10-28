@@ -358,7 +358,7 @@ async function deleteBadges(list) {
 
 /**
  * Changes the ticked things on every chosen badge: move them to another type (visitor,
- * tenant, personnel), clearance level, the sites they're valid at,
+ * tenant, personnel), clearance level, the sites they're valid at, expiry date,
  * temporary, status or notes.
  */
 async function bulkEditBadges(list) {
@@ -379,6 +379,7 @@ async function bulkEditBadges(list) {
   const sites = siteLimitPicker(null);
   sites.node.querySelector(".label").textContent = "";
   const temporary = h("select", { "aria-label": "Temporary" }, options([["no", "No"], ["yes", "Yes, lent for the day"]]));
+  const expiresOn = h("input", { type: "date", "aria-label": "Expires" });
   const status = h("select", { "aria-label": "Status" }, options(Object.entries(BADGE_STATUS_LABELS)));
   const notes = h("input", { type: "text", "aria-label": "Notes" });
   const facilityCode = h("input", { type: "text", "aria-label": "Facility code", inputmode: "numeric", maxlength: "3", placeholder: "2-3 digits, or empty for none" });
@@ -388,6 +389,7 @@ async function bulkEditBadges(list) {
     row("clearanceLevelId", "Clearance level", level, () => (level.value ? Number(level.value) : null)),
     multiSite() || state.config.access.sitesLimited ? row("siteIds", "Valid at", sites.node, () => sites.value() || []) : null,
     row("temporary", "Temporary", temporary, () => temporary.value === "yes"),
+    row("expiresOn", "Expires", expiresOn, () => expiresOn.value || null, "(empty: no expiry)"),
     row("status", "Status", status, () => status.value),
     row("notes", "Notes", notes, () => notes.value.trim()),
     // Custom badge fields this account can change.

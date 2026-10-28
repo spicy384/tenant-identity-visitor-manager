@@ -98,7 +98,25 @@ function badgeSitesText(b) {
 function badgeStateBadge(b) {
   if (b.status !== "active") return h("span", { class: `badge ${b.status === "lost" ? "bad" : "muted"}`, text: BADGE_STATUS_LABELS[b.status] });
   if (b.holder?.overdue) return h("span", { class: "badge bad", text: "Overdue" });
+  // In stock but past its date: it can't be given out.
+  if (!b.holder && b.expired) return h("span", { class: "badge bad", text: "Expired" });
   return b.holder ? h("span", { class: "badge warn", text: b.holder.temporary ? "Lent for the day" : "Assigned" }) : h("span", { class: "badge ok", text: "Available" });
+}
+
+/** Days from today to a YYYY-MM-DD date (negative once it has passed). */
+function daysUntil(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const t = new Date();
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(t.getFullYear(), t.getMonth(), t.getDate())) / DAY_MS);
+}
+
+/** A badge's expiry: its date, marked Expired, or how soon when within 30 days. */
+function badgeExpiryCell(b) {
+  if (!b.expiresOn) return "";
+  const days = daysUntil(b.expiresOn);
+  const soon = days < 0 || b.expired ? h("span", { class: "badge bad", text: "Expired" })
+    : days <= 30 ? h("span", { class: "badge warn", text: days === 0 ? "Last day" : `${days} ${days === 1 ? "day" : "days"} left` }) : null;
+  return [h("span", { class: "nowrap", text: dateText(b.expiresOn) }), soon];
 }
 
 /** "Temporary, in place of P-001, due back today 11:59 PM" for a temporary loan. */
@@ -109,7 +127,7 @@ function temporaryText(a) {
 
 async function loadBadges() {
   const table = $("badges-table");
-  const head = ["Facility code", "Badge", "Type", "Clearance level", ...(multiSite() ? ["Valid at"] : []), "Status", "Held by", "Since"];
+  const head = ["Facility code", "Badge", "Type", "Clearance level", ...(multiSite() ? ["Valid at"] : []), "Expires", "Status", "Held by", "Since"];
   const picking = canManageBadges();
   const all = h("input", { type: "checkbox", "aria-label": "Choose every badge on this page" });
   table.tHead.replaceChildren(h("tr", {}, picking ? h("th", { class: "pick-cell" }, all) : null, head.map((t) => h("th", { text: t }))));
@@ -132,6 +150,7 @@ async function loadBadges() {
       h("td", { text: BADGE_TYPE_LABELS[b.type] }),
       h("td", { class: "small-text" }, h("span", { class: "with-thumb" }, templateImg(b.template), h("span", { text: badgeLevelText(b) }))),
       multiSite() ? h("td", { class: "small-text", text: badgeSitesText(b) }) : null,
+      h("td", { class: "small-text" }, badgeExpiryCell(b)),
       h("td", {}, badgeStateBadge(b)),
       h("td", {}, b.holder ? [h("span", { text: b.holder.name }), b.holder.company ? h("div", { class: "muted small-text", text: b.holder.company }) : null, b.holder.temporary ? h("div", { class: `small-text ${b.holder.overdue ? "bad-text" : "muted"}`, text: temporaryText(b.holder) }) : null] : ""),
       h("td", { class: "small-text nowrap", text: b.holder ? fmtDateTime(b.holder.assignedAt) : "" }));
@@ -190,6 +209,7 @@ async function badgeKindFields(badge = null) {
       ? { node: byImage.node }
       : { name: "clearanceLevelId", label: "Clearance level", type: "select", half: true, value: String(badge?.clearanceLevelId || ""), options: [{ value: "", label: info.uncleared }, ...info.levels.map((l) => ({ value: String(l.id), label: l.name }))], hint: "Anyone of the right type may hold an Uncleared badge; a higher level only someone whose clearance covers it." },
     ...(sitesPicker ? [{ node: sitesPicker.node }] : []),
+    { name: "expiresOn", label: "Expires (optional)", type: "date", half: true, value: badge?.expiresOn || "", hint: "Good through this day; after it the badge can't be given out. Security sees it coming under Re-checks and expiry." },
     { name: "temporary", label: "Temporary badge: lent for the day to someone who forgot theirs", type: "checkbox", value: Boolean(badge?.temporary), hint: "Goes only to a person who holds a badge of their own, and is due back by midnight." }
   ];
   // Custom badge fields (Settings > Fields), as the role sees them.
@@ -200,7 +220,7 @@ async function badgeKindFields(badge = null) {
     if (!byImage) return { clearanceLevelId: v.clearanceLevelId ? Number(v.clearanceLevelId) : null };
     return !badge || byImage.changed() || v.type !== badge.type ? { templateRef: byImage.value() || "" } : {};
   };
-  const body = (v) => ({ type: v.type, ...level(v), temporary: Boolean(v.temporary), ...(sitesPicker ? { siteIds: sitesPicker.value() || [] } : {}), ...custom.collect(v) });
+  const body = (v) => ({ type: v.type, ...level(v), expiresOn: v.expiresOn || null, temporary: Boolean(v.temporary), ...(sitesPicker ? { siteIds: sitesPicker.value() || [] } : {}), ...custom.collect(v) });
   return { fields, body };
 }
 
@@ -346,6 +366,7 @@ async function openBadge(id, onChange = () => {}) {
       h("dt", { text: "Type" }), h("dd", { text: BADGE_TYPE_LABELS[badge.type] }),
       h("dt", { text: "Clearance level" }), h("dd", { text: badgeLevelText(badge) }),
       badge.template ? [h("dt", { text: "Looks like" }), h("dd", {}, templateImg(badge.template, { large: true, alt: `Badge ${badge.label}` }))] : null,
+      badge.expiresOn ? [h("dt", { text: "Expires" }), h("dd", {}, badgeExpiryCell(badge))] : null,
       badge.temporary ? [h("dt", { text: "Temporary" }), h("dd", { text: "Lent for the day to people who forgot their own badge" })] : null,
       multiSite() ? [h("dt", { text: "Valid at" }), h("dd", { text: badgeSitesText(badge) })] : null,
       badge.holder ? [h("dt", { text: "Held by" }), h("dd", {}, h("a", { href: badge.holder.kind === "visitor" ? `#visitor/${badge.holder.id}` : `#person/${badge.holder.id}`, text: badge.holder.name }), badge.holder.company ? ` (${badge.holder.company})` : "", h("span", { class: "muted", text: ` since ${fmtDateTime(badge.holder.assignedAt)}${badge.holder.assignedBy ? `, given by ${badge.holder.assignedBy}` : ""}` }),

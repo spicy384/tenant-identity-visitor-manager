@@ -57,6 +57,7 @@ const IMPORT_FIELDS = {
     { key: "level", label: "Clearance level", clearance: true, hint: "A level's name, or Uncleared. Empty is Uncleared for a new badge, and leaves an existing one's as it is.", names: ["level", "lvl", "clearance", "clearancelevel", "classification", "class"] },
     { key: "sites", label: "Valid at", hint: "Site names separated by ;. Empty for every site.", names: ["sites", "site", "validat", "building", "location"] },
     { key: "temporary", label: "Temporary", hint: "yes or no", names: ["temporary", "temp", "spare", "loaner"] },
+    { key: "expires", label: "Expires", hint: "The date it expires (YYYY-MM-DD or M/D/YYYY); empty for none, or to leave an existing badge's as it is.", names: ["expires", "expiry", "expiration", "expirationdate", "expirydate", "expireson", "expdate", "validuntil", "validto", "enddate"] },
     { key: "status", label: "Status", hint: "active, lost or retired", names: ["status", "state"] },
     { key: "notes", label: "Notes", names: ["notes", "note", "comments", "remarks"] }
   ]

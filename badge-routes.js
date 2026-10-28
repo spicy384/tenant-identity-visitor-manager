@@ -238,11 +238,11 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     return done;
   }
 
-  const BULK_KEYS = ["facilityCode", "type", "clearanceLevelId", "templateRef", "siteIds", "temporary", "status", "notes"];
+  const BULK_KEYS = ["facilityCode", "type", "clearanceLevelId", "expiresOn", "templateRef", "siteIds", "temporary", "status", "notes"];
 
   /**
    * Changes the same things on several badges: their facility code, move them to another type
-   * (visitor, tenant, personnel), clearance level, the sites they are valid at, temporary, status, notes.
+   * (visitor, tenant, personnel), clearance level, the sites they are valid at, temporary, expiry date, status, notes.
    * A badge that is out can't change its type, level or temporary flag.
    */
   router.post("/api/badges/bulk", manageBadges, (req, res) => {

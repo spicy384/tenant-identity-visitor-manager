@@ -298,14 +298,23 @@ function clearanceTable(list, columns, empty) {
 async function showClearances() {
   const body = $("clearances-body");
   let o;
+  let expiring = null;
+  let expired = null;
   try {
     o = await clearanceOverview(true);
+    if (canReadBadges()) {
+      const q = (state) => api(`/api/badges?${new URLSearchParams({ state, limit: "1000", ...siteQuery() })}`);
+      [expiring, expired] = await Promise.all([q("expiring"), q("expired")]);
+    }
   } catch (error) {
     body.replaceChildren(h("p", { class: "message error", text: error.message }));
     return;
   }
   const level = { label: "Clearance", cell: (x) => x.levelName || "None" };
-  body.replaceChildren(
+  // Badges first (expired, then expiring); a panel only for roles that read badges.
+  body.replaceChildren(...[
+    expired ? badgeExpiryPanel("Expired badges", "Past their expiry date: they can't be given out, and one still out is with the person or visitor named. Take it back, give a new date, or retire it.", expired, "No badge has expired.", "expired") : null,
+    expiring ? badgeExpiryPanel("Badges expiring in the next 30 days", "Badges whose expiry date is within 30 days. Each is good through its date; after it, it can't be given out. Change the date on the badge to renew it.", expiring, "No badge expires in the next 30 days.", "expiring") : null,
     h("div", { class: "panel" },
       h("div", { class: "panel-head" }, h("h3", { text: "Visitor re-checks" })),
       h("p", { class: "muted", text: `A visitor's validation lasts ${o.recheckDays} days (Settings > Badges and clearances). These run out within ${o.withinDays} days, or already have: until Security validates them again, their clearance counts as none.` }),
@@ -317,7 +326,24 @@ async function showClearances() {
       clearanceTable(o.expiring, [level, { label: "Expires", cell: (x) => [dateText(x.expires), x.expired ? h("span", { class: "badge bad", text: "Expired" }) : null] }], "Nothing expiring soon.")),
     h("div", { class: "panel" },
       h("div", { class: "panel-head" }, h("h3", { text: "Recently validated" })),
-      clearanceTable(o.recent, [level, { label: "Validated", cell: (x) => `${fmtDateTime(x.validatedAt)}${x.validatedBy ? ` by ${x.validatedBy}` : ""}` }], `Nothing validated in the last ${o.recentDays} days.`)));
+      clearanceTable(o.recent, [level, { label: "Validated", cell: (x) => `${fmtDateTime(x.validatedAt)}${x.validatedBy ? ` by ${x.validatedBy}` : ""}` }], `Nothing validated in the last ${o.recentDays} days.`))].filter(Boolean));
+}
+
+/** A panel of badges (from /api/badges) by expiry: each badge, its type and level, who has it, when it expires. */
+function badgeExpiryPanel(title, intro, data, empty, state) {
+  const list = [...data.badges].sort((a, b) => a.expiresOn.localeCompare(b.expiresOn));
+  return h("div", { class: "panel" },
+    h("div", { class: "panel-head" }, h("h3", { text: `${title}${list.length ? ` (${data.total})` : ""}` }),
+      list.length ? h("a", { class: "small-text", href: "#badges", onclick: () => { $("badges-state").value = state; $("badges-type").value = ""; }, text: "Open in All badges" }) : null),
+    h("p", { class: "muted", text: intro }),
+    list.length ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+      h("thead", {}, h("tr", {}, ["Badge", "Type", "Clearance level", "Held by", "Expires"].map((t) => h("th", { text: t })))),
+      h("tbody", {}, list.map((b) => h("tr", { class: "clickable", onclick: () => { location.hash = `#badge/${b.id}`; } },
+        h("td", {}, h("strong", { class: "mono", text: b.label }), b.temporary ? h("span", { class: "badge muted", text: "Temporary" }) : null),
+        h("td", { text: BADGE_TYPE_LABELS[b.type] }),
+        h("td", { class: "small-text", text: badgeLevelText(b) }),
+        h("td", {}, b.holder ? [h("span", { text: b.holder.name }), b.holder.company ? h("div", { class: "muted small-text", text: b.holder.company }) : null] : h("span", { class: "muted", text: b.status === "active" ? "In stock" : BADGE_STATUS_LABELS[b.status] })),
+        h("td", { class: "small-text" }, badgeExpiryCell(b))))))) : h("p", { class: "muted small-text", text: empty }));
 }
 
 // --- Settings > Badges and clearances: the visitor re-check period ---------------------------------

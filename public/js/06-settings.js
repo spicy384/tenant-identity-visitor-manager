@@ -79,7 +79,7 @@ async function renderSettings() {
   for (const g of $("settings-tabs").querySelectorAll(".settings-group")) g.hidden = ![...g.querySelectorAll("button[data-tab]")].some((b) => !b.hidden);
   const body = clear($("settings-body"));
   try {
-    const render = { general: settingsGeneral, sites: settingsSites, fields: settingsFields, access: settingsAccess, visits: settingsVisits, kiosks: settingsKiosks, badges: settingsBadges, api: settingsApiClients, roles: settingsRoles, users: settingsUsers, entra: settingsEntra, data: settingsData, audit: settingsAudit }[settingsTab] || settingsSites;
+    const render = { general: settingsGeneral, sites: settingsSites, fields: settingsFields, access: settingsAccess, visits: settingsVisits, kiosks: settingsKiosks, badges: settingsBadges, "security-mail": settingsSecurityMail, api: settingsApiClients, roles: settingsRoles, users: settingsUsers, entra: settingsEntra, data: settingsData, audit: settingsAudit }[settingsTab] || settingsSites;
     await render(body);
   } catch (error) {
     body.append(h("p", { class: "message error", text: error.message }));

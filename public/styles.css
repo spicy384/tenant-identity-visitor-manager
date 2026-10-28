@@ -140,7 +140,7 @@ blockquote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--border-s
 /* ============================================================
    Controls
    ============================================================ */
-button, .entra-btn {
+button, .entra-btn, a.button-link {
   font: inherit;
   font-weight: 600;
   border: 1px solid transparent;
@@ -758,6 +758,24 @@ input[type="color"] { width: 64px; min-height: 36px; padding: 2px; cursor: point
 .id-choice { display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; min-height: var(--tap); }
 .id-choice:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
 .id-other { max-width: 360px; }
+
+/* Security's mail (26-security-mail.js): unread in bold, an alarm's steps, a guard report's cards */
+a.button-link:hover { text-decoration: none; }
+.mail-row.is-unread td { font-weight: 700; }
+.mail-row.is-unread td .muted { font-weight: 500; }
+.mail-dot-cell { width: 18px; padding-right: 0 !important; }
+.mail-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--primary); }
+.mail-banner-title { font-size: 1.35rem; font-weight: 700; }
+.mail-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.mail-steps li { display: grid; grid-template-columns: 76px 1fr; gap: 10px; padding: 6px 10px; border-left: 3px solid var(--border); }
+.mail-steps li.tone-bad { border-left-color: var(--danger); }
+.mail-steps li.tone-ok { border-left-color: var(--success); }
+.mail-step-time { color: var(--text-muted); }
+.mail-more summary { cursor: pointer; color: var(--text-muted); }
+.guard-card { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }
+.guard-card.is-flagged, .table tr.is-flagged td { border-color: var(--danger); background: var(--danger-soft); }
+.guard-card-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.guard-card p { margin: 6px 0 0; }
 .id-match { font-weight: 600; }
 .badge-assigned { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; padding: 16px; border: 2px solid var(--primary); border-radius: var(--radius); background: var(--primary-soft); }
 .badge-assigned.compact { border-width: 1px; padding: 10px 14px; justify-content: space-between; }

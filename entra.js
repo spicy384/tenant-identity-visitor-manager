@@ -339,6 +339,38 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
     return { ok: false, message: `Microsoft refused ${what}: ${reason}` };
   }
 
+  // --- the app on its own (reading Security's mailbox) ------------------------------------
+
+  /** Microsoft Graph for the authority's cloud. */
+  const graphBase = () => GRAPH_BY_AUTHORITY[new URL(authorityHost).host] || "https://graph.microsoft.com";
+  let appTokenCache = null;
+
+  /**
+   * A token for Microsoft Graph as the app itself (client credentials), kept until a minute
+   * before it runs out. Needs the app registration (tenant, client, and a secret or
+   * certificate), not Entra sign-in turned on; what it may do is whatever application
+   * permissions the registration has been granted.
+   */
+  async function appToken() {
+    const c = config();
+    if (!GUID_RE.test(c.tenantId) || !GUID_RE.test(c.clientId) || !hasCredential(c)) {
+      throw fail(409, "Set up the app registration under Settings > Microsoft Entra ID first: the tenant ID, the client ID, and a client secret or certificate.");
+    }
+    const key = `${c.tenantId}|${c.clientId}|${c.credential}|${activeCertificate(c)?.thumbprint || ""}`;
+    if (appTokenCache?.key === key && appTokenCache.expiresAt > now() + 60000) return appTokenCache.token;
+    const { ok, body } = await fetchJson(tokenUrl(c), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: c.clientId, grant_type: "client_credentials", scope: `${graphBase()}/.default`, ...credentialParams(c) }).toString()
+    });
+    if (!ok || !body.access_token) {
+      const reason = body.error_description ? String(body.error_description).split(/\r?\n/)[0] : body.error || "no answer";
+      throw fail(502, `Microsoft refused the app's credential: ${reason}`);
+    }
+    appTokenCache = { key, token: body.access_token, expiresAt: now() + (Number(body.expires_in) || 3600) * 1000 };
+    return body.access_token;
+  }
+
   // --- the flow --------------------------------------------------------------
 
   function pruneFlows() {
@@ -465,7 +497,7 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
   return {
     config, publicConfig, isReady, save, begin, complete, verifyIdToken, authorityHost,
     newCertificate, uploadCertificate, useCertificate, removeCertificate, certificateFile, testCredential,
-    activeCertificate: () => activeCertificate(config())
+    activeCertificate: () => activeCertificate(config()), appToken, graphBase
   };
 }
 

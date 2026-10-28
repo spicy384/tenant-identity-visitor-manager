@@ -16,6 +16,7 @@
  * that day (midnight where they work). Overdue ones are listed until someone takes them back.
  */
 const { zonedTime, localParts } = require("./visit-clock");
+const { today, cleanDate } = require("./clearance");
 const TYPES = ["personnel", "tenant", "visitor"];
 const TYPE_LABELS = { personnel: "Personnel", tenant: "Tenant", visitor: "Visitor" };
 const STATUSES = ["active", "lost", "retired"];
@@ -62,6 +63,9 @@ function createBadges({ db, clearance, now = Date.now }) {
       // [] means every site.
       sites: JSON.parse(r.sites_json || "[]").sort((x, y) => x.name.localeCompare(y.name)),
       temporary: Boolean(r.temporary),
+      // Good through this day (YYYY-MM-DD); after it the badge can't be given out.
+      expiresOn: r.expires_on || null,
+      expired: Boolean(r.expires_on && r.expires_on < today(undefined, now())),
       status: r.status,
       notes: r.notes,
       // The visitor this badge is kept for, if any (handed to them at each check-in).
@@ -94,7 +98,7 @@ function createBadges({ db, clearance, now = Date.now }) {
    * "temporary" (temporary badges out), "overdue" (temporary badges not back by their time).
    * temporary: true or false limits to temporary or regular badges.
    */
-  function list({ q = "", type = null, state = null, levelId = null, siteId = null, sites = null, temporary = null, limit = 200, offset = 0 } = {}) {
+  function list({ q = "", type = null, state = null, expiringDays = 30, levelId = null, siteId = null, sites = null, temporary = null, limit = 200, offset = 0 } = {}) {
     const where = [];
     const params = [];
     const sc = scope(sites);
@@ -113,6 +117,12 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (state === "temporary") where.push("a.id IS NOT NULL AND a.temporary = 1");
     if (state === "overdue") { where.push("a.id IS NOT NULL AND a.temporary = 1 AND a.due_at < ?"); params.push(now()); }
     if (temporary !== null) { where.push("b.temporary = ?"); params.push(temporary ? 1 : 0); }
+    // "expiring": good for `expiringDays` more days at most; "expired": past its date. Retired badges aren't counted.
+    if (state === "expiring") {
+      where.push("b.status <> 'retired' AND b.expires_on IS NOT NULL AND b.expires_on >= ? AND b.expires_on <= ?");
+      params.push(today(undefined, now()), today(undefined, now() + expiringDays * 86400000));
+    }
+    if (state === "expired") { where.push("b.status <> 'retired' AND b.expires_on IS NOT NULL AND b.expires_on < ?"); params.push(today(undefined, now())); }
     for (const word of String(q || "").trim().split(/\s+/).filter(Boolean).slice(0, 6)) {
       const p = `%${word.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       // The number, the facility code, or both as written ("101-12345").
@@ -210,6 +220,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     }
     if (input.notes !== undefined) out.notes = String(input.notes ?? "").trim().slice(0, 1000) || null;
     if (input.temporary !== undefined) out.temporary = Boolean(input.temporary);
+    if (input.expiresOn !== undefined) out.expiresOn = cleanDate(input.expiresOn, "The expiry date");
     if ((out.temporary ?? existing?.temporary) && (out.type ?? existing?.type) === "visitor") throw fail(400, "Temporary badges stand in for a person's own badge; visitors get visitor badges.");
     return out;
   }
@@ -242,8 +253,8 @@ function createBadges({ db, clearance, now = Date.now }) {
     const t = now();
     let id;
     db.transaction(() => {
-      id = raw.prepare(`INSERT INTO badges (number, facility_code, type, clearance_level_id, temporary, status, notes, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.number, v.facilityCode ?? null, v.type, v.clearanceLevelId ?? null, v.temporary ? 1 : 0, v.status || "active", v.notes ?? null, t, t).lastInsertRowid;
+      id = raw.prepare(`INSERT INTO badges (number, facility_code, type, clearance_level_id, temporary, expires_on, status, notes, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.number, v.facilityCode ?? null, v.type, v.clearanceLevelId ?? null, v.temporary ? 1 : 0, v.expiresOn ?? null, v.status || "active", v.notes ?? null, t, t).lastInsertRowid;
       writeSites(id, siteIds);
     });
     return get(id);
@@ -280,8 +291,8 @@ function createBadges({ db, clearance, now = Date.now }) {
     }
     const next = { ...existing, ...v };
     db.transaction(() => {
-      raw.prepare("UPDATE badges SET number = ?, facility_code = ?, type = ?, clearance_level_id = ?, temporary = ?, status = ?, notes = ?, updated_at = ? WHERE id = ?")
-        .run(next.number, next.facilityCode ?? null, next.type, next.clearanceLevelId ?? null, next.temporary ? 1 : 0, next.status, next.notes ?? null, now(), id);
+      raw.prepare("UPDATE badges SET number = ?, facility_code = ?, type = ?, clearance_level_id = ?, temporary = ?, expires_on = ?, status = ?, notes = ?, updated_at = ? WHERE id = ?")
+        .run(next.number, next.facilityCode ?? null, next.type, next.clearanceLevelId ?? null, next.temporary ? 1 : 0, next.expiresOn ?? null, next.status, next.notes ?? null, now(), id);
       if (siteIds) writeSites(id, siteIds);
     });
     return get(id);
@@ -331,6 +342,7 @@ function createBadges({ db, clearance, now = Date.now }) {
    */
   function refusal(badge, h, { levelNames = true } = {}) {
     if (badge.status !== "active") return `Badge ${badge.label} is ${badge.status}.`;
+    if (badge.expired) return `Badge ${badge.label} expired on ${badge.expiresOn}; give another, or change its expiry date.`;
     if (badge.type === "visitor" && h.kind !== "visitor") return `Badge ${badge.label} is a visitor badge; it goes to visitors.`;
     if (badge.type !== "visitor" && h.kind === "visitor") return `Badge ${badge.label} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`;
     if (badge.type === "personnel" && !h.buildingStaff) return `Badge ${badge.label} is a personnel badge, for building staff; ${h.company} isn't marked as building staff.`;

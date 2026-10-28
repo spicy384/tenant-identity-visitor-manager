@@ -83,7 +83,9 @@ function today(timeZone = undefined, now = Date.now()) {
 function cleanDate(value, label) {
   const s = String(value ?? "").trim();
   if (!s) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(Date.parse(`${s}T00:00:00Z`))) throw fail(400, `${label} must be a date (YYYY-MM-DD).`);
+  // A day that exists: 2027-02-30 is refused, not read as March 2.
+  const t = Date.parse(`${s}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== s) throw fail(400, `${label} must be a date (YYYY-MM-DD).`);
   return s;
 }
 

@@ -249,6 +249,29 @@ events.addGuest(late.id, merged.id);
 visitors.merge(merged.id, guest.id);
 check("merge: a merged visitor's events follow them", events.get(late.id).guests.map((g) => g.visitorId).join() === String(guest.id));
 
+
+// --- expiry dates -------------------------------------------------------------------------------------------
+const dayFromNow = (n) => today(undefined, Date.now() + n * 86400000);
+check("expiry: a real date or none", throwsStatus(() => badges.create({ number: "E-0", type: "tenant", expiresOn: "2027-02-30" }), 400) === true
+  && throwsStatus(() => badges.create({ number: "E-0", type: "tenant", expiresOn: "soon" }), 400) === true);
+const eSoon = badges.create({ number: "E-1", type: "tenant", expiresOn: dayFromNow(10) });
+const eToday = badges.create({ number: "E-2", type: "visitor", expiresOn: dayFromNow(0) });
+const ePast = badges.create({ number: "E-3", type: "personnel", expiresOn: dayFromNow(-1) });
+const eLater = badges.create({ number: "E-4", type: "tenant", expiresOn: dayFromNow(45) });
+const eRetired = badges.create({ number: "E-5", type: "tenant", expiresOn: dayFromNow(-3) });
+badges.update(eRetired.id, { status: "retired" });
+check("expiry: any type of badge may have one", eSoon.expiresOn === dayFromNow(10) && eToday.type === "visitor" && ePast.type === "personnel");
+check("expiry: good through its day, expired after", eToday.expired === false && ePast.expired === true && eSoon.expired === false);
+check("expiry: an expired badge isn't given out", throwsStatus(() => badges.assign(ePast.id, { kind: "person", holderId: guard.id }), 409, /expired on/) === true);
+check("expiry: nor offered", !badges.availableFor("person", guard.id).some((b) => b.number === "E-3") && badges.availableFor("visitor", visitorNone.id).some((b) => b.number === "E-2"));
+const nums = (state) => badges.list({ state, limit: 5000 }).badges.map((b) => b.number).filter((n) => n.startsWith("E-")).sort().join();
+check("expiry: expiring within 30 days (today's too)", nums("expiring") === "E-1,E-2", nums("expiring"));
+check("expiry: expired (not counting retired badges)", nums("expired") === "E-3", nums("expired"));
+check("expiry: within other days", badges.list({ state: "expiring", expiringDays: 60, limit: 5000 }).badges.some((b) => b.number === "E-4"));
+check("expiry: renewed, it can be given again", badges.update(ePast.id, { expiresOn: dayFromNow(365) }).expired === false && Boolean(badges.assign(ePast.id, { kind: "person", holderId: guard.id })));
+check("expiry: a held badge's date can change", badges.update(ePast.id, { expiresOn: dayFromNow(-1) }).expired === true && badges.get(ePast.id).holder.name === "Gail Guard");
+check("expiry: and taken away", badges.update(eSoon.id, { expiresOn: null }).expiresOn === null && badges.update(eLater.id, { expiresOn: "" }).expiresOn === null);
+
 db.close();
 fs.rmSync(tmp, { recursive: true, force: true });
 process.exit(report() ? 0 : 1);

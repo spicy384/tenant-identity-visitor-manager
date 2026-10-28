@@ -2,7 +2,8 @@
 // the site switcher and start-up.
 //
 //   #home  #companies  #company/3  #people  #person/7  #here  #visitors  #visitor/5  #visits
-//   #expected  #badges(/tenants|/visitors)  #badge/4  #clearance  #clearances  #floors(/3)  #offices  #rates
+//   #expected  #badges(/tenants|/visitors)  #badge/4  #clearance  #clearances  #alarms  #alarm/6
+//   #guard-reports  #guard-report/2  #floors(/3)  #offices  #rates
 //   #leases  #lease/2  #charges  #invoices  #invoice/9  #balances  #payments  #finance-settings
 //   #settings  #settings/fields  #account
 
@@ -17,6 +18,8 @@ const VIEWS = {
   badges: showBadges,
   clearance: showClearance,
   clearances: showClearances,
+  alarms: showAlarms,
+  "guard-reports": showGuardReports,
   floors: showFloors,
   offices: showOffices,
   roomtypes: showRoomTypes,
@@ -70,6 +73,8 @@ const SECTIONS = [
   { id: "security", label: "Security", pill: "nav-security", show: seesSecurity, pages: [
     { view: "clearance", href: "#clearance", label: "Clearance queue", pill: "nav-clearance", title: "Clearances waiting to be validated", show: isSecurity },
     { view: "clearances", href: "#clearances", label: "Re-checks and expiry", show: seesSecurity },
+    { view: "alarms", href: "#alarms", label: "Alarms", pill: "nav-alarms", title: "Alarms no one has opened yet", show: isSecurity },
+    { view: "guard-reports", href: "#guard-reports", label: "Guard reports", pill: "nav-guard", title: "Guard reports no one has opened yet", show: isSecurity },
     { view: "badges", sub: "all", href: "#badges", label: "All badges", show: canReadBadges }
   ] },
   // Roles that manage custom fields (not administrators) see Settings with Fields only.
@@ -227,6 +232,16 @@ function route() {
     openInvoice(Number(sub));
     return;
   }
+  if (name === "alarm" && sub && isSecurity()) {
+    if (state.view !== "alarms") { showView("alarms"); showAlarms(); }
+    openAlarm(Number(sub));
+    return;
+  }
+  if (name === "guard-report" && sub && isSecurity()) {
+    if (state.view !== "guard-reports") { showView("guard-reports"); showGuardReports(); }
+    openGuardReport(Number(sub));
+    return;
+  }
   if (name === "badge" && sub && canReadBadges()) {
     if (state.view !== "badges" && state.view !== "home") { showView("badges"); showBadges(); }
     openBadge(Number(sub), refreshCurrentView);
@@ -237,7 +252,7 @@ function route() {
   if ((view === "companies" || view === "people") && !canReadDirectory()) view = "home";
   if (["here", "visitors", "visits", "expected"].includes(view) && !canReadVisitors()) view = "home";
   if (view === "badges" && !canReadBadges()) view = "home";
-  if (view === "clearance" && !isSecurity()) view = "home";
+  if (["clearance", "alarms", "guard-reports"].includes(view) && !isSecurity()) view = "home";
   if (view === "clearances" && !seesSecurity()) view = "home";
   if (["floors", "offices", "roomtypes", "rates"].includes(view) && !canReadFacilities()) view = "home";
   if (["leases", "charges"].includes(view) && !canSeeLeases()) view = "home";
@@ -278,14 +293,17 @@ function showCounts() {
   const here = v ? Object.entries(v.here).filter(([site]) => !state.site || site === String(state.site)).reduce((n, [, c]) => n + c, 0) : 0;
   const late = (v?.badgesLeft || 0) + (v?.tempOverdue || 0);
   const queue = state.config?.clearance?.queue || 0;
+  const mail = state.config?.securityMail || {};
   setPill("nav-here", here);
   setPill("nav-review", v?.review || 0);
   setPill("nav-expected", v?.expected || 0);
   setPill("nav-badges", late);
   setPill("nav-clearance", queue);
+  setPill("nav-alarms", mail.alarms || 0);
+  setPill("nav-guard", mail.reports || 0);
   // On the sections, only what needs someone to act.
   setPill("nav-visitors", (v?.review || 0) + late);
-  setPill("nav-security", queue);
+  setPill("nav-security", queue + (mail.alarms || 0));
 }
 
 async function refreshCounts() {
@@ -293,6 +311,7 @@ async function refreshCounts() {
   try {
     if (canReadVisitors()) state.config.visits = await api("/api/visits/summary");
     if (isSecurity()) state.config.clearance.queue = (await api("/api/clearance/queue-count")).count;
+    if (isSecurity()) state.config.securityMail = { ...state.config.securityMail, ...(await api("/api/security/mail/unread")) };
     showCounts();
     loadBadgeAlerts();
   } catch {

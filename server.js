@@ -21,6 +21,9 @@ const { createApiV1 } = require("./api-v1");
 const { createClearance, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS, UNCLEARED, isUnclearedName } = require("./clearance");
 const { createBadges } = require("./badges");
 const { createEvents } = require("./events");
+const { createSecurityReports } = require("./security-reports");
+const { createSecurityMailbox } = require("./security-mailbox");
+const { createSecurityMailRoutes } = require("./security-mail-routes");
 const { createBadgeRoutes } = require("./badge-routes");
 const { createFacilities } = require("./facilities");
 const { createFacilityRoutes } = require("./facility-routes");
@@ -229,6 +232,9 @@ const prefs = createPrefs({ db, access });
 const events = createEvents({ db });
 const store = { read: db.readDoc, write: db.writeDoc };
 const entra = createEntra({ store, roles: () => access.listRoles({ kind: "user" }) });
+// Security's mail: alarm notices and guard reports, from the shared mailbox or dropped in.
+const securityReports = createSecurityReports({ db });
+const securityMailbox = createSecurityMailbox({ store, reports: securityReports, token: () => entra.appToken(), graphBase: () => entra.graphBase() });
 // The name in the header, on the sign-in page and in the browser's tab, and the line under it
 // (shown when no one site is chosen). Settings > General.
 const DEFAULT_APP_NAME = "Identity and Visitor Manager";
@@ -346,6 +352,8 @@ app.get("/api/config", (req, res) => {
     // Level names only for roles that see them; the rest see badge template images.
     clearanceLevels: access.canSeeClearances(ctx) ? clearance.levels().map((l) => ({ id: l.id, name: l.name, rank: l.rank })) : [],
     clearance: { security: access.isSecurity(ctx), queue: clearanceRoutes.queueCount(req), digitsHeldHours: clearance.DIGITS_TTL_HOURS, ...clearance.settings() },
+    // Security's mail: how many alarms and guard reports no one has opened, and whether the mailbox is checked.
+    securityMail: access.isSecurity(ctx) ? { ...securityReports.unread({ sites: ctx.sites }), mailbox: Boolean(securityMailbox.settings().enabled && securityMailbox.settings().mailbox) } : null,
     sites: visibleSites(ctx).map((s) => ({ id: s.id, name: s.name, active: s.active, hasLogo: s.hasLogo, logoUpdatedAt: s.logoUpdatedAt })),
     siteCount: sites.count(),
     // For a visitor's citizenship, and the IDs the desk checks at check-in.
@@ -676,6 +684,20 @@ function parseYesNo(value, label) {
   throw fail(400, `${label} must be yes or no.`);
 }
 
+/** A date from an import as YYYY-MM-DD: given so (as Access dates arrive), or M/D/YYYY (or M/D/YY) as US spreadsheets write it. */
+function importDate(value, label) {
+  const s = String(value).trim();
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/.exec(s);
+  let y;
+  let mo;
+  let d;
+  if (m) [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  else if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})$/.exec(s))) [mo, d, y] = [Number(m[1]), Number(m[2]), Number(m[3]) + (m[3].length === 2 ? 2000 : 0)];
+  const real = m && new Date(Date.UTC(y, mo - 1, d));
+  if (!real || real.getUTCMonth() !== mo - 1 || real.getUTCDate() !== d) throw fail(400, `"${s}" isn't a date for ${label}: write it as YYYY-MM-DD or M/D/YYYY.`);
+  return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
 /** A site by name among those the caller may use. */
 function siteByName(ctx, name) {
   const site = sites.list().find((s) => s.name.toLowerCase() === String(name).trim().toLowerCase());
@@ -913,7 +935,7 @@ function importVisitors(req, rows, { where, from = "CSV", skipProblems = false }
   return { ...counts, ignored };
 }
 
-const BADGE_COLUMNS = ["number", "facility_code", "type", "level", "sites", "temporary", "status", "notes"];
+const BADGE_COLUMNS = ["number", "facility_code", "type", "level", "expires", "sites", "temporary", "status", "notes"];
 const BADGE_TYPE_NAMES = { personnel: "personnel", staff: "personnel", building: "personnel", tenant: "tenant", visitor: "visitor", guest: "visitor" };
 
 /**
@@ -958,6 +980,7 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
     }
     if (row.sites) input.siteIds = String(row.sites).split(";").map((s) => s.trim()).filter(Boolean).map((s) => siteByName(req.ctx, s).id);
     if (row.temporary) input.temporary = parseYesNo(row.temporary, "temporary");
+    if (row.expires) input.expiresOn = importDate(row.expires, "expires");
     if (row.status) {
       const status = String(row.status).trim().toLowerCase();
       if (!["active", "lost", "retired"].includes(status)) throw fail(400, `"${row.status}" isn't a badge status: active, lost or retired.`);
@@ -1278,6 +1301,9 @@ app.use(clearanceRoutes.router);
 app.use(createFacilityRoutes({ access, facilities, leases, directory, sites, auditFrom }));
 app.use(createFinanceRoutes({ access, leases, billing, quickbooks, directory, auditFrom, appUrl: APP_URL, branding }));
 app.use(createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, fields, admin, auditFrom, transaction: (fn) => db.transaction(fn) }));
+app.use(createSecurityMailRoutes({ access, reports: securityReports, mailbox: securityMailbox, admin, auditFrom,
+  // The app registration the mailbox is read with: its client ID for the setup steps, and whether it is set up.
+  appInfo: () => { const c = entra.config(); return { clientId: c.clientId || null, ready: Boolean(c.tenantId && c.clientId && (c.clientSecret || entra.activeCertificate())) }; } }));
 
 app.use("/api", (req, res) => {
   res.status(404).json({ error: "Not found." });
@@ -1339,6 +1365,9 @@ if (require.main === module) {
     console.log(`Kiosks: ${kiosks.list().length} (${KIOSK_PORT ? `on port ${KIOSK_PORT}` : "pages at /kiosk/ on this port"})`);
     console.log(`API clients: ${apiClients.list().length} (API at /api/v1)`);
     clock.start();
+    securityMailbox.start();
+    const mail = securityMailbox.settings();
+    console.log(`Security mail: ${mail.enabled && mail.mailbox ? `checking ${mail.mailbox} every ${mail.pollMinutes} min` : "mailbox off (files can still be dropped in)"}`);
     console.log(`Entra ID sign-in: ${entra.isReady() ? `on (tenant ${entra.config().tenantId}, ${entra.config().credential === "certificate" ? "certificate" : "client secret"}${entra.config().source === "env" ? ", from environment" : ""})` : "off"}`);
     const entraCert = entra.config().credential === "certificate" ? entra.activeCertificate() : null;
     if (entraCert && entraCert.notAfter - Date.now() < 30 * 24 * 60 * 60 * 1000) {

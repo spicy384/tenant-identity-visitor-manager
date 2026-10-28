@@ -193,6 +193,8 @@
           <option value="left">Out with visitors who have left</option>
           <option value="temporary">Temporary badges out</option>
           <option value="overdue">Temporary badges overdue</option>
+          <option value="expiring">Expiring within 30 days</option>
+          <option value="expired">Expired</option>
           <option value="lost">Lost</option>
           <option value="retired">Retired</option>
         </select>
@@ -236,6 +238,44 @@
     <!-- Security: clearances coming up (Security and administrators) -->
     <section id="view-clearances" class="view" data-title="Clearances" hidden>
       <div id="clearances-body" class="stack"></div>
+    </section>
+
+    <!-- Security's mail (26-security-mail.js): alarms from the monitoring center, and guard reports -->
+    <section id="view-alarms" class="view" data-title="Alarms" hidden>
+      <div class="toolbar">
+        <input id="alarms-search" type="search" placeholder="Search account, zone, event or name" />
+        <label class="check-row inline-check"><input type="checkbox" id="alarms-unread" /> Unread only</label>
+        <span class="spacer"></span>
+        <button type="button" id="alarms-check" class="secondary" hidden>Check the mailbox</button>
+        <button type="button" id="alarms-add" class="secondary">Add from a file</button>
+      </div>
+      <p id="alarms-hint" class="muted small-text"></p>
+      <div class="table-wrap">
+        <table class="table" id="alarms-table"><thead></thead><tbody></tbody></table>
+      </div>
+      <div class="pager">
+        <button type="button" id="alarms-prev" class="secondary small">Previous</button>
+        <span id="alarms-page" class="muted"></span>
+        <button type="button" id="alarms-next" class="secondary small">Next</button>
+      </div>
+    </section>
+
+    <section id="view-guard-reports" class="view" data-title="Guard reports" hidden>
+      <div class="toolbar">
+        <input id="guard-search" type="search" placeholder="Search site, officer or what they wrote" />
+        <label class="check-row inline-check"><input type="checkbox" id="guard-unread" /> Unread only</label>
+        <span class="spacer"></span>
+        <button type="button" id="guard-check" class="secondary" hidden>Check the mailbox</button>
+        <button type="button" id="guard-add" class="secondary">Add from a file</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="guard-table"><thead></thead><tbody></tbody></table>
+      </div>
+      <div class="pager">
+        <button type="button" id="guard-prev" class="secondary small">Previous</button>
+        <span id="guard-page" class="muted"></span>
+        <button type="button" id="guard-next" class="secondary small">Next</button>
+      </div>
     </section>
 
     <!-- The Security role's clearance validation queue -->
@@ -370,6 +410,7 @@
           </div>
           <div class="settings-group"><span class="settings-group-label">Security</span>
             <button type="button" data-tab="badges">Badges and clearances</button>
+            <button type="button" data-tab="security-mail">Security mail</button>
           </div>
           <div class="settings-group"><span class="settings-group-label">Accounts</span>
             <button type="button" data-tab="users">Users</button>
@@ -479,6 +520,7 @@
   <script src="/js/23-checkin.js"></script>
   <script src="/js/24-leases.js"></script>
   <script src="/js/25-finance.js"></script>
+  <script src="/js/26-security-mail.js"></script>
   <script src="/js/13-app.js"></script>
 </body>
 </html>

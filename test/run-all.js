@@ -20,6 +20,7 @@ const SUITES = [
   "facilities.test.js",
   "finance.test.js",
   "roles.test.js",
+  "security-mail.test.js",
   "frontend.test.js"
 ];
 

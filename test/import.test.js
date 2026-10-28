@@ -220,6 +220,11 @@ async function main() {
   check("csv: each row knows the line it starts on", multi.lines.join() === "2,5");
   r = await csvRun("multi.csv", 'Card,Kind,Notes\n910,visitor,"a\nb"\n911,nobody,x\n', { number: { column: "Card" }, type: { column: "Kind" }, notes: { column: "Notes" } });
   check("csv: so a problem names the line it is really on", r.status === 400 && /Line 4:/.test(r.data.error));
+  r = await csvRun("expires.csv", "Card,Kind,Expiration Date\n7001,tenant,2031-01-15\n7002,visitor,3/9/2031\n7003,personnel,\n", { number: { column: "Card" }, type: { column: "Kind" }, expires: { column: "Expiration Date" } });
+  const exp = async (n) => (await security.get(`/api/badges?q=${n}`)).data.badges.find((b) => b.number === n)?.expiresOn;
+  check("badges: expiry dates imported, as YYYY-MM-DD or M/D/YYYY, empty for none", r.status === 200 && r.data.added === 3 && await exp("7001") === "2031-01-15" && await exp("7002") === "2031-03-09" && await exp("7003") === null, JSON.stringify(r.data));
+  r = await csvRun("bad-expires.csv", "Card,Kind,Expires\n7004,tenant,13/40/2031\n", { number: { column: "Card" }, type: { column: "Kind" }, expires: { column: "Expires" } });
+  check("badges: a date that isn't one is refused", r.status === 400 && /isn't a date for expires/.test(r.data.error));
 
   // --- CSV through the same steps, with a value for every row -----------------------------------------------
   const csv = Buffer.from("﻿Given Name,Family Name,E-mail\r\nKay,Kiosk,kay@acme.example\r\nLee,Lobby,\r\n", "utf8");

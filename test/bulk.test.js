@@ -178,6 +178,9 @@ async function main() {
   check("badges: one that is out can't move, so none does", r.status === 409 && /Badge B-2/.test(r.data.error) && /Nothing was changed/.test(r.data.error) && (await security.get(`/api/badges/${b3.id}`)).data.badge.type === "visitor");
   check("badges: but its notes can change with the rest", (await security.post("/api/badges/bulk", { ids: [b2.id, b3.id], patch: { notes: "Box 4" } })).data.updated === 2);
   check("badges: a temporary visitor badge is refused", (await security.post("/api/badges/bulk", { ids: [b3.id], patch: { temporary: true } })).status === 409);
+  r = await security.post("/api/badges/bulk", { ids: [b2.id, b3.id], patch: { expiresOn: "2030-06-30" } });
+  check("badges: an expiry date set on several, even one that is out", r.status === 200 && (await security.get(`/api/badges/${b2.id}`)).data.badge.expiresOn === "2030-06-30");
+  check("badges: and taken away again", (await security.post("/api/badges/bulk", { ids: [b2.id, b3.id], patch: { expiresOn: null } })).status === 200 && (await security.get(`/api/badges/${b3.id}`)).data.badge.expiresOn === null);
   check("badges: nothing to change is refused", (await security.post("/api/badges/bulk", { ids: [b3.id], patch: {} })).status === 400);
   r = await security.post("/api/badges/bulk-delete", { ids: [b2.id, b3.id] });
   check("badges: one with history can't be deleted, so none is", r.status === 409 && /retire it instead/.test(r.data.error) && (await security.get(`/api/badges/${b3.id}`)).status === 200);

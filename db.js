@@ -564,6 +564,54 @@ CREATE TABLE IF NOT EXISTS company_rates (
   rate REAL NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- Security's mail (security-reports.js): the monitoring center's alarm notices and the guard
+-- company's daily activity reports, as read (data: JSON), each once (message_key: the email's
+-- Message-ID, else a hash of it), with who first read it.
+CREATE TABLE IF NOT EXISTS security_alarms (
+  id INTEGER PRIMARY KEY,
+  message_key TEXT NOT NULL UNIQUE,
+  received_at INTEGER NOT NULL,
+  account TEXT,
+  account_name TEXT,
+  event TEXT,
+  zone TEXT,
+  zone_name TEXT,
+  data TEXT NOT NULL,
+  source TEXT NOT NULL,
+  read_at INTEGER,
+  read_by TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS security_alarms_received ON security_alarms(received_at);
+
+CREATE TABLE IF NOT EXISTS guard_reports (
+  id INTEGER PRIMARY KEY,
+  message_key TEXT NOT NULL UNIQUE,
+  received_at INTEGER NOT NULL,
+  report_date TEXT,
+  site_name TEXT,
+  company TEXT,
+  data TEXT NOT NULL,
+  pdf BLOB,
+  pdf_name TEXT,
+  source TEXT NOT NULL,
+  read_at INTEGER,
+  read_by TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS guard_reports_received ON guard_reports(received_at);
+
+-- Which site an alarm account, or a guard report's site name, is at (Settings > Security
+-- mail): kind 'alarm' (key: the account number) or 'guard' (key: the site name).
+CREATE TABLE IF NOT EXISTS security_sources (
+  kind TEXT NOT NULL,
+  key TEXT NOT NULL COLLATE NOCASE,
+  label TEXT,
+  site_id INTEGER REFERENCES sites(id) ON DELETE SET NULL,
+  first_seen INTEGER NOT NULL,
+  PRIMARY KEY (kind, key)
+);
 `;
 
 // Columns added after a table first shipped: [table, column, definition]. CREATE TABLE IF NOT
@@ -628,6 +676,8 @@ const ADDED_COLUMNS = [
   ["visits", "id_verified_by", "TEXT"],
   // What an "Other government ID" was, as the desk wrote it.
   ["visits", "id_other", "TEXT"],
+  // A badge's expiry date (YYYY-MM-DD, optional): good through that day, then it can't be given out.
+  ["badges", "expires_on", "TEXT"],
   ["event_guests", "badge_id", "INTEGER REFERENCES badges(id) ON DELETE SET NULL"]
 ];
 
