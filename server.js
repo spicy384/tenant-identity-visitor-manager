@@ -15,7 +15,7 @@ const { createVisitClock } = require("./visit-clock");
 const { createKioskRoutes } = require("./kiosk-routes");
 const { createVisitorRoutes } = require("./visitor-routes");
 const { COUNTRIES } = require("./countries");
-const { ID_TYPES } = require("./visitors");
+const { ID_TYPES, OTHER_ID } = require("./visitors");
 const { createApiClients } = require("./api-clients");
 const { createApiV1 } = require("./api-v1");
 const { createClearance, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS, UNCLEARED, isUnclearedName } = require("./clearance");
@@ -349,7 +349,7 @@ app.get("/api/config", (req, res) => {
     sites: visibleSites(ctx).map((s) => ({ id: s.id, name: s.name, active: s.active, hasLogo: s.hasLogo, logoUpdatedAt: s.logoUpdatedAt })),
     siteCount: sites.count(),
     // For a visitor's citizenship, and the IDs the desk checks at check-in.
-    checkin: access.canReadVisitors(ctx) ? { countries: COUNTRIES, idTypes: ID_TYPES } : null
+    checkin: access.canReadVisitors(ctx) ? { countries: COUNTRIES, idTypes: ID_TYPES, otherId: OTHER_ID } : null
   });
 });
 

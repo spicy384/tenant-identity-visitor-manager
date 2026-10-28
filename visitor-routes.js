@@ -9,7 +9,7 @@
  */
 const express = require("express");
 const { toCsv } = require("./csv");
-const { ID_TYPES } = require("./visitors");
+const { ID_TYPES, cleanIdOther, idText } = require("./visitors");
 
 function fail(status, message) {
   const error = new Error(message);
@@ -260,7 +260,8 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
 
   /**
    * The desk checks in someone standing there, their ID already checked: { visitorId, siteId,
-   * hostId, companyId (else the contact's company), purpose, idType }. The visit then waits
+   * hostId, companyId (else the contact's company), purpose, idType, idOther (what an Other
+   * government ID was) }. The visit then waits
    * for its badge.
    */
   router.post("/api/checkins", editVisitors, (req, res) => {
@@ -274,14 +275,15 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
     if (missing) throw fail(400, missing);
     if (!String(body.purpose || "").trim()) throw fail(400, "Say what the visit is for.");
     if (!ID_TYPES.includes(body.idType)) throw fail(400, "Check their ID, and say which it was.");
+    const idOther = cleanIdOther(body.idType, body.idOther);
     const { hostId, companyId } = contactFrom(body);
-    const { visit, already } = visitors.checkIn({ visitorId: visitor.id, siteId, companyId, hostId, purpose: body.purpose, idType: body.idType, by: staffName(req) });
-    if (!already) auditFrom(req, "visit.checkin", fullName(visitor), `${visit.siteName}: ${visit.companyName}, contact ${visit.hostName}; ID checked (${body.idType})${visitor.blocked ? "; blocked, let in anyway" : ""}`);
+    const { visit, already } = visitors.checkIn({ visitorId: visitor.id, siteId, companyId, hostId, purpose: body.purpose, idType: body.idType, idOther, by: staffName(req) });
+    if (!already) auditFrom(req, "visit.checkin", fullName(visitor), `${visit.siteName}: ${visit.companyName}, contact ${visit.hostName}; ID checked (${idText(body.idType, idOther)})${visitor.blocked ? "; blocked, let in anyway" : ""}`);
     res.json({ ok: true, already, visit: visitsOut(req.ctx, [visit])[0] });
   });
 
   /**
-   * The desk has checked the ID of someone who checked in at a kiosk: { idType, and hostId,
+   * The desk has checked the ID of someone who checked in at a kiosk: { idType, idOther, and hostId,
    * companyId, purpose to fill in or change }. The visit goes on to its badge. Until the badge
    * is given the desk can come back and check it again, or change the contact or purpose.
    */
@@ -294,12 +296,13 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
     const missing = missingForCheckin(visitor);
     if (missing) throw fail(400, missing);
     if (!ID_TYPES.includes(body.idType)) throw fail(400, "Check their ID, and say which it was.");
+    const idOther = cleanIdOther(body.idType, body.idOther);
     const contact = contactFrom(body, before);
     const purpose = body.purpose !== undefined ? body.purpose : before.purpose;
     if (!String(purpose || "").trim()) throw fail(400, "Say what the visit is for.");
     if (contact.hostId !== before.hostId || contact.companyId !== before.companyId || purpose !== before.purpose) visitors.updateVisit(before.id, { ...contact, purpose });
-    const visit = visitors.verifyId(before.id, { idType: body.idType, by: staffName(req) });
-    auditFrom(req, "visit.id_checked", fullName(visitor), `${visit.siteName}: ${body.idType}${before.checkinStage === "badge" ? `; checked again (was ${before.idType})` : ""}`);
+    const visit = visitors.verifyId(before.id, { idType: body.idType, idOther, by: staffName(req) });
+    auditFrom(req, "visit.id_checked", fullName(visitor), `${visit.siteName}: ${idText(body.idType, idOther)}${before.checkinStage === "badge" ? `; checked again (was ${idText(before.idType, before.idOther)})` : ""}`);
     res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0] });
   });
 

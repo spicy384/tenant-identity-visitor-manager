@@ -107,7 +107,8 @@ async function main() {
   check("desk: the company and citizenship must be on record first", (await desk.post("/api/checkins", { ...base, visitorId: bare.id })).status === 400);
   check("desk: what the visit is for is needed", (await desk.post("/api/checkins", { ...base, purpose: "" })).status === 400);
   check("desk: so is the point of contact", (await desk.post("/api/checkins", { ...base, hostId: null })).status === 400);
-  check("desk: and which ID was checked", (await desk.post("/api/checkins", { ...base, idType: undefined })).status === 400 && (await desk.post("/api/checkins", { ...base, idType: "Gym card" })).status === 400);
+  check("desk: and which ID was checked", (await desk.post("/api/checkins", { ...base, idType: undefined })).status === 400 && (await desk.post("/api/checkins", { ...base, idType: "Gym card" })).status === 400
+    && (await desk.post("/api/checkins", { ...base, idType: "Other government ID" })).status === 400);
   r = await desk.post("/api/checkins", base);
   const annVisit = r.data.visit;
   check("desk: checked in, the company from the contact, the ID on record, waiting for a badge", r.status === 200 && annVisit.companyName === "Acme Corp" && annVisit.hostName === "Hana Host"
@@ -117,6 +118,15 @@ async function main() {
   r = await desk.post(`/api/visits/${annVisit.id}/verify-id`, { idType: "Passport", purpose: "Quarterly review and lunch" });
   check("id: back a step before the badge, the ID is checked again and the purpose changed", r.status === 200 && r.data.visit.checkinStage === "badge" && r.data.visit.idType === "Passport" && r.data.visit.purpose === "Quarterly review and lunch", JSON.stringify(r.data));
   check("id: the audit log says it was checked again", (await admin.get("/api/audit?action=visit.id_checked")).data.entries.some((e) => e.target === "Ann Arrival" && e.detail.includes("checked again (was Driver's license)")));
+  // An Other government ID: the desk says what it was.
+  check("id: an other government ID needs saying what it was", (await desk.post(`/api/visits/${annVisit.id}/verify-id`, { idType: "Other government ID" })).status === 400
+    && (await desk.post(`/api/visits/${annVisit.id}/verify-id`, { idType: "Other government ID", idOther: "   " })).status === 400);
+  r = await desk.post(`/api/visits/${annVisit.id}/verify-id`, { idType: "Other government ID", idOther: "  Military   ID " });
+  check("id: what it was is kept with the visit", r.status === 200 && r.data.visit.idType === "Other government ID" && r.data.visit.idOther === "Military ID", JSON.stringify(r.data));
+  check("id: and written in the audit log", (await admin.get("/api/audit?action=visit.id_checked")).data.entries.some((e) => e.target === "Ann Arrival" && e.detail.includes("Other government ID: Military ID")));
+  r = await desk.post(`/api/visits/${annVisit.id}/verify-id`, { idType: "Passport", idOther: "ignored" });
+  check("id: another type drops it", r.data.visit.idType === "Passport" && r.data.visit.idOther === null
+    && (await admin.get("/api/audit?action=visit.id_checked")).data.entries.some((e) => e.target === "Ann Arrival" && e.detail.includes("checked again (was Other government ID: Military ID)")));
 
   // A service technician: the point of contact can be anyone in the directory, not only hosts.
   r = await desk.post("/api/checkins", { visitorId: tech.id, siteId: site.id, hostId: facilities.id, purpose: "Lift service", idType: "State ID" });

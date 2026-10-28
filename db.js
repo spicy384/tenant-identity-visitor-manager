@@ -626,6 +626,8 @@ const ADDED_COLUMNS = [
   ["visits", "id_type", "TEXT"],
   ["visits", "id_verified_at", "INTEGER"],
   ["visits", "id_verified_by", "TEXT"],
+  // What an "Other government ID" was, as the desk wrote it.
+  ["visits", "id_other", "TEXT"],
   ["event_guests", "badge_id", "INTEGER REFERENCES badges(id) ON DELETE SET NULL"]
 ];
 

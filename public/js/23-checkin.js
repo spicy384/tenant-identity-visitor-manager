@@ -384,10 +384,18 @@ function checkInWizard(start = {}) {
     function idStep() {
       const v = w.visitor;
       const idName = `id-${Math.random().toString(36).slice(2, 8)}`;
+      // An Other government ID: what it was, in a box shown only for that choice.
+      const otherId = state.config.checkin?.otherId;
+      const otherText = h("input", { type: "text", maxlength: "80", value: w.visit?.idOther || "", placeholder: "Military ID, tribal ID, ...", "aria-label": "What ID was it?" });
+      const otherBox = h("label", { class: "id-other", hidden: w.visit?.idType !== otherId }, h("span", { class: "label", text: "What ID was it?" }), otherText);
       const types = (state.config.checkin?.idTypes || []).map((t) => {
         const input = h("input", { type: "radio", name: idName, value: t });
         // Back here from the badge step: the ID recorded, to keep or change.
         input.checked = w.visit?.idType === t;
+        input.addEventListener("change", () => {
+          otherBox.hidden = t !== otherId;
+          if (t === otherId) otherText.focus();
+        });
         return h("label", { class: "id-choice" }, input, h("span", { text: t }));
       });
       const match = h("input", { type: "checkbox" });
@@ -402,20 +410,26 @@ function checkInWizard(start = {}) {
             fact("Purpose", w.purpose), multiSite() ? fact("Site", siteName()) : null),
           h("button", { type: "button", class: "link-btn small-text", text: "Change these details", onclick: detailsStep })),
         h("fieldset", { class: "id-types" }, h("legend", { text: "Which ID did they show?" }), types),
+        otherBox,
         h("label", { class: "check-row id-match" }, match, h("span", { text: `The name and photo on the ID match ${name()}` }))),
       [btn("Back", "secondary", detailsStep), btn("ID confirmed", "primary", async () => {
         const idType = body.querySelector(`input[name=${idName}]:checked`)?.value;
         if (!idType) throw new Error("Choose the ID they showed.");
+        const idOther = idType === otherId ? otherText.value.trim() : null;
+        if (idType === otherId && !idOther) {
+          otherText.focus();
+          throw new Error("Say what the other government ID was.");
+        }
         if (!match.checked) throw new Error(`Tick the box once the ID matches ${name()}. If it doesn't, don't check them in.`);
         const visit = { hostId: w.hostId, companyId: w.companyId, purpose: w.purpose };
         // A visit under way (from a kiosk, or back here from the badge step): checked on that visit.
         if (w.visit && ["id", "badge"].includes(w.visit.checkinStage)) {
-          w.visit = (await api(`/api/visits/${w.visit.id}/verify-id`, { method: "POST", body: { idType, ...visit } })).visit;
+          w.visit = (await api(`/api/visits/${w.visit.id}/verify-id`, { method: "POST", body: { idType, idOther, ...visit } })).visit;
         } else {
-          const r = await api("/api/checkins", { method: "POST", body: { visitorId: v.id, siteId: Number(w.siteId), idType, overrideBlock: w.overrideBlock, ...visit } });
+          const r = await api("/api/checkins", { method: "POST", body: { visitorId: v.id, siteId: Number(w.siteId), idType, idOther, overrideBlock: w.overrideBlock, ...visit } });
           w.visit = r.visit;
           // Already in the building (from a kiosk, say): their ID is checked on that visit.
-          if (r.already && w.visit.checkinStage === "id") w.visit = (await api(`/api/visits/${w.visit.id}/verify-id`, { method: "POST", body: { idType, ...visit } })).visit;
+          if (r.already && w.visit.checkinStage === "id") w.visit = (await api(`/api/visits/${w.visit.id}/verify-id`, { method: "POST", body: { idType, idOther, ...visit } })).visit;
         }
         w.changed = true;
         if (w.visit.checkinStage !== "badge") return doneStep(`${name()} was checked in already.`);

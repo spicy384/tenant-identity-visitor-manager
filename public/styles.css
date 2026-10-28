@@ -757,6 +757,7 @@ input[type="color"] { width: 64px; min-height: 36px; padding: 2px; cursor: point
 .id-types legend { font-weight: 600; margin-bottom: 6px; }
 .id-choice { display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; min-height: var(--tap); }
 .id-choice:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
+.id-other { max-width: 360px; }
 .id-match { font-weight: 600; }
 .badge-assigned { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; padding: 16px; border: 2px solid var(--primary); border-radius: var(--radius); background: var(--primary-soft); }
 .badge-assigned.compact { border-width: 1px; padding: 10px 14px; justify-content: space-between; }

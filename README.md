@@ -141,8 +141,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   2. **Confirm** their details, the point of contact's (job title, phones, email, as the
      role's field access shows them) and the purpose of the visit.
   3. **ID**: which ID they showed (driver's license, passport, CAC, state ID or another
-     government ID) and that its name and photo match them. Only the type, who checked it and
-     when are kept: never the ID's number.
+     government ID, with what it was, such as a military ID) and that its name and photo match
+     them. Only the type (and what an other government ID was), who checked it and when are
+     kept: never the ID's number.
   4. **Badge**: a badge kept for them (picked for the event they're expected at, or reserved
      for a regular visitor) is shown large, with **Badge handed over** and **Can't find it?
      Issue a different badge**. Otherwise the desk enters the number of the badge they hand

@@ -21,6 +21,22 @@ const { badgeLabel } = require("./badges");
 const VISITOR_TYPES = ["Guest", "Service Technician"];
 // What the front desk may check a visitor's identity with.
 const ID_TYPES = ["Driver's license", "Passport", "CAC", "State ID", "Other government ID"];
+/** The ID type that needs saying what it was (idOther). */
+const OTHER_ID = "Other government ID";
+
+/**
+ * What the desk wrote for an Other government ID: required for that type (at most 80
+ * characters), and null for any other.
+ */
+function cleanIdOther(idType, idOther) {
+  if (idType !== OTHER_ID) return null;
+  const s = String(idOther ?? "").trim().replace(/\s+/g, " ").slice(0, 80);
+  if (!s) throw fail(400, "Say what the other government ID was (a military ID, a tribal ID, ...).");
+  return s;
+}
+
+/** An ID as written in the audit log: "Other government ID: Military ID", else just its type. */
+const idText = (idType, idOther) => (idOther ? `${idType}: ${idOther}` : idType);
 // A visit's check-in: waiting for the desk to check their ID, then for a badge, then done.
 // Visits from before this have none (they count as done).
 const STAGES = ["id", "badge", "done"];
@@ -414,6 +430,7 @@ function createVisitors({ db, fields }) {
       visitorType: r.visitor_type || null,
       checkinStage: r.checkin_stage || "done",
       idType: r.id_type || null,
+      idOther: r.id_other || null,
       idVerifiedAt: r.id_verified_at ?? null,
       idVerifiedBy: r.id_verified_by || null,
       checkedInAt: r.checked_in_at,
@@ -491,7 +508,7 @@ function createVisitors({ db, fields }) {
    * building at that site gets their open visit back rather than a second one.
    * Links the visitor to the company, with the host as their usual one when given.
    */
-  function checkIn({ visitorId, siteId, companyId, hostId = null, purpose = null, by = null, kioskId = null, idType = null, now = Date.now() }) {
+  function checkIn({ visitorId, siteId, companyId, hostId = null, purpose = null, by = null, kioskId = null, idType = null, idOther = null, now = Date.now() }) {
     const visitor = raw.prepare("SELECT * FROM visitors WHERE id = ?").get(visitorId);
     if (!visitor) throw fail(404, "No such visitor.");
     const site = raw.prepare("SELECT * FROM sites WHERE id = ?").get(siteId);
@@ -504,15 +521,16 @@ function createVisitors({ db, fields }) {
       if (!host) throw fail(400, "The host must be someone in that company.");
     }
     if (idType !== null && !ID_TYPES.includes(idType)) throw fail(400, `The ID is one of: ${ID_TYPES.join(", ")}.`);
+    const other = idType ? cleanIdOther(idType, idOther) : null;
     const already = openVisit(visitorId, siteId);
     if (already) return { visit: already, already: true };
     let id;
     db.transaction(() => {
       // Checked by the desk as they arrive: on to the badge. Otherwise (the kiosk) the desk checks their ID first.
-      id = raw.prepare(`INSERT INTO visits (site_id, visitor_id, company_id, company_name, host_id, host_name, purpose, visitor_type, checkin_stage, id_type, id_verified_at, id_verified_by, checked_in_at, checked_in_by, kiosk_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      id = raw.prepare(`INSERT INTO visits (site_id, visitor_id, company_id, company_name, host_id, host_name, purpose, visitor_type, checkin_stage, id_type, id_other, id_verified_at, id_verified_by, checked_in_at, checked_in_by, kiosk_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(siteId, visitorId, company.id, company.name, host ? host.id : null, host ? hostDisplayName(host) : null, text(purpose, 200), visitor.visitor_type || "Guest",
-          idType ? "badge" : "id", idType, idType ? now : null, idType ? by : null, now, by, kioskId).lastInsertRowid;
+          idType ? "badge" : "id", idType, other, idType ? now : null, idType ? by : null, now, by, kioskId).lastInsertRowid;
       const link = raw.prepare("SELECT host_id FROM visitor_links WHERE visitor_id = ? AND company_id = ?").get(visitorId, company.id);
       if (!link) raw.prepare("INSERT INTO visitor_links (visitor_id, company_id, host_id, created_at) VALUES (?, ?, ?, ?)").run(visitorId, company.id, host ? host.id : null, now);
       else if (host && link.host_id !== host.id) raw.prepare("UPDATE visitor_links SET host_id = ? WHERE visitor_id = ? AND company_id = ?").run(host.id, visitorId, company.id);
@@ -529,14 +547,18 @@ function createVisitors({ db, fields }) {
     return raw.prepare("SELECT company_id FROM people WHERE id = ? AND active = 1").get(Number(personId))?.company_id ?? null;
   }
 
-  /** The desk has checked the visitor's ID (`idType`): the visit goes on to its badge. */
-  function verifyId(visitId, { idType, by = null, sites = null, now = Date.now() } = {}) {
+  /**
+   * The desk has checked the visitor's ID (`idType`, with `idOther` saying what an Other
+   * government ID was): the visit goes on to its badge.
+   */
+  function verifyId(visitId, { idType, idOther = null, by = null, sites = null, now = Date.now() } = {}) {
     if (!ID_TYPES.includes(idType)) throw fail(400, `Choose the ID: ${ID_TYPES.join(", ")}.`);
+    const other = cleanIdOther(idType, idOther);
     const visit = getVisit(visitId, { sites });
     if (!visit || visit.checkedOutAt) throw fail(404, "No such visit in the building.");
     // Checked again (the desk went back a step) until their badge is given; then it stands.
     if (!["id", "badge"].includes(visit.checkinStage)) throw fail(409, `${visit.visitor.firstName} ${visit.visitor.lastName}'s check-in is finished.`);
-    raw.prepare("UPDATE visits SET checkin_stage = 'badge', id_type = ?, id_verified_at = ?, id_verified_by = ? WHERE id = ?").run(idType, now, by, visitId);
+    raw.prepare("UPDATE visits SET checkin_stage = 'badge', id_type = ?, id_other = ?, id_verified_at = ?, id_verified_by = ? WHERE id = ?").run(idType, other, now, by, visitId);
     return getVisit(visitId);
   }
 
@@ -656,4 +678,4 @@ function createVisitors({ db, fields }) {
   };
 }
 
-module.exports = { createVisitors, hostDisplayName, CHECKOUT_METHODS, VISITOR_TYPES, ID_TYPES, STAGES };
+module.exports = { createVisitors, hostDisplayName, CHECKOUT_METHODS, VISITOR_TYPES, ID_TYPES, OTHER_ID, cleanIdOther, idText, STAGES };
