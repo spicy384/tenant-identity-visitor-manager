@@ -232,6 +232,20 @@ CREATE INDEX IF NOT EXISTS visits_open ON visits(site_id, checked_out_at);
 CREATE INDEX IF NOT EXISTS visits_in ON visits(checked_in_at);
 CREATE INDEX IF NOT EXISTS visits_visitor ON visits(visitor_id);
 
+-- Corrections to when a visitor arrived or left, each with why and who made it.
+-- field: 'in' or 'out'; from_at is null when a visit still open was given its check-out.
+CREATE TABLE IF NOT EXISTS visit_time_changes (
+  id INTEGER PRIMARY KEY,
+  visit_id INTEGER NOT NULL REFERENCES visits(id) ON DELETE CASCADE,
+  field TEXT NOT NULL,
+  from_at INTEGER,
+  to_at INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  changed_by TEXT,
+  changed_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS visit_time_changes_visit ON visit_time_changes(visit_id);
+
 CREATE TABLE IF NOT EXISTS api_clients (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL COLLATE NOCASE UNIQUE,

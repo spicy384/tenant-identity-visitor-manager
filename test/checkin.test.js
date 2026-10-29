@@ -272,6 +272,31 @@ async function main() {
   r = await desk.post(`/api/visits/${timVisit.id}/badge`, { number: "101-777" });
   check("check-in: or written together", r.status === 200 && r.data.badge.label === "101-777");
   check("check-in: the audit names the code too", (await admin.get("/api/audit?action=badge.assign")).data.entries.some((e) => e.target === "101-777"));
+
+  // --- correcting when a visitor arrived and left ------------------------------------------------------
+  const HOUR = 3600 * 1000;
+  const inAt = Date.now() - 6 * HOUR;
+  const leftAt = Date.now() - 2 * HOUR;
+  const times = (id, body) => desk.put(`/api/visits/${id}/times`, body);
+  check("times: only those who check visitors in", (await viewer.put(`/api/visits/${tiaVisit.id}/times`, { checkedInAt: inAt, reason: "Arrived earlier" })).status === 403);
+  check("times: not without a reason", (await times(tiaVisit.id, { checkedInAt: inAt })).status === 400 && (await times(tiaVisit.id, { checkedInAt: inAt, reason: "   " })).status === 400);
+  check("times: not in the future", (await times(tiaVisit.id, { checkedInAt: Date.now() + 2 * HOUR, reason: "Typo in the time" })).status === 400);
+  check("times: not leaving before arriving", (await times(tiaVisit.id, { checkedInAt: inAt, checkedOutAt: inAt - HOUR, reason: "Forgot to check out" })).status === 400);
+  check("times: not the same as on record", (await times(tiaVisit.id, { checkedInAt: tiaVisit.checkedInAt, reason: "No change at all" })).status === 400);
+  r = await times(tiaVisit.id, { checkedInAt: inAt, reason: "Signed in at the kiosk late" });
+  check("times: arrival corrected, still in the building", r.status === 200 && r.data.visit.checkedInAt === inAt && !r.data.visit.checkedOutAt && r.data.visit.timesCorrected === 1 && r.data.timeChanges[0].reason === "Signed in at the kiosk late", JSON.stringify(r.data));
+  r = await times(tiaVisit.id, { checkedOutAt: leftAt, reason: "Left without checking out; host says 2 hours ago" });
+  check("times: a check-out time on an open visit checks them out then", r.status === 200 && r.data.visit.checkedOutAt === leftAt && r.data.visit.checkoutMethod === "staff" && r.data.visit.checkedOutBy === "desk");
+  check("times: and they're no longer in the building", !(await desk.get("/api/visits?status=open")).data.visits.some((v) => v.id === tiaVisit.id));
+  check("times: an ended visit can't be opened again", (await times(tiaVisit.id, { checkedOutAt: null, reason: "Still here after all" })).status === 400);
+  r = await desk.get(`/api/visits/${tiaVisit.id}`);
+  check("times: each correction kept with the visit, newest first, with who and why", r.data.visit.timesCorrected === 2 && r.data.timeChanges.length === 2
+    && r.data.timeChanges[0].field === "out" && r.data.timeChanges[0].from === null && r.data.timeChanges[0].to === leftAt && r.data.timeChanges[0].by === "desk"
+    && r.data.timeChanges[1].field === "in" && r.data.timeChanges[1].from === tiaVisit.checkedInAt && r.data.timeChanges[1].to === inAt);
+  const corrected = (await admin.get("/api/audit?action=visit.times_corrected")).data.entries;
+  check("times: each in the audit log, before and after, with the reason", corrected.length === 2 && corrected.every((e) => e.target === "Tia Typed")
+    && corrected.some((e) => /arrived .+ -> .+\. Reason: Signed in at the kiosk late/.test(e.detail)) && corrected.some((e) => /left not checked out -> .+\. Reason: Left without checking out/.test(e.detail)), JSON.stringify(corrected));
+  check("times: the log shows it was corrected", (await desk.get(`/api/visits?visitorId=${tia.id}`)).data.visits[0].timesCorrected === 2);
 }
 
 main()

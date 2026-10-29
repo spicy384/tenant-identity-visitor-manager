@@ -439,11 +439,14 @@ function createVisitors({ db, fields }) {
       kioskName: r.kiosk_name,
       checkedOutAt: r.checked_out_at,
       checkoutMethod: r.checkout_method,
-      checkedOutBy: r.checked_out_by
+      checkedOutBy: r.checked_out_by,
+      // How many times its check-in or check-out time has been corrected.
+      timesCorrected: r.time_changes || 0
     };
   }
 
-  const VISIT_SELECT = `SELECT x.*, s.name AS site_name, v.first_name, v.last_name, v.organization, v.verified, v.blocked, v.citizenship, k.name AS kiosk_name
+  const VISIT_SELECT = `SELECT x.*, s.name AS site_name, v.first_name, v.last_name, v.organization, v.verified, v.blocked, v.citizenship, k.name AS kiosk_name,
+    (SELECT count(*) FROM visit_time_changes c WHERE c.visit_id = x.id) AS time_changes
     FROM visits x JOIN sites s ON s.id = x.site_id JOIN visitors v ON v.id = x.visitor_id LEFT JOIN kiosks k ON k.id = x.kiosk_id`;
 
   function getVisit(id, { sites = null } = {}) {
@@ -592,6 +595,54 @@ function createVisitors({ db, fields }) {
     return { visit: getVisit(visitId), already: false };
   }
 
+  /**
+   * Corrects when a visitor arrived or left (they didn't check in or out as they should have),
+   * with the reason, kept with the visit. Times are timestamps; checkedOutAt on a visit still
+   * open checks them out at that time, and a visit that has ended can't be opened again.
+   * Returns { visit, changes: [{ field, from, to }], reason, timeZone (the site's) }.
+   */
+  function correctTimes(visitId, { checkedInAt, checkedOutAt, reason, by = null, sites = null, now = Date.now() } = {}) {
+    const visit = getVisit(visitId, { sites });
+    if (!visit) throw fail(404, "No such visit.");
+    const why = String(reason ?? "").trim().replace(/\s+/g, " ");
+    if (why.length < 5) throw fail(400, "Give the reason for the change.");
+    if (why.length > 500) throw fail(400, "Keep the reason to 500 characters.");
+    const when = (v, label) => {
+      const n = Number(v);
+      if (v === null || v === "" || !Number.isFinite(n) || n <= 0) throw fail(400, `${label} must be a date and time.`);
+      // A minute's grace for a clock a little ahead.
+      if (n > now + 60000) throw fail(400, `${label} can't be in the future.`);
+      return Math.round(n);
+    };
+    const nextIn = checkedInAt === undefined ? visit.checkedInAt : when(checkedInAt, "The time they arrived");
+    let nextOut = visit.checkedOutAt ?? null;
+    if (checkedOutAt === null || checkedOutAt === "") {
+      if (visit.checkedOutAt) throw fail(400, "A visit that has ended can't be opened again; correct the time they left instead.");
+    } else if (checkedOutAt !== undefined) {
+      nextOut = when(checkedOutAt, "The time they left");
+    }
+    if (nextOut !== null && nextOut < nextIn) throw fail(400, "They can't have left before they arrived.");
+    const changes = [];
+    if (nextIn !== visit.checkedInAt) changes.push({ field: "in", from: visit.checkedInAt, to: nextIn });
+    if (nextOut !== (visit.checkedOutAt ?? null)) changes.push({ field: "out", from: visit.checkedOutAt ?? null, to: nextOut });
+    if (!changes.length) throw fail(400, "Those are the times on record already.");
+    const t = Date.now();
+    db.transaction(() => {
+      raw.prepare("UPDATE visits SET checked_in_at = ? WHERE id = ?").run(nextIn, visit.id);
+      if (nextOut !== null && !visit.checkedOutAt) raw.prepare("UPDATE visits SET checked_out_at = ?, checkout_method = 'staff', checked_out_by = ? WHERE id = ?").run(nextOut, by, visit.id);
+      else if (nextOut !== null) raw.prepare("UPDATE visits SET checked_out_at = ? WHERE id = ?").run(nextOut, visit.id);
+      for (const c of changes) raw.prepare("INSERT INTO visit_time_changes (visit_id, field, from_at, to_at, reason, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(visit.id, c.field, c.from, c.to, why, by, t);
+    });
+    const timeZone = raw.prepare("SELECT time_zone FROM sites WHERE id = ?").get(visit.siteId)?.time_zone || null;
+    return { visit: getVisit(visit.id), changes, reason: why, timeZone };
+  }
+
+  /** A visit's corrected times, newest first: { field, from, to, reason, by, at }. */
+  function timeChanges(visitId) {
+    return raw.prepare("SELECT * FROM visit_time_changes WHERE visit_id = ? ORDER BY changed_at DESC, id DESC").all(visitId)
+      .map((r) => ({ field: r.field, from: r.from_at, to: r.to_at, reason: r.reason, by: r.changed_by, at: r.changed_at }));
+  }
+
   /** Open visits at a site with their visitors' names, for the kiosk's check-out. */
   function openAtSite(siteId) {
     return listVisits({ siteId, status: "open", limit: 5000 }).visits;
@@ -652,6 +703,8 @@ function createVisitors({ db, fields }) {
   }
 
   return {
+    correctTimes,
+    timeChanges,
     verifyId, setStage, updateVisit, setReservedBadge, companyOfPerson, companyHere,
     list,
     get,

@@ -203,7 +203,21 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
   router.get("/api/visits/:id", readVisitors, (req, res) => {
     const visit = visitors.getVisit(positiveInt(req.params.id), { sites: req.ctx.sites });
     if (!visit) throw fail(404, "No such visit.");
-    res.json({ visit: visitsOut(req.ctx, [visit])[0] });
+    res.json({ visit: visitsOut(req.ctx, [visit])[0], timeChanges: visitors.timeChanges(visit.id) });
+  });
+
+  /**
+   * Corrects when a visitor arrived or left: { checkedInAt, checkedOutAt (timestamps), reason }.
+   * Each correction is kept with the visit, with its reason, and in the audit log.
+   */
+  router.put("/api/visits/:id/times", editVisitors, (req, res) => {
+    const body = req.body || {};
+    const { visit, changes, reason, timeZone } = visitors.correctTimes(positiveInt(req.params.id), { checkedInAt: body.checkedInAt, checkedOutAt: body.checkedOutAt, reason: body.reason, by: staffName(req), sites: req.ctx.sites });
+    // In the site's own time, as the desk there sees it.
+    const fmt = (ms) => (ms ? new Intl.DateTimeFormat("en-US", { timeZone: timeZone || undefined, dateStyle: "medium", timeStyle: "short" }).format(ms) : "not checked out");
+    const what = changes.map((c) => `${c.field === "in" ? "arrived" : "left"} ${fmt(c.from)} -> ${fmt(c.to)}`).join("; ");
+    auditFrom(req, "visit.times_corrected", `${visit.visitor.firstName} ${visit.visitor.lastName}`, `${visit.siteName}, visit ${visit.id}: ${what}. Reason: ${reason}`);
+    res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0], timeChanges: visitors.timeChanges(visit.id) });
   });
 
   router.post("/api/visits/:id/badge-not-needed", giveBadges, (req, res) => {
@@ -216,8 +230,8 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
     const { visits } = visitors.listVisits({ ...visitFilter(req), limit: 1000000 });
     const iso = (ms) => (ms ? new Date(ms).toISOString() : "");
     const csv = toCsv(
-      ["checked_in", "checked_out", "site", "first_name", "last_name", "organization", "company", "host", "purpose", "checked_in_by", "checkout", "checked_out_by"],
-      visits.map((v) => [iso(v.checkedInAt), iso(v.checkedOutAt), v.siteName, v.visitor.firstName, v.visitor.lastName, v.visitor.organization, v.companyName, v.hostName, v.purpose, v.checkedInBy, v.checkoutMethod, v.checkedOutBy])
+      ["checked_in", "checked_out", "site", "first_name", "last_name", "organization", "company", "host", "purpose", "checked_in_by", "checkout", "checked_out_by", "times_corrected"],
+      visits.map((v) => [iso(v.checkedInAt), iso(v.checkedOutAt), v.siteName, v.visitor.firstName, v.visitor.lastName, v.visitor.organization, v.companyName, v.hostName, v.purpose, v.checkedInBy, v.checkoutMethod, v.checkedOutBy, v.timesCorrected])
     );
     auditFrom(req, "export.visits", `${visits.length} visits`);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");

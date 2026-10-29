@@ -169,6 +169,13 @@ The design and decisions are in [PLAN.md](PLAN.md).
   visitor page, Reserved badge). Check-in tells the desk to hand them that badge; it goes
   back into stock when they leave and stays theirs. Nobody else can be given it.
 - **Visit log**: every visit with filters and a CSV export (administrators).
+- **Correcting arrival and departure times**: when a visitor didn't check in or out as they
+  should have, **Correct times** on a visit (in the Visit log, or a visitor's visits) changes
+  when they arrived and left, for staff who check visitors in. A reason is required. Each
+  correction is kept with the visit (who, when, the times before and after, and why: the
+  Corrected link shows them) and in the audit log, and the CSV export counts them. Giving a
+  visit still open a time they left checks them out then; a visit that has ended can't be
+  opened again. Times can't be in the future, nor leaving before arriving.
 - **End of day**: at each site's end-of-day time, in its own time zone, anyone still checked
   in is checked out automatically, at that time, even if the server was down then.
 - **Retention**: Settings > Visits sets how many months of visits to keep (off by default),
@@ -441,8 +448,11 @@ Home.
 expected. Each guest shows as expected, arrived but not yet through the desk, here (since
 when) or left. Staff who give badges out can pick the visitor badge to hand each guest
 (Badge column): check-in then shows that badge. Guests are picked from
-visitors on record or added as new ones (the app says when someone of that name is already
-on record), and are linked to the event's company and host, so the kiosk recognizes them.
+visitors on record, or typed in under Someone new: pressing Done (or Enter, to add another)
+looks the name and email up, offers the visitor on record when there is one, and otherwise
+asks before adding them as a new visitor. Guests are linked to the event's company and host,
+so the kiosk recognizes them. **Check in**, here or on Home's Expected today card, starts the
+check-in with the event's company, host and purpose (its name) filled in.
 At the kiosk an expected guest is offered their event's company and host first; checking
 in, at the kiosk or the desk, marks them arrived. The navigation counts guests expected
 today who haven't arrived.

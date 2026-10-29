@@ -404,7 +404,10 @@ async function editEvent(event, scope = "one") {
 
 /**
  * Adds guests to an event: someone on record (search), or someone new; with scope
- * "following", to its later dates too. Resolves true if any were added.
+ * "following", to its later dates too. A name typed under Someone new is looked up when Done
+ * (or Enter) is pressed: someone on record by that name or email is offered, and only someone
+ * on record nowhere is added as a new visitor, once the desk says so. Resolves true if any
+ * were added.
  */
 async function addGuestDialog(event, scope = "one") {
   let added = 0;
@@ -416,7 +419,8 @@ async function addGuestDialog(event, scope = "one") {
     try {
       await api(`/api/events/${event.id}/guests`, { method: "POST", body: { ...body, scope } });
       added += 1;
-      say(`${name} added. Add another, or close.`);
+      say(`${name} added. Add another, or press Done.`);
+      return true;
     } catch (error) {
       // A likely duplicate: say who is on record, and offer to add a new one anyway.
       if (error.status === 409 && body.visitor && !body.addAnyway && (await confirmDialog(`${error.message}`, { title: "Already on record?", confirmLabel: "Add a new visitor anyway" }))) {
@@ -424,6 +428,7 @@ async function addGuestDialog(event, scope = "one") {
       }
       say(error.status === 409 && body.visitor ? "Not added. Search for them above to add the one on record." : error.message, "error");
     }
+    return false;
   };
   const run = debounce(async () => {
     const q = search.value.trim();
@@ -434,18 +439,60 @@ async function addGuestDialog(event, scope = "one") {
       results.append(h("button", { type: "button", class: "pick-row", onclick: () => add({ visitorId: v.id }, visitorName(v)) },
         h("strong", { text: visitorName(v) }), " ", h("span", { class: "muted small-text", text: [v.organization, (v.companies || []).map((c) => c.companyName).join(", ")].filter(Boolean).join(" · ") })));
     }
-    if (!visitors.length) results.append(h("p", { class: "muted", text: "Nobody by that name on record; add them as new below." }));
+    if (!visitors.length) results.append(h("p", { class: "muted", text: "Nobody by that name on record; type them in under Someone new." }));
   }, 250);
   search.addEventListener("input", run);
   const first = h("input", { placeholder: "First name", "aria-label": "First name" });
   const last = h("input", { placeholder: "Last name", "aria-label": "Last name" });
   const org = h("input", { placeholder: "Their company (optional)", "aria-label": "Their company" });
   const email = h("input", { type: "email", placeholder: "Email (optional)", "aria-label": "Email" });
-  const addNew = h("button", { type: "button", class: "secondary", text: "Add as a new visitor", onclick: async () => {
-    if (!first.value.trim() || !last.value.trim()) return say("Enter their first and last name.", "error");
-    await add({ visitor: { firstName: first.value, lastName: last.value, organization: org.value, email: email.value } }, `${first.value.trim()} ${last.value.trim()}`);
-    if (message.className.includes("success")) for (const i of [first, last, org, email]) i.value = "";
-  } });
+  const typed = [first, last, org, email];
+  const lower = (s) => String(s || "").trim().toLowerCase();
+  /**
+   * The guest typed under Someone new, if any: added if they're on record (picked by the desk),
+   * else as a new visitor once the desk agrees. True when there's nothing left to add (nothing
+   * was typed, or they were added); false to stay, with something to fix or not added.
+   */
+  async function addTyped() {
+    if (!typed.some((i) => i.value.trim())) return true;
+    if (!first.value.trim() || !last.value.trim()) {
+      say("Enter their first and last name, or clear what you typed.", "error");
+      return false;
+    }
+    const name = `${first.value.trim()} ${last.value.trim()}`;
+    // On record already: the same name, or the same email.
+    const found = new Map();
+    for (const q of [name, email.value.trim()].filter(Boolean)) {
+      const { visitors } = await api(`/api/visitors?${new URLSearchParams({ q, limit: "20" })}`);
+      for (const v of visitors) {
+        if ((lower(`${v.firstName} ${v.lastName}`) === lower(name)) || (email.value.trim() && lower(v.email) === lower(email.value))) found.set(v.id, v);
+      }
+    }
+    let ok;
+    if (found.size) {
+      const list = [...found.values()].slice(0, 4);
+      const choice = await openDialog({
+        title: `${name} is on record`,
+        body: h("div", { class: "stack" },
+          h("p", { text: list.length === 1 ? "Add the visitor on record to the event, or add someone new with the same name?" : "Choose the one on record to add to the event, or add someone new with the same name." }),
+          h("ul", { class: "plain-list" }, list.map((v) => h("li", {}, h("strong", { text: visitorName(v) }), " ", h("span", { class: "muted small-text", text: [v.organization, v.email, (v.companies || []).map((c) => c.companyName).join(", ")].filter(Boolean).join(" · ") }))))),
+        actions: [{ label: "Back", value: null }, { label: "Add someone new", value: "new" },
+          ...list.map((v) => ({ label: list.length === 1 ? `Add ${visitorName(v)}` : `Add ${visitorName(v)}${v.organization ? ` (${v.organization})` : ""}`, kind: "primary", value: v.id }))]
+      });
+      if (!choice) return false;
+      ok = choice === "new"
+        ? await add({ visitor: { firstName: first.value, lastName: last.value, organization: org.value, email: email.value }, addAnyway: true }, name)
+        : await add({ visitorId: choice }, visitorName(found.get(choice)));
+    } else {
+      if (!(await confirmDialog(`${name} isn't on record. Add them as a new visitor and a guest of ${event.title}?`, { title: "Add a new visitor?", confirmLabel: "Add new visitor" }))) return false;
+      ok = await add({ visitor: { firstName: first.value, lastName: last.value, organization: org.value, email: email.value } }, name);
+    }
+    if (ok) for (const i of typed) i.value = "";
+    return ok;
+  }
+  // Enter in Someone new adds them and stays, for another; Done adds them and closes.
+  for (const i of typed) i.addEventListener("keydown", async (e) => { if (e.key === "Enter") { e.preventDefault(); if (await addTyped()) first.focus(); } });
+  let dlg = null;
   await openDialog({
     title: `Guests for ${event.title}${event.seriesId ? scope === "following" ? `, ${eventDay(event.date)} and later dates` :`, ${eventDay(event.date)} only` : ""}`,
     wide: true,
@@ -454,10 +501,9 @@ async function addGuestDialog(event, scope = "one") {
       h("h4", { text: "On record" }), search, results,
       h("h4", { text: "Someone new" }),
       h("div", { class: "form-grid" }, first, last, org, email),
-      addNew,
-      h("p", { class: "muted small-text", text: "New guests are added as visitors, linked to the event's company and host, so the kiosk recognizes them on the day." })),
-    actions: [{ label: "Done", kind: "primary", value: true }],
-    onOpen: () => setTimeout(() => search.focus(), 50)
+      h("p", { class: "muted small-text", text: "Type their name and press Done (or Enter, to add another after). If they're on record already you can add that visitor; otherwise you're asked before they're added as a new visitor, linked to the event's company and host, so the kiosk recognizes them on the day." })),
+    actions: [{ label: "Done", kind: "primary", close: false, onClick: async () => { if (await addTyped()) dlg.finish(true); } }],
+    onOpen: (d) => { dlg = d; setTimeout(() => search.focus(), 50); }
   });
   if (added) refreshCounts();
   return added > 0;

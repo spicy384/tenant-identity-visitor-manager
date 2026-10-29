@@ -83,12 +83,29 @@ const DASHBOARD_MODULES = {
       const order = { expected: 0, here: 1, left: 2 };
       guests.sort((a, b) => order[a.status] - order[b.status] || String(a.event.startTime || "").localeCompare(String(b.event.startTime || "")));
       const waiting = guests.filter((g) => g.status === "expected").length;
-      return { count: waiting, body: dashList(guests.map((g) => dashRow({
-        href: `#visitor/${g.visitorId}`,
-        main: `${g.firstName} ${g.lastName}`,
-        sub: [g.event.startTime, g.event.title, g.event.companyName].filter(Boolean).join(" · "),
-        right: h("span", { class: `badge ${g.status === "here" ? "ok" : g.status === "left" ? "muted" : "warn"}`, text: g.status === "here" ? "Here" : g.status === "left" ? "Left" : "Expected" })
-      })), events.length ? "Every guest has arrived." : "Nobody is expected today.", { more: "#expected" }) };
+      const status = (g) => h("span", { class: `badge ${g.status === "here" ? "ok" : g.status === "left" ? "muted" : "warn"}`, text: g.status === "here" ? "Here" : g.status === "left" ? "Left" : "Expected" });
+      // Checked in from here as on the Expected page: the event gives the company, host and purpose.
+      const checkIn = async (e, g) => {
+        e.stopPropagation();
+        e.currentTarget.disabled = true;
+        try {
+          const { visitor } = await api(`/api/visitors/${g.visitorId}`);
+          if (await checkInWizard({ visitor, event: g.event })) loadDashboard();
+        } catch (error) {
+          toast(error.message, "error");
+        } finally {
+          e.target.disabled = false;
+        }
+      };
+      return { count: waiting, body: dashList(guests.map((g) => {
+        const sub = [g.event.startTime, g.event.title, g.event.companyName].filter(Boolean).join(" · ");
+        // A row with a button can't be a link: the rest of the row opens the visitor.
+        if (g.status === "expected" && canEditVisitors()) {
+          return dashRow({ onclick: () => { location.hash = `#visitor/${g.visitorId}`; }, main: `${g.firstName} ${g.lastName}`, sub,
+            right: h("button", { type: "button", class: "primary small", text: "Check in", onclick: (e) => checkIn(e, g) }) });
+        }
+        return dashRow({ href: `#visitor/${g.visitorId}`, main: `${g.firstName} ${g.lastName}`, sub, right: status(g) });
+      }), events.length ? "Every guest has arrived." : "Nobody is expected today.", { more: "#expected" }) };
     }
   },
   review: {

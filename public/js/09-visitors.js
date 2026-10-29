@@ -299,7 +299,7 @@ async function openVisitor(id, onChange = () => {}) {
     editable && canEditVisitorLinks() ? h("button", { type: "button", class: "secondary small", text: "Add a company", onclick: async () => { if (await addVisitorLink(visitor)) dlgRef?.finish("refresh"); } }) : null);
   const visitsBlock = h("div", { class: "stack" },
     h("h4", { text: `Visits${visitCount > visits.length ? ` (latest ${visits.length} of ${visitCount})` : ` (${visitCount})`}` }),
-    visitsTable(visits, { showVisitor: false }));
+    visitsTable(visits, { showVisitor: false, onChange: () => dlgRef?.finish("refresh") }));
   let dlgRef = null;
   const body = h("div", { class: "detail" },
     h("p", {}, visitorBadges({ ...visitor, clearanceStatus: undefined }), visitor.source === "kiosk" && visitor.verified === false ? h("span", { class: "muted small-text", text: " Registered themselves at a kiosk. Check the details, merge them with an existing visitor, or mark them checked." }) : null),
