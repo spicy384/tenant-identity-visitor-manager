@@ -61,12 +61,13 @@ const IMPORT_FIELDS = {
     { key: "status", label: "Status", hint: "active, lost or retired", names: ["status", "state"] },
     { key: "notes", label: "Notes", names: ["notes", "note", "comments", "remarks"] }
   ],
-  // Clearances validated elsewhere, onto people already in the directory (Security).
+  // Clearances validated elsewhere, onto people and visitors already on record (Security).
   clearances: [
-    { key: "name", label: "Name", hint: "\"First Last\" or \"Last, First\". Or match First name and Last name instead.", names: ["name", "fullname", "personname", "employeename", "employee", "person", "lastfirst", "firstlast"] },
+    { key: "name", label: "Name", hint: "\"First Last\", \"Last, First\" or \"Last First\". Or match First name and Last name instead.", names: ["name", "fullname", "personname", "employeename", "employee", "person", "lastfirst", "firstlast"] },
     { key: "first_name", label: "First name", names: ["firstname", "first", "givenname", "forename", "fname"] },
     { key: "last_name", label: "Last name", names: ["lastname", "surname", "familyname", "last", "lname"] },
-    { key: "company", label: "Company", hint: "Only needed to tell apart people with the same name.", names: ["company", "companyname", "firm", "organization", "employer", "tenant"] },
+    { key: "kind", label: "Person or visitor", hint: "person or visitor. Empty looks at both. Choose \"The same for every row\" for a file of one or the other.", names: ["kind", "personorvisitor", "persontype", "recordtype", "visitororperson"] },
+    { key: "company", label: "Company", hint: "Only needed to tell apart two with the same name: a person's company, or a visitor's own company or the tenant they visit.", names: ["company", "companyname", "firm", "organization", "employer", "tenant"] },
     { key: "email", label: "Email", hint: "Found by email first, when there is one.", names: ["email", "emailaddress", "mail", "workemail"] },
     { key: "level", label: "Clearance level", required: true, hint: "A level's name, or Uncleared.", names: ["level", "clearance", "clearancelevel", "lvl", "classification"] },
     { key: "validated", label: "Date validated", hint: "YYYY-MM-DD or M/D/YYYY. Empty for today.", names: ["validated", "datevalidated", "validatedon", "validateddate", "validationdate", "dateofvalidation", "verified", "dateverified", "verifiedon", "date"] },
@@ -81,7 +82,7 @@ const IMPORT_KINDS = {
   companies: { label: "Companies", one: "company", many: "companies", may: () => canEditDirectory(), entity: "company", matched: "same name" },
   visitors: { label: "Visitors", one: "visitor", many: "visitors", may: () => canEditVisitors(), entity: "visitor", matched: "same email, or without one the same name" },
   badges: { label: "Badges", one: "badge", many: "badges", may: () => canManageBadges(), entity: null, matched: "same facility code and number" },
-  clearances: { label: "Clearances (people already here)", one: "clearance", many: "clearances", may: () => isSecurity(), entity: null, updated: "people validated", unchanged: "validated more recently here, left as they were" }
+  clearances: { label: "Clearances (people and visitors already here)", one: "clearance", many: "clearances", may: () => isSecurity(), entity: null, updated: "validated", unchanged: "validated more recently here, left as they were" }
 };
 
 const normalizeName = (s) => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -290,7 +291,7 @@ async function importDialog(kind) {
         companies: "A company with the same name is updated.",
         visitors: "A visitor with the same email (or, without one, the same name) is updated rather than added twice. Imported visitors count as checked by staff. Clearances aren't imported: Security validates them.",
         badges: "A badge with the same facility code and number is updated; a file that gives the same badge twice is refused. One that is out can't change its type, clearance level or whether it is temporary.",
-        clearances: "Each row validates the clearance of someone already in the directory; nobody is added. They're found by email, else by name (within the company, if there is a Company column), and validated on the date given, by you. Anyone validated more recently here is left as they are. A name that matches nobody, or more than one person, is a problem to fix."
+        clearances: "Each row validates the clearance of a person or visitor already on record; nobody is added. They're found by email, else by name in any order (only among people or visitors, or at a company, when those columns are given), and validated on the date given, by you. Anyone validated more recently here is left as they are. A name that matches nobody, or more than one, is a problem to fix."
       }[target]} Rows with nothing in them are passed over. Otherwise, if any row has a problem, nothing is imported and the problems are listed, unless you skip rows with problems.` }),
       message,
       h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary", text: "Back", onclick: () => { clearError(); stepFile(); } }), importBtn));
@@ -354,7 +355,7 @@ async function showSkippedRows(kind, result) {
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   };
-  // Clearances add nobody: they validate people already here.
+  // Clearances add nobody: they validate people and visitors already here.
   const done = kind === "clearances" ? `${result.updated} validated${result.unchanged ? `, ${result.unchanged} left as they were` : ""}` : `${result.added} added, ${result.updated} updated`;
   const summary = `${done}, ${result.skippedCount} ${result.skippedCount === 1 ? "row" : "rows"} skipped${result.blank ? `, ${result.blank} empty ${result.blank === 1 ? "row" : "rows"} passed over` : ""}.`;
   await openDialog({

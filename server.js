@@ -1007,8 +1007,10 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
   return { ...counts, ignored };
 }
 
-const CLEARANCE_COLUMNS = ["name", "first_name", "last_name", "company", "email", "level", "validated", "granted", "expires"];
+const CLEARANCE_COLUMNS = ["name", "first_name", "last_name", "kind", "company", "email", "level", "validated", "granted", "expires"];
 const NAME_SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv"]);
+// What the "Person or visitor" column may say.
+const HOLDER_KINDS = { person: "person", people: "person", tenant: "person", staff: "person", employee: "person", directory: "person", visitor: "visitor", visitors: "visitor", guest: "visitor" };
 
 /** A name's words, lowercase without accents or punctuation, leaving out initials and Jr, Sr, II... */
 function nameWords(name) {
@@ -1017,32 +1019,65 @@ function nameWords(name) {
 }
 
 /**
- * Imports clearances validated outside this system, onto people already in the directory (it
- * adds nobody): who (a name column, "First Last" or "Last, First", or first and last name
- * columns; a company or email to tell apart two people with the same name), the clearance
- * level (a level's name, or Uncleared), the date validated (empty: today), and when it was
- * granted and expires. Each is validated as Security would, on that date, by the person
- * importing; one validated more recently in the app is left as it is. Security only.
+ * Imports clearances validated outside this system, onto people and visitors already on record
+ * (it adds nobody): who (a name column, "First Last" or "Last, First" or in any order, or first
+ * and last name columns; whether a person or a visitor, a company or an email to tell apart two
+ * with the same name), the clearance level (a level's name, or Uncleared), the date validated
+ * (empty: today), and when it was granted and expires. Each is validated as Security would, on
+ * that date, by the person importing; one validated more recently in the app is left as it is.
+ * Security only.
  */
 function importClearances(req, rows, { where, from = "CSV", skipProblems = false } = {}) {
   checkImport(rows, ["level"]);
   const levels = clearance.levels();
   const by = req.user?.displayName || req.user?.username || "import";
   const todayStr = clearanceToday();
-  // Everyone in the directory by the name they're known by: first and last, preferred and last.
-  const everyone = db.raw.prepare(`SELECT p.id, p.first_name, p.last_name, p.preferred_name, p.email, p.active, p.company_id, c.name AS company_name,
-    p.clearance_validated_at FROM people p JOIN companies c ON c.id = p.company_id`).all();
-  const byName = new Map();
-  const byShort = new Map();
-  const add = (map, key, p) => { if (key) map.set(key, [...(map.get(key) || []), p]); };
-  for (const p of everyone) {
-    for (const first of new Set([p.first_name, p.preferred_name].filter(Boolean))) {
-      const words = nameWords(`${first} ${p.last_name}`);
-      add(byName, words.join(" "), p);
-      add(byShort, words.length > 1 ? `${words[0]} ${words.at(-1)}` : null, p);
+  const lower = (v) => String(v ?? "").trim().toLowerCase();
+  // Everyone on record: people (by first and last name, and preferred and last) and visitors.
+  // company: a person's company, a visitor's own organization; tenants: the companies a
+  // visitor visits, by name, which a Company column may name too.
+  const linked = new Map();
+  for (const l of db.raw.prepare("SELECT l.visitor_id, c.name FROM visitor_links l JOIN companies c ON c.id = l.company_id").all()) linked.set(l.visitor_id, [...(linked.get(l.visitor_id) || []), lower(l.name)]);
+  const everyone = [
+    ...db.raw.prepare(`SELECT p.id, p.first_name, p.last_name, p.preferred_name, p.email, p.active, c.name AS company, p.clearance_validated_at
+      FROM people p JOIN companies c ON c.id = p.company_id`).all().map((r) => ({ ...r, kind: "person", tenants: [] })),
+    ...db.raw.prepare("SELECT id, first_name, last_name, NULL AS preferred_name, email, 1 AS active, organization AS company, clearance_validated_at FROM visitors").all()
+      .map((r) => ({ ...r, kind: "visitor", tenants: linked.get(r.id) || [] }))
+  ];
+  const byWord = new Map();
+  for (const r of everyone) {
+    for (const first of new Set([r.first_name, r.preferred_name].filter(Boolean))) {
+      const entry = { r, words: new Set(nameWords(`${first} ${r.last_name}`)) };
+      for (const w of entry.words) byWord.set(w, [...(byWord.get(w) || []), entry]);
     }
   }
-  const unique = (list) => [...new Map(list.map((p) => [p.id, p])).values()];
+  const visible = (r) => Boolean(r.kind === "person" ? directory.getPerson(r.id, { sites: req.ctx.sites }) : visitors.get(r.id, { sites: req.ctx.sites }));
+  const unique = (list) => [...new Map(list.map((r) => [`${r.kind}:${r.id}`, r])).values()];
+  const has = (set, words) => words.every((w) => set.has(w));
+  /**
+   * Who a name in the file is: the same words in any order ("Smith John", "Smith, John"); else
+   * everyone whose name is all in it (it has a rank, or a middle name they don't go by); else,
+   * for two words or more, everyone it is all in (their record has a middle name). Also the
+   * names nearest it, for saying who was meant when nobody is.
+   */
+  function called(words, fits) {
+    const pool = [...new Set(words.flatMap((w) => byWord.get(w) || []))].filter((e) => fits(e.r));
+    const file = new Set(words);
+    for (const test of [
+      (e) => e.words.size === file.size && has(e.words, words),
+      (e) => e.words.size >= 2 && has(file, [...e.words]),
+      (e) => words.length >= 2 && has(e.words, words)
+    ]) {
+      const found = unique(pool.filter(test).map((e) => e.r));
+      if (found.length) return { found, near: [] };
+    }
+    // Nearest: sharing the most words, at least one of them not a short one.
+    const shared = (e) => [...e.words].filter((w) => file.has(w) && w.length > 2).length;
+    const most = Math.max(0, ...pool.map(shared));
+    return { found: [], near: most ? unique(pool.filter((e) => shared(e) === most).map((e) => e.r)) : [] };
+  }
+  const nameOf = (r) => `${r.first_name} ${r.last_name}`;
+  const nameAt = (r) => `${nameOf(r)} (${r.kind === "visitor" ? `visitor${r.company ? `, ${r.company}` : ""}` : r.company})`;
   const seen = new Map();
   const counts = importRows(rows, (row, i) => {
     const shown = String(row.name || [row.first_name, row.last_name].filter(Boolean).join(" ")).trim();
@@ -1053,39 +1088,45 @@ function importClearances(req, rows, { where, from = "CSV", skipProblems = false
     if (!row.level || !String(row.level).trim()) throw fail(400, `No clearance level for ${shown}.`);
     let level = null;
     if (!isUnclearedName(row.level)) {
-      level = levels.find((l) => l.name.toLowerCase() === String(row.level).trim().toLowerCase());
+      level = levels.find((l) => lower(l.name) === lower(row.level));
       if (!level) throw fail(400, `There is no clearance level called "${row.level}" (${[...levels.map((l) => l.name), UNCLEARED].join(", ")}).`);
     }
     const validated = row.validated ? importDate(row.validated, "the date validated") : todayStr;
     if (validated > todayStr) throw fail(400, `The date validated, ${validated}, is still to come.`);
     const granted = row.granted ? importDate(row.granted, "granted") : null;
     const expires = row.expires ? importDate(row.expires, "expires") : null;
+    const kind = row.kind ? HOLDER_KINDS[lower(row.kind)] : null;
+    if (row.kind && !kind) throw fail(400, `"${row.kind}" isn't person or visitor.`);
 
-    let company = null;
-    if (row.company) {
-      company = directory.findCompanyByName(row.company);
-      if (!company || !directory.getCompany(company.id, { sites: req.ctx.sites })) throw fail(400, `There is no company called "${row.company}" at your sites.`);
-    }
-    const fits = (p) => (!company || p.company_id === company.id) && Boolean(directory.getPerson(p.id, { sites: req.ctx.sites }));
-    let found = row.email ? everyone.filter((p) => p.email && p.email.toLowerCase() === String(row.email).trim().toLowerCase()).filter(fits) : [];
-    if (!found.length) found = unique(byName.get(words.join(" ")) || []).filter(fits);
-    if (!found.length && words.length > 1) found = unique(byShort.get(`${words[0]} ${words.at(-1)}`) || []).filter(fits);
+    const company = lower(row.company);
+    const fits = (r) => (!kind || r.kind === kind) && (!company || lower(r.company) === company || r.tenants.includes(company)) && visible(r);
+    let found = row.email ? everyone.filter((r) => r.email && lower(r.email) === lower(row.email)).filter(fits) : [];
+    let near = [];
+    if (!found.length) ({ found, near } = called(words, fits));
     // People who have left only when nobody current has the name.
-    if (found.some((p) => p.active)) found = found.filter((p) => p.active);
-    const at = company ? ` at ${company.name}` : "";
-    if (!found.length) throw fail(400, `Nobody called "${shown}" is in the directory${at}. Add them first, or check how the name is written.`);
-    if (found.length > 1) throw fail(400, `${found.length} people are called "${shown}"${at} (${[...new Set(found.map((p) => p.company_name))].join(", ")}); add a Company or Email column to tell them apart.`);
-    const person = found[0];
-    const name = `${person.first_name} ${person.last_name}`;
-    if (seen.has(person.id)) throw fail(400, `${name}${shown.toLowerCase() === name.toLowerCase() ? "" : ` ("${shown}")`} is in the file already, on ${seen.get(person.id).toLowerCase()}.`);
-    seen.set(person.id, where(i));
+    if (found.some((r) => r.active)) found = found.filter((r) => r.active);
+    const place = kind === "visitor" ? "among the visitors" : kind === "person" ? "in the directory" : "among the people or visitors";
+    const at = row.company ? ` at ${String(row.company).trim()}` : "";
+    if (!found.length) {
+      // Someone else the other columns rule out: say so, rather than validate someone the file may not mean.
+      const elsewhere = kind || company ? called(words, visible).found : [];
+      if (elsewhere.length) throw fail(400, `Nobody called "${shown}"${at} is ${place}; on record: ${elsewhere.slice(0, 3).map(nameAt).join(", ")}. Check the ${[kind ? "Person or visitor" : null, company ? "Company" : null].filter(Boolean).join(" and ")} column, or leave it out.`);
+      const nearest = near.length && near.length <= 3 ? ` The nearest: ${near.map(nameAt).join(", ")}.` : "";
+      throw fail(400, `Nobody called "${shown}"${at} is ${place}.${nearest} Add them first, or check how the name is written.`);
+    }
+    if (found.length > 1) throw fail(400, `${found.length} are called "${shown}"${at}: ${found.slice(0, 4).map(nameAt).join(", ")}${found.length > 4 ? ", ..." : ""}. Add a Person or visitor, Company or Email column to tell them apart.`);
+    const holder = found[0];
+    const name = nameOf(holder);
+    const key = `${holder.kind}:${holder.id}`;
+    if (seen.has(key)) throw fail(400, `${name}${lower(shown) === lower(name) ? "" : ` ("${shown}")`} is in the file already, on ${seen.get(key).toLowerCase()}.`);
+    seen.set(key, where(i));
     // Validated more recently here than the file says: left as it is.
-    if (person.clearance_validated_at && clearanceToday(undefined, person.clearance_validated_at) > validated) return "unchanged";
+    if (holder.clearance_validated_at && clearanceToday(undefined, holder.clearance_validated_at) > validated) return "unchanged";
     const [y, m, d] = validated.split("-").map(Number);
     // Midday on the day validated, so the day reads the same in every time zone nearby.
     const validatedAt = validated === todayStr ? Date.now() : new Date(y, m - 1, d, 12).getTime();
-    clearance.validate({ kind: "person", id: person.id, levelId: level?.id ?? null, granted, expires, by, validatedAt });
-    auditFrom(req, "clearance.validate", name, `person; ${level ? level.name : UNCLEARED}${expires ? `, expires ${expires}` : ""}; validated ${validated}, imported from ${from}`);
+    clearance.validate({ kind: holder.kind, id: holder.id, levelId: level?.id ?? null, granted, expires, by, validatedAt });
+    auditFrom(req, "clearance.validate", name, `${holder.kind}; ${level ? level.name : UNCLEARED}${expires ? `, expires ${expires}` : ""}; validated ${validated}, imported from ${from}`);
     return "updated";
   }, where, "imported", { skipProblems });
   const ignored = Object.keys(rows[0]).filter((c) => !CLEARANCE_COLUMNS.includes(c));

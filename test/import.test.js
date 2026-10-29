@@ -262,7 +262,9 @@ async function main() {
   token = (await manager.upload("/api/import/read?name=dunn.csv", Buffer.from("First,Last,Firm\nDee,Dunn,Dunn Partners\n"))).data.token;
   await manager.post(`/api/import/${token}/run`, { table: "CSV", target: "people", mapping: { ...messyMap, site: { value: SITE_NAME } }, createCompanies: true });
   const cleared = 'Name,Clearance,Date Validated\n"Able, Ann",Secret,3/1/2025\nKay Q. Kiosk,TS,2025-02-10\nNobody Here,Secret,2025-01-01\nDee Dunn,Secret,2025-01-01\nLee Lobby,Top Banana,2025-01-01\nEve Ever,Secret,2099-01-01\n';
-  const clearMap = { name: { column: "Name" }, level: { column: "Clearance" }, validated: { column: "Date Validated" } };
+  const clearMap = { name: { column: "Name" }, kind: { value: "person" }, level: { column: "Clearance" }, validated: { column: "Date Validated" } };
+  // Files with Name and Level columns, of people or visitors.
+  const anyMap = { name: { column: "Name" }, level: { column: "Level" } };
   // Each lets go of its file after (the server holds only a few at once).
   const clearRun = async (who, text, extra = {}, mapping = clearMap) => {
     const read = await who.upload("/api/import/read?name=cleared.csv", Buffer.from(text, "utf8"));
@@ -274,7 +276,7 @@ async function main() {
   check("clearances: only Security imports them", refused.every((s) => s === 403), refused.join());
   r = await clearRun(security, cleared);
   check("clearances: names that match nobody, or two people, stop the lot, each said", r.status === 400
-    && /Line 4: Nobody called "Nobody Here" is in the directory/.test(r.data.error) && /Line 5: 2 people are called "Dee Dunn" \(Acme Corp, Dunn Partners\); add a Company or Email column/.test(r.data.error)
+    && /Line 4: Nobody called "Nobody Here" is in the directory. Add them first/.test(r.data.error) && /Line 5: 2 are called "Dee Dunn": Dee Dunn \(Acme Corp\), Dee Dunn \(Dunn Partners\)\. Add a Person or visitor, Company or Email column/.test(r.data.error)
     && /Line 6: There is no clearance level called "Top Banana"/.test(r.data.error) && /Line 7: The date validated, 2099-01-01, is still to come/.test(r.data.error), r.data.error);
   const personAs = async (who, q) => (await who.get(`/api/people?q=${encodeURIComponent(q)}`)).data.people[0];
   check("clearances: and nothing changed", !(await personAs(security, "Able")).clearanceValidatedAt);
@@ -300,6 +302,27 @@ async function main() {
   const lee = await personAs(security, "Lobby");
   check("clearances: Uncleared, validated today", r.status === 200 && !lee.clearanceLevelName && lee.clearanceStatus === "validated" && localDay(lee.clearanceValidatedAt) === localDay(Date.now()));
   check("clearances: nobody was added", (await admin.get("/api/people?q=Nobody")).data.total === 0);
+
+  // Visitors too, by name in any order; a person and a visitor with the same name told apart.
+  await desk.post("/api/visitors", { firstName: "Vera", lastName: "Visitor", organization: "Contoso" });
+  await desk.post("/api/visitors", { firstName: "Ann", lastName: "Able", organization: "Elsewhere Ltd" });
+  r = await clearRun(security, "Name,Level,Validated\nVisitor Vera,Secret,2025-05-05\n", {}, { ...anyMap, validated: { column: "Validated" } });
+  const vera = (await security.get("/api/visitors?q=Vera")).data.visitors[0];
+  check("clearances: a visitor, written last name first without a comma", r.status === 200 && r.data.updated === 1 && vera.clearanceLevelName === "Secret" && localDay(vera.clearanceValidatedAt) === "2025-05-05", JSON.stringify([r.data, vera]));
+  check("clearances: the visitor's validation in the audit log", (await admin.get("/api/audit?action=clearance.validate")).data.entries.some((e) => e.target === "Vera Visitor" && /^visitor; Secret/.test(e.detail)));
+  r = await clearRun(security, "Name,Level\nAnn Able,TS\n", {}, anyMap);
+  check("clearances: a person and a visitor with the same name aren't guessed between", r.status === 400 && /2 are called "Ann Able": Ann Able \(Acme Corp\), Ann Able \(visitor, Elsewhere Ltd\)/.test(r.data.error), r.data.error);
+  r = await clearRun(security, "Name,Kind,Level\nAnn Able,Visitor,TS\n", {}, { ...anyMap, kind: { column: "Kind" } });
+  const annVisitor = (await security.get("/api/visitors?q=Able")).data.visitors[0];
+  check("clearances: a Person or visitor column tells them apart", r.status === 200 && annVisitor.clearanceLevelName === "TS" && (await personAs(security, "Able")).clearanceLevelName === "Secret", JSON.stringify(r.data));
+  r = await clearRun(security, "Name,Company,Level\nAnn Able,Elsewhere Ltd,Uncleared\n", {}, { ...anyMap, company: { column: "Company" } });
+  check("clearances: or a visitor's own company", r.status === 200 && r.data.updated === 1 && !(await security.get("/api/visitors?q=Able")).data.visitors[0].clearanceLevelName);
+  r = await clearRun(security, "Name,Kind,Level\nVera Visitor,person,TS\n", {}, { ...anyMap, kind: { column: "Kind" } });
+  check("clearances: ruled out by a column, it says who is on record", r.status === 400 && /Nobody called "Vera Visitor" is in the directory; on record: Vera Visitor \(visitor, Contoso\)\. Check the Person or visitor column/.test(r.data.error), r.data.error);
+  r = await clearRun(security, "Name,Level\nVera Vistor,TS\n", {}, anyMap);
+  check("clearances: a misspelled name says the nearest", r.status === 400 && /The nearest: Vera Visitor \(visitor, Contoso\)/.test(r.data.error), r.data.error);
+  r = await clearRun(security, "Name,Level\nSgt Kay Kiosk,TS\n", {}, { ...anyMap, kind: { value: "person" } });
+  check("clearances: a rank in front still finds them", r.status === 200 && r.data.unchanged + r.data.updated === 1, JSON.stringify(r.data));
 
   // --- never on disk ------------------------------------------------------------------------------------
   const written = [];

@@ -773,15 +773,18 @@ A company's site can come from one column (a site's name) and its suite from ano
   and so is a number in scientific notation (1.23457E+11: Excel did that, and the real number is
   lost; format the column as Text).
 - **Clearances** (Security only, from **Import validated clearances** on Security > Clearance
-  queue): clearances already validated outside this system, onto people already in the
-  directory; nobody is added. Who: a Name column ("First Last" or "Last, First"), or first and
-  last name columns, with a company or email to tell apart people with the same name. Middle
-  names, initials and Jr/Sr needn't match what is on record. Then the clearance level (a level's
-  name, or Uncleared; required), the date validated (empty for today), and when it was granted
-  and expires. Each person is validated as Security would, on the date given, by the person
-  importing, and each is in the audit log. Someone validated more recently in the app is left
-  as they are. A name that matches nobody, or more than one person, or the same person twice,
-  is a problem row, listed with its line.
+  queue): clearances already validated outside this system, onto people and visitors already
+  on record; nobody is added. Who: a Name column, its words in any order ("First Last", "Last,
+  First", "Last First"), or first and last name columns. Middle names, initials, a rank in front
+  and Jr/Sr needn't match what is on record. To tell apart two with the same name: a Person or
+  visitor column (or one value for the whole file), a company (a person's company, or a
+  visitor's own company or the tenant they visit), or an email. Then the clearance level (a
+  level's name, or Uncleared; required), the date validated (empty for today), and when it was
+  granted and expires. Each is validated as Security would, on the date given, by the person
+  importing, and each is in the audit log; a visitor's re-check is due counting from that date.
+  Someone validated more recently in the app is left as they are. A name that matches nobody
+  (with the nearest names on record), or more than one, or the same one twice, is a problem row,
+  listed with its line.
 
 The CSV column names below are what a CSV file is matched to automatically, and what the CSV import
 API takes.
@@ -797,7 +800,7 @@ Companies: `name` (required); `sites` (`Harbor Point: Suite 100; Riverside`), `p
 `email`, `website`, `address`, `notes`, `active`, and custom field keys. A company with the same
 name is updated.
 
-Clearances: `level` (required); `name`, or `first_name` and `last_name`; `company`, `email`,
+Clearances: `level` (required); `name`, or `first_name` and `last_name`; `kind` (person or visitor), `company`, `email`,
 `validated`, `granted`, `expires`.
 
 Companies may also give `site` and `suite` instead of `sites`. If any line has a problem, nothing
