@@ -1,6 +1,6 @@
 {
   "name": "identity-visitor-manager",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "private": true,
   "description": "Tenant directory (companies and people) and visitor check-in across one or more sites, with an encrypted database.",
   "main": "server.js",
