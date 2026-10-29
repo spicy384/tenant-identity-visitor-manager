@@ -310,6 +310,8 @@ async function openVisitor(id, onChange = () => {}) {
     reservedBadgeSection(visitor, () => dlgRef?.finish("refresh")),
     badgeSection("visitor", visitor.id),
     visitsBlock);
+  // Their visits not yet ended (one, unless they're at two sites at once).
+  const here = visits.filter((v) => !v.checkedOutAt);
   const actions = [];
   if (isAdmin()) actions.push({ label: "Delete", kind: "danger", value: "delete" });
   if (editable) {
@@ -317,7 +319,8 @@ async function openVisitor(id, onChange = () => {}) {
     actions.push({ label: visitor.blocked ? "Unblock" : "Block", value: "block" });
     if (visitor.verified === false) actions.push({ label: "Mark checked", value: "verify" });
     actions.push({ label: "Edit", value: "edit" });
-    actions.push({ label: "Check in", value: "checkin" });
+    // Here now: Check out instead of Check in.
+    actions.push(here.length ? { label: "Check out", value: "checkout" } : { label: "Check in", value: "checkin" });
   }
   actions.push({ label: "Close", kind: "primary", value: null });
   const result = await openDialog({ title: visitorName(visitor), body, wide: true, actions, onOpen: (d) => { dlgRef = d; } });
@@ -346,6 +349,13 @@ async function openVisitor(id, onChange = () => {}) {
     }
     if (result === "checkin") {
       if (await checkInWizard({ visitor })) onChange();
+      return again();
+    }
+    if (result === "checkout") {
+      for (const v of here) await api(`/api/visits/${v.id}/checkout`, { method: "POST", body: {} });
+      toast(`${visitorName(visitor)} checked out.`);
+      onChange();
+      refreshCounts();
       return again();
     }
     if (result === "delete") {

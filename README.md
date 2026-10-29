@@ -127,7 +127,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
   maintenance, not tied to a tenant) and a **citizenship** (U.S. citizen, or which country,
   picked from a list).
 - **In the building** lists everyone checked in (per site, with the header's site picker),
-  with check-out buttons, a desk check-in, and a print-friendly evacuation list.
+  with check-out buttons, a desk check-in, and a print-friendly evacuation list. A visitor's
+  own page offers **Check in**, or **Check out** while they're in the building.
 - **Visitors** lists everyone, with those who registered themselves at a kiosk marked "To
   check": staff confirm them, correct them, or merge them into an existing visitor. A visitor
   can be blocked: the kiosk then sends them to reception, and the desk needs a manager's say-so.
