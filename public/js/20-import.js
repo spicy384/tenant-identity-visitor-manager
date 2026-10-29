@@ -1,4 +1,4 @@
-// 20-import.js: importing people, companies, visitors or badges from an Access database (.accdb, .mdb) or a CSV
+// 20-import.js: importing people, companies, visitors, badges or validated clearances from an Access database (.accdb, .mdb) or a CSV
 // file. Choose the file (and, for Access, the table), match its columns to the app's fields
 // (suggested from their names), check a preview, then import. The server reads the file and
 // holds it for a few minutes only; the import itself has the same checks as before, and is
@@ -60,6 +60,18 @@ const IMPORT_FIELDS = {
     { key: "expires", label: "Expires", hint: "The date it expires (YYYY-MM-DD or M/D/YYYY); empty for none, or to leave an existing badge's as it is.", names: ["expires", "expiry", "expiration", "expirationdate", "expirydate", "expireson", "expdate", "validuntil", "validto", "enddate"] },
     { key: "status", label: "Status", hint: "active, lost or retired", names: ["status", "state"] },
     { key: "notes", label: "Notes", names: ["notes", "note", "comments", "remarks"] }
+  ],
+  // Clearances validated elsewhere, onto people already in the directory (Security).
+  clearances: [
+    { key: "name", label: "Name", hint: "\"First Last\" or \"Last, First\". Or match First name and Last name instead.", names: ["name", "fullname", "personname", "employeename", "employee", "person", "lastfirst", "firstlast"] },
+    { key: "first_name", label: "First name", names: ["firstname", "first", "givenname", "forename", "fname"] },
+    { key: "last_name", label: "Last name", names: ["lastname", "surname", "familyname", "last", "lname"] },
+    { key: "company", label: "Company", hint: "Only needed to tell apart people with the same name.", names: ["company", "companyname", "firm", "organization", "employer", "tenant"] },
+    { key: "email", label: "Email", hint: "Found by email first, when there is one.", names: ["email", "emailaddress", "mail", "workemail"] },
+    { key: "level", label: "Clearance level", required: true, hint: "A level's name, or Uncleared.", names: ["level", "clearance", "clearancelevel", "lvl", "classification"] },
+    { key: "validated", label: "Date validated", hint: "YYYY-MM-DD or M/D/YYYY. Empty for today.", names: ["validated", "datevalidated", "validatedon", "validateddate", "validationdate", "dateofvalidation", "verified", "dateverified", "verifiedon", "date"] },
+    { key: "granted", label: "Granted", hint: "When the clearance was granted, if known.", names: ["granted", "dategranted", "grantdate", "granteddate", "grantedon"] },
+    { key: "expires", label: "Expires", hint: "When the clearance expires, if it does.", names: ["expires", "expiry", "expiration", "expirationdate", "expirydate", "expireson", "expdate"] }
   ]
 };
 
@@ -68,13 +80,15 @@ const IMPORT_KINDS = {
   people: { label: "People", one: "person", many: "people", may: () => canEditDirectory(), entity: "person", matched: "same company and email, or without one the same name" },
   companies: { label: "Companies", one: "company", many: "companies", may: () => canEditDirectory(), entity: "company", matched: "same name" },
   visitors: { label: "Visitors", one: "visitor", many: "visitors", may: () => canEditVisitors(), entity: "visitor", matched: "same email, or without one the same name" },
-  badges: { label: "Badges", one: "badge", many: "badges", may: () => canManageBadges(), entity: null, matched: "same facility code and number" }
+  badges: { label: "Badges", one: "badge", many: "badges", may: () => canManageBadges(), entity: null, matched: "same facility code and number" },
+  clearances: { label: "Clearances (people already here)", one: "clearance", many: "clearances", may: () => isSecurity(), entity: null, updated: "people validated", unchanged: "validated more recently here, left as they were" }
 };
 
 const normalizeName = (s) => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 /** The fields this account may import into: built-in ones it can change, and its custom fields. */
 function importTargets(kind) {
+  if (kind === "clearances") return IMPORT_FIELDS.clearances;
   // Badges have no field grid: every column, the level only for those who see clearance levels.
   if (kind === "badges") {
     const custom = (state.schema.badge || []).filter((f) => !f.builtIn && !f.recordOnly && f.access === "edit")
@@ -245,6 +259,7 @@ async function importDialog(kind) {
       clearError();
       const missing = fieldsHere.filter((f) => f.required && !(mapping[f.key]?.column || String(mapping[f.key]?.value || "").trim()));
       if (missing.length) return showError(new Error(`Match ${missing.map((f) => f.label).join(", ")} first.`));
+      if (target === "clearances" && !mapping.name && !(mapping.first_name && mapping.last_name)) return showError(new Error("Match Name, or First name and Last name, first."));
       importBtn.disabled = true;
       importBtn.textContent = "Importing…";
       try {
@@ -274,7 +289,8 @@ async function importDialog(kind) {
         people: "Someone already in the company with the same email (or, without one, the same name) is updated rather than added twice.",
         companies: "A company with the same name is updated.",
         visitors: "A visitor with the same email (or, without one, the same name) is updated rather than added twice. Imported visitors count as checked by staff. Clearances aren't imported: Security validates them.",
-        badges: "A badge with the same facility code and number is updated; a file that gives the same badge twice is refused. One that is out can't change its type, clearance level or whether it is temporary."
+        badges: "A badge with the same facility code and number is updated; a file that gives the same badge twice is refused. One that is out can't change its type, clearance level or whether it is temporary.",
+        clearances: "Each row validates the clearance of someone already in the directory; nobody is added. They're found by email, else by name (within the company, if there is a Company column), and validated on the date given, by you. Anyone validated more recently here is left as they are. A name that matches nobody, or more than one person, is a problem to fix."
       }[target]} Rows with nothing in them are passed over. Otherwise, if any row has a problem, nothing is imported and the problems are listed, unless you skip rows with problems.` }),
       message,
       h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary", text: "Back", onclick: () => { clearError(); stepFile(); } }), importBtn));
@@ -293,7 +309,7 @@ async function importDialog(kind) {
   if (read && !result) api(`/api/import/${read.token}`, { method: "DELETE" }).catch(() => {});
   if (!result) return false;
   if (result.skippedCount) await showSkippedRows(kind, result);
-  else if (result.updated || result.blank) await showImportCounts(kind, result);
+  else if (result.updated || result.blank || result.unchanged) await showImportCounts(kind, result);
   else toast(`${result.added} added.${result.ignored.length ? ` Columns left out: ${result.ignored.join(", ")}.` : ""}`);
   return true;
 }
@@ -304,7 +320,7 @@ async function importDialog(kind) {
  */
 async function showImportCounts(kind, result) {
   const many = IMPORT_KINDS[kind].many;
-  const total = result.added + result.updated + result.blank;
+  const total = result.added + result.updated + (result.unchanged || 0) + result.blank;
   const line = (n, text) => (n ? h("li", { text: `${n.toLocaleString()} ${text}` }) : null);
   await openDialog({
     title: `Imported ${many}`,
@@ -312,7 +328,8 @@ async function showImportCounts(kind, result) {
       h("p", { text: `The file had ${total.toLocaleString()} ${total === 1 ? "row" : "rows"}:` }),
       h("ul", {},
         line(result.added, "added"),
-        line(result.updated, `already here, and updated (${IMPORT_KINDS[kind].matched || "matched"})`),
+        line(result.updated, IMPORT_KINDS[kind].updated || `already here, and updated (${IMPORT_KINDS[kind].matched || "matched"})`),
+        line(result.unchanged, IMPORT_KINDS[kind].unchanged || "already here, left as they were"),
         line(result.blank, `empty in every column imported, passed over`)),
       result.ignored.length ? h("p", { class: "muted small-text", text: `Columns left out: ${result.ignored.join(", ")}.` }) : null),
     actions: [{ label: "OK", value: true, kind: "primary" }]
@@ -337,7 +354,9 @@ async function showSkippedRows(kind, result) {
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   };
-  const summary = `${result.added} added, ${result.updated} updated, ${result.skippedCount} ${result.skippedCount === 1 ? "row" : "rows"} skipped${result.blank ? `, ${result.blank} empty ${result.blank === 1 ? "row" : "rows"} passed over` : ""}.`;
+  // Clearances add nobody: they validate people already here.
+  const done = kind === "clearances" ? `${result.updated} validated${result.unchanged ? `, ${result.unchanged} left as they were` : ""}` : `${result.added} added, ${result.updated} updated`;
+  const summary = `${done}, ${result.skippedCount} ${result.skippedCount === 1 ? "row" : "rows"} skipped${result.blank ? `, ${result.blank} empty ${result.blank === 1 ? "row" : "rows"} passed over` : ""}.`;
   await openDialog({
     title: `Imported ${IMPORT_KINDS[kind].many}, with rows skipped`,
     wide: true,

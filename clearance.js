@@ -340,7 +340,8 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
    * granted and expiry dates, and when and by whom it was validated. Every open request for
    * them is closed and its digits wiped. Returns how many requests were closed.
    */
-  function validate({ kind, id, levelId = null, granted, expires, by }) {
+  /** `validatedAt`: when it was validated, for one checked earlier outside this system (default now). */
+  function validate({ kind, id, levelId = null, granted, expires, by, validatedAt = null }) {
     const h = holderRow(kind, id);
     if (!h) throw fail(404, "No such person or visitor.");
     const lvl = cleanLevelId(levelId);
@@ -351,7 +352,7 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     let closed = 0;
     db.transaction(() => {
       raw.prepare(`UPDATE ${table} SET clearance_level_id = ?, clearance_granted = ?, clearance_expires = ?, clearance_validated_at = ?, clearance_validated_by = ?, updated_at = ? WHERE id = ?`)
-        .run(lvl, lvl ? g : null, lvl ? e : null, now(), by, now(), h.id);
+        .run(lvl, lvl ? g : null, lvl ? e : null, validatedAt ?? now(), by, now(), h.id);
       closed = closeOpen(kind, h.id, "validated", by, lvl);
     });
     return { holder: h, level: lvl ? level(lvl) : null, closed };

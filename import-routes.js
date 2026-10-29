@@ -1,5 +1,5 @@
 /**
- * Importing people, companies, visitors or badges from an Access database (.accdb or .mdb) or a CSV file,
+ * Importing people, companies, visitors, badges or validated clearances from an Access database (.accdb or .mdb) or a CSV file,
  * with the file's columns matched to the app's fields. Three steps:
  *
  *   POST /api/import/read            the file itself (raw body): its tables, columns and
@@ -104,10 +104,12 @@ const TARGETS = {
   people: { may: (access, ctx) => access.canEditDirectory(ctx), refusal: "This account can't change the directory." },
   companies: { may: (access, ctx) => access.canEditDirectory(ctx), refusal: "This account can't change the directory." },
   visitors: { may: (access, ctx) => access.canEditVisitors(ctx), refusal: "This account can't change visitors." },
-  badges: { may: (access, ctx) => access.canManageBadges(ctx), refusal: "Only Security adds and changes badges." }
+  badges: { may: (access, ctx) => access.canManageBadges(ctx), refusal: "Only Security adds and changes badges." },
+  // Clearances validated elsewhere, onto people already here: only Security sets clearances.
+  clearances: { may: (access, ctx) => access.isSecurity(ctx) && access.canSeeClearances(ctx), refusal: "Only Security validates clearances." }
 };
 
-function createImportRoutes({ access, importCompanies, importPeople, importVisitors, importBadges, now = Date.now }) {
+function createImportRoutes({ access, importCompanies, importPeople, importVisitors, importBadges, importClearances, now = Date.now }) {
   // Reading a file needs the right to import something; running it, the right to import that.
   const mayImport = (req, res, next) => (Object.values(TARGETS).some((t) => t.may(access, req.ctx)) ? next() : res.status(403).json({ error: "This account can't import anything." }));
 
@@ -165,7 +167,7 @@ function createImportRoutes({ access, importCompanies, importPeople, importVisit
     const body = req.body || {};
     const table = tableOf(h, String(body.table || ""));
     const target = Object.prototype.hasOwnProperty.call(TARGETS, body.target) ? body.target : null;
-    if (!target) throw fail(400, "Import into people, companies, visitors or badges.");
+    if (!target) throw fail(400, "Import into people, companies, visitors, badges or clearances.");
     if (!TARGETS[target].may(access, req.ctx)) throw fail(403, TARGETS[target].refusal);
     const mapping = body.mapping && typeof body.mapping === "object" ? body.mapping : {};
     const known = new Set(table.columns.map((c) => c.name));
@@ -190,7 +192,8 @@ function createImportRoutes({ access, importCompanies, importPeople, importVisit
     const result = target === "companies" ? importCompanies(req, rows, { where, from, skipProblems })
       : target === "visitors" ? importVisitors(req, rows, { where, from, skipProblems })
         : target === "badges" ? importBadges(req, rows, { where, from, skipProblems })
-          : importPeople(req, rows, { createCompanies: Boolean(body.createCompanies), where, from, skipProblems });
+          : target === "clearances" ? importClearances(req, rows, { where, from, skipProblems })
+            : importPeople(req, rows, { createCompanies: Boolean(body.createCompanies), where, from, skipProblems });
     held.delete(req.params.token);
     res.json({ ok: true, ...result });
   });

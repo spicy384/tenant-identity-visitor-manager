@@ -256,6 +256,7 @@ async function validateFromQueue(q) {
 }
 
 $("clearance-refresh").addEventListener("click", () => showClearance());
+$("clearance-import").addEventListener("click", () => importDialog("clearances").then((done) => { if (done) showClearance(); }));
 
 // --- Security > Re-checks and expiry (Security and administrators) --------------------------------
 

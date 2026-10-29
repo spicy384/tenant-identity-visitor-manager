@@ -257,6 +257,50 @@ async function main() {
   check("skip: a row that fails part-way leaves nothing behind", r.status === 200 && r.data.added === 1 && r.data.skippedCount === 1
     && !(await admin.get("/api/companies?q=Brand New")).data.companies.length, JSON.stringify(r.data));
 
+  // --- clearances validated elsewhere, onto people already here (Security) ------------------------------
+  // A second Dee Dunn, at another company, to tell apart.
+  token = (await manager.upload("/api/import/read?name=dunn.csv", Buffer.from("First,Last,Firm\nDee,Dunn,Dunn Partners\n"))).data.token;
+  await manager.post(`/api/import/${token}/run`, { table: "CSV", target: "people", mapping: { ...messyMap, site: { value: SITE_NAME } }, createCompanies: true });
+  const cleared = 'Name,Clearance,Date Validated\n"Able, Ann",Secret,3/1/2025\nKay Q. Kiosk,TS,2025-02-10\nNobody Here,Secret,2025-01-01\nDee Dunn,Secret,2025-01-01\nLee Lobby,Top Banana,2025-01-01\nEve Ever,Secret,2099-01-01\n';
+  const clearMap = { name: { column: "Name" }, level: { column: "Clearance" }, validated: { column: "Date Validated" } };
+  // Each lets go of its file after (the server holds only a few at once).
+  const clearRun = async (who, text, extra = {}, mapping = clearMap) => {
+    const read = await who.upload("/api/import/read?name=cleared.csv", Buffer.from(text, "utf8"));
+    const result = await who.post(`/api/import/${read.data.token}/run`, { table: "CSV", target: "clearances", mapping, ...extra });
+    await who.del(`/api/import/${read.data.token}`);
+    return result;
+  };
+  const refused = [(await clearRun(manager, cleared)).status, (await clearRun(admin, cleared)).status, (await clearRun(office, cleared)).status];
+  check("clearances: only Security imports them", refused.every((s) => s === 403), refused.join());
+  r = await clearRun(security, cleared);
+  check("clearances: names that match nobody, or two people, stop the lot, each said", r.status === 400
+    && /Line 4: Nobody called "Nobody Here" is in the directory/.test(r.data.error) && /Line 5: 2 people are called "Dee Dunn" \(Acme Corp, Dunn Partners\); add a Company or Email column/.test(r.data.error)
+    && /Line 6: There is no clearance level called "Top Banana"/.test(r.data.error) && /Line 7: The date validated, 2099-01-01, is still to come/.test(r.data.error), r.data.error);
+  const personAs = async (who, q) => (await who.get(`/api/people?q=${encodeURIComponent(q)}`)).data.people[0];
+  check("clearances: and nothing changed", !(await personAs(security, "Able")).clearanceValidatedAt);
+  r = await clearRun(security, cleared, { skipProblems: true });
+  check("clearances: the rest imported, the problem rows skipped", r.status === 200 && r.data.updated === 2 && r.data.added === 0 && r.data.skippedCount === 4, JSON.stringify(r.data));
+  let ann = await personAs(security, "Able");
+  const localDay = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  check("clearances: \"Last, First\" found, validated on the day given, by Security", ann.clearanceLevelName === "Secret" && localDay(ann.clearanceValidatedAt) === "2025-03-01" && ann.clearanceValidatedBy === "sec" && ann.clearanceStatus === "validated", JSON.stringify(ann));
+  const kay = await personAs(security, "Kiosk");
+  check("clearances: a middle initial needn't be on record", kay.clearanceLevelName === "TS" && localDay(kay.clearanceValidatedAt) === "2025-02-10");
+  check("clearances: each one in the audit log, and the import", (await admin.get("/api/audit?action=clearance.validate")).data.entries.some((e) => e.target === "Ann Able" && /validated 2025-03-01, imported from CSV/.test(e.detail))
+    && (await admin.get("/api/audit?action=import.clearances")).data.entries.some((e) => /0 added, 2 updated, 4 skipped/.test(e.target || "")));
+  r = await clearRun(security, "Name,Company,Level,Validated,Expires\nDee Dunn,Dunn Partners,TS,2025-04-01,2030-01-31\nAnn Able,,Uncleared,2024-01-01,\n", {}, { ...clearMap, company: { column: "Company" }, level: { column: "Level" }, validated: { column: "Validated" }, expires: { column: "Expires" } });
+  check("clearances: a company tells two people apart; one validated more recently here is left as it is", r.status === 200 && r.data.updated === 1 && r.data.unchanged === 1, JSON.stringify(r.data));
+  const dunns = (await security.get("/api/people?q=Dunn")).data.people;
+  check("clearances: the right Dee Dunn, with the expiry given", dunns.find((p) => p.companyName === "Dunn Partners").clearanceLevelName === "TS" && dunns.find((p) => p.companyName === "Dunn Partners").clearanceExpires === "2030-01-31"
+    && !dunns.find((p) => p.companyName === "Acme Corp").clearanceLevelName);
+  ann = await personAs(security, "Able");
+  check("clearances: the newer validation kept", ann.clearanceLevelName === "Secret");
+  r = await clearRun(security, "First,Last,Level\nLee,Lobby,Uncleared\nLee,Lobby,Secret\n", {}, { first_name: { column: "First" }, last_name: { column: "Last" }, level: { column: "Level" } });
+  check("clearances: first and last name columns; the same person twice is refused", r.status === 400 && /Line 3: Lee Lobby is in the file already, on line 2/.test(r.data.error), r.data.error);
+  r = await clearRun(security, "First,Last,Level\nLee,Lobby,Uncleared\n", {}, { first_name: { column: "First" }, last_name: { column: "Last" }, level: { column: "Level" } });
+  const lee = await personAs(security, "Lobby");
+  check("clearances: Uncleared, validated today", r.status === 200 && !lee.clearanceLevelName && lee.clearanceStatus === "validated" && localDay(lee.clearanceValidatedAt) === localDay(Date.now()));
+  check("clearances: nobody was added", (await admin.get("/api/people?q=Nobody")).data.total === 0);
+
   // --- never on disk ------------------------------------------------------------------------------------
   const written = [];
   const walk = (dir) => { for (const f of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, f.name); if (f.isDirectory()) walk(p); else written.push(p); } };

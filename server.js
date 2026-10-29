@@ -18,7 +18,7 @@ const { COUNTRIES } = require("./countries");
 const { ID_TYPES, OTHER_ID } = require("./visitors");
 const { createApiClients } = require("./api-clients");
 const { createApiV1 } = require("./api-v1");
-const { createClearance, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS, UNCLEARED, isUnclearedName } = require("./clearance");
+const { createClearance, DEFAULT_DIGITS_HOURS, MAX_DIGITS_HOURS, UNCLEARED, isUnclearedName, today: clearanceToday } = require("./clearance");
 const { createBadges } = require("./badges");
 const { createEvents } = require("./events");
 const { createSecurityReports } = require("./security-reports");
@@ -759,7 +759,8 @@ const isBlankRow = (row) => Boolean(row) && typeof row === "object" && Object.va
  */
 function importRows(rows, fn, where = (i) => `Line ${i + 2}`, verb = "imported", { skipProblems = false } = {}) {
   const errors = [];
-  const counts = { added: 0, updated: 0, blank: 0 };
+  // unchanged: rows that matched a record and left it as it was.
+  const counts = { added: 0, updated: 0, unchanged: 0, blank: 0 };
   const skipped = [];
   let skippedCount = 0;
   try {
@@ -793,7 +794,7 @@ function importRows(rows, fn, where = (i) => `Line ${i + 2}`, verb = "imported",
 }
 
 /** What an import did, for the audit log. */
-const importSummary = (counts) => `${counts.added} added, ${counts.updated} updated${counts.skippedCount ? `, ${counts.skippedCount} skipped` : ""}`;
+const importSummary = (counts) => `${counts.added} added, ${counts.updated} updated${counts.unchanged ? `, ${counts.unchanged} unchanged` : ""}${counts.skippedCount ? `, ${counts.skippedCount} skipped` : ""}`;
 
 function checkImport(rows, required) {
   if (!rows.length) throw fail(400, "The file has no rows under its header.");
@@ -1006,8 +1007,94 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
   return { ...counts, ignored };
 }
 
+const CLEARANCE_COLUMNS = ["name", "first_name", "last_name", "company", "email", "level", "validated", "granted", "expires"];
+const NAME_SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv"]);
+
+/** A name's words, lowercase without accents or punctuation, leaving out initials and Jr, Sr, II... */
+function nameWords(name) {
+  return String(name || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ")
+    .split(" ").filter((w) => w.length > 1 && !NAME_SUFFIXES.has(w));
+}
+
+/**
+ * Imports clearances validated outside this system, onto people already in the directory (it
+ * adds nobody): who (a name column, "First Last" or "Last, First", or first and last name
+ * columns; a company or email to tell apart two people with the same name), the clearance
+ * level (a level's name, or Uncleared), the date validated (empty: today), and when it was
+ * granted and expires. Each is validated as Security would, on that date, by the person
+ * importing; one validated more recently in the app is left as it is. Security only.
+ */
+function importClearances(req, rows, { where, from = "CSV", skipProblems = false } = {}) {
+  checkImport(rows, ["level"]);
+  const levels = clearance.levels();
+  const by = req.user?.displayName || req.user?.username || "import";
+  const todayStr = clearanceToday();
+  // Everyone in the directory by the name they're known by: first and last, preferred and last.
+  const everyone = db.raw.prepare(`SELECT p.id, p.first_name, p.last_name, p.preferred_name, p.email, p.active, p.company_id, c.name AS company_name,
+    p.clearance_validated_at FROM people p JOIN companies c ON c.id = p.company_id`).all();
+  const byName = new Map();
+  const byShort = new Map();
+  const add = (map, key, p) => { if (key) map.set(key, [...(map.get(key) || []), p]); };
+  for (const p of everyone) {
+    for (const first of new Set([p.first_name, p.preferred_name].filter(Boolean))) {
+      const words = nameWords(`${first} ${p.last_name}`);
+      add(byName, words.join(" "), p);
+      add(byShort, words.length > 1 ? `${words[0]} ${words.at(-1)}` : null, p);
+    }
+  }
+  const unique = (list) => [...new Map(list.map((p) => [p.id, p])).values()];
+  const seen = new Map();
+  const counts = importRows(rows, (row, i) => {
+    const shown = String(row.name || [row.first_name, row.last_name].filter(Boolean).join(" ")).trim();
+    if (!shown) throw fail(400, "The name is empty.");
+    // "Last, First M." is turned round; middle names and initials don't have to be on record.
+    const written = row.name ? (String(row.name).includes(",") ? String(row.name).split(",").reverse().join(" ") : row.name) : `${row.first_name || ""} ${row.last_name || ""}`;
+    const words = nameWords(written);
+    if (!row.level || !String(row.level).trim()) throw fail(400, `No clearance level for ${shown}.`);
+    let level = null;
+    if (!isUnclearedName(row.level)) {
+      level = levels.find((l) => l.name.toLowerCase() === String(row.level).trim().toLowerCase());
+      if (!level) throw fail(400, `There is no clearance level called "${row.level}" (${[...levels.map((l) => l.name), UNCLEARED].join(", ")}).`);
+    }
+    const validated = row.validated ? importDate(row.validated, "the date validated") : todayStr;
+    if (validated > todayStr) throw fail(400, `The date validated, ${validated}, is still to come.`);
+    const granted = row.granted ? importDate(row.granted, "granted") : null;
+    const expires = row.expires ? importDate(row.expires, "expires") : null;
+
+    let company = null;
+    if (row.company) {
+      company = directory.findCompanyByName(row.company);
+      if (!company || !directory.getCompany(company.id, { sites: req.ctx.sites })) throw fail(400, `There is no company called "${row.company}" at your sites.`);
+    }
+    const fits = (p) => (!company || p.company_id === company.id) && Boolean(directory.getPerson(p.id, { sites: req.ctx.sites }));
+    let found = row.email ? everyone.filter((p) => p.email && p.email.toLowerCase() === String(row.email).trim().toLowerCase()).filter(fits) : [];
+    if (!found.length) found = unique(byName.get(words.join(" ")) || []).filter(fits);
+    if (!found.length && words.length > 1) found = unique(byShort.get(`${words[0]} ${words.at(-1)}`) || []).filter(fits);
+    // People who have left only when nobody current has the name.
+    if (found.some((p) => p.active)) found = found.filter((p) => p.active);
+    const at = company ? ` at ${company.name}` : "";
+    if (!found.length) throw fail(400, `Nobody called "${shown}" is in the directory${at}. Add them first, or check how the name is written.`);
+    if (found.length > 1) throw fail(400, `${found.length} people are called "${shown}"${at} (${[...new Set(found.map((p) => p.company_name))].join(", ")}); add a Company or Email column to tell them apart.`);
+    const person = found[0];
+    const name = `${person.first_name} ${person.last_name}`;
+    if (seen.has(person.id)) throw fail(400, `${name}${shown.toLowerCase() === name.toLowerCase() ? "" : ` ("${shown}")`} is in the file already, on ${seen.get(person.id).toLowerCase()}.`);
+    seen.set(person.id, where(i));
+    // Validated more recently here than the file says: left as it is.
+    if (person.clearance_validated_at && clearanceToday(undefined, person.clearance_validated_at) > validated) return "unchanged";
+    const [y, m, d] = validated.split("-").map(Number);
+    // Midday on the day validated, so the day reads the same in every time zone nearby.
+    const validatedAt = validated === todayStr ? Date.now() : new Date(y, m - 1, d, 12).getTime();
+    clearance.validate({ kind: "person", id: person.id, levelId: level?.id ?? null, granted, expires, by, validatedAt });
+    auditFrom(req, "clearance.validate", name, `person; ${level ? level.name : UNCLEARED}${expires ? `, expires ${expires}` : ""}; validated ${validated}, imported from ${from}`);
+    return "updated";
+  }, where, "imported", { skipProblems });
+  const ignored = Object.keys(rows[0]).filter((c) => !CLEARANCE_COLUMNS.includes(c));
+  auditFrom(req, "import.clearances", importSummary(counts), `from ${from}`);
+  return { ...counts, ignored };
+}
+
 // Importing from an Access database or a CSV file, with its columns matched to fields.
-app.use(createImportRoutes({ access, importCompanies, importPeople, importVisitors, importBadges, auditFrom }));
+app.use(createImportRoutes({ access, importCompanies, importPeople, importVisitors, importBadges, importClearances, auditFrom }));
 
 // --- custom fields (administrators) ------------------------------------------------------------
 
