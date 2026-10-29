@@ -893,15 +893,57 @@ function personInCompanyByName(companyId, name) {
     AND (lower(first_name || ' ' || last_name) = lower(?) OR lower(coalesce(preferred_name, first_name) || ' ' || last_name) = lower(?))`).get(companyId, n, n)?.id ?? null;
 }
 
+/** The clearance columns an import may carry: the level, and when it was validated, granted and expires. */
+const CLEARANCE_ROW_COLUMNS = ["level", "validated", "granted", "expires"];
+
+/**
+ * A row's clearance, checked: { level (null for Uncleared), validated, granted, expires }, or
+ * null when the row gives no level. A date without a level is a problem.
+ */
+function clearanceOfRow(row, levels, todayStr) {
+  if (!row.level || !String(row.level).trim()) {
+    if (row.validated || row.granted || row.expires) throw fail(400, "Give the clearance level too (or Uncleared) with its dates.");
+    return null;
+  }
+  let level = null;
+  if (!isUnclearedName(row.level)) {
+    level = levels.find((l) => l.name.toLowerCase() === String(row.level).trim().toLowerCase());
+    if (!level) throw fail(400, `There is no clearance level called "${row.level}" (${[...levels.map((l) => l.name), UNCLEARED].join(", ")}).`);
+  }
+  const validated = row.validated ? importDate(row.validated, "the date validated") : todayStr;
+  if (validated > todayStr) throw fail(400, `The date validated, ${validated}, is still to come.`);
+  return { level, validated, granted: row.granted ? importDate(row.granted, "granted") : null, expires: row.expires ? importDate(row.expires, "expires") : null };
+}
+
+/**
+ * Validates a person's or visitor's clearance as an import row says (`c` from clearanceOfRow),
+ * on the day it gives, by the person importing, unless it was validated more recently here.
+ * Returns true when it was validated.
+ */
+function validateFromImport(req, { kind, id, name, validatedAt }, c, from, todayStr) {
+  if (validatedAt && clearanceToday(undefined, validatedAt) > c.validated) return false;
+  const [y, m, d] = c.validated.split("-").map(Number);
+  // Midday on the day validated, so the day reads the same in every time zone nearby.
+  const at = c.validated === todayStr ? Date.now() : new Date(y, m - 1, d, 12).getTime();
+  clearance.validate({ kind, id, levelId: c.level?.id ?? null, granted: c.granted, expires: c.expires, by: req.user?.displayName || req.user?.username || "import", validatedAt: at });
+  auditFrom(req, "clearance.validate", name, `${kind}; ${c.level ? c.level.name : UNCLEARED}${c.expires ? `, expires ${c.expires}` : ""}; validated ${c.validated}, imported from ${from}`);
+  return true;
+}
+
 /**
  * Imports visitors from rows keyed by column (first_name, last_name, organization,
  * visitor_type, citizenship, email, phone, notes, blocked, company and host they visit,
  * custom field keys). A visitor with the
  * same email, else exactly the same name, is updated. Imported visitors count as checked by
- * staff. Clearances aren't imported: only the Security role sets them, by validating.
+ * staff. Clearances (level, validated, granted, expires) only from the Security role: each
+ * visitor is validated on the date given, unless validated more recently here.
  */
 function importVisitors(req, rows, { where, from = "CSV", skipProblems = false } = {}) {
   checkImport(rows, ["first_name", "last_name"]);
+  const withClearance = rows.some((r) => CLEARANCE_ROW_COLUMNS.some((c) => r[c] && String(r[c]).trim()));
+  if (withClearance && !(access.isSecurity(req.ctx) && access.canSeeClearances(req.ctx))) throw fail(403, "Only Security imports clearances; leave the clearance columns out, or ask Security.");
+  const levels = clearance.levels();
+  const todayStr = clearanceToday();
   const writable = writableColumns(req.ctx, "visitor");
   const list = access.fieldsFor(req.ctx, "visitor");
   const linksWritable = list.some((f) => f.key === "companies" && f.access === "edit");
@@ -911,6 +953,8 @@ function importVisitors(req, rows, { where, from = "CSV", skipProblems = false }
   };
   const counts = importRows(rows, (row) => {
     const patch = rowPatch(row, VISITOR_COLUMNS, writable);
+    const c = withClearance ? clearanceOfRow(row, levels, todayStr) : null;
+    const name = `${String(row.first_name || "").trim()} ${String(row.last_name || "").trim()}`;
     let link = null;
     if (row.company && linksWritable) {
       const company = directory.findCompanyByName(row.company);
@@ -924,14 +968,17 @@ function importVisitors(req, rows, { where, from = "CSV", skipProblems = false }
     const existingId = visitors.findMatch({ email: row.email, firstName: row.first_name, lastName: row.last_name });
     if (existingId) {
       if (!visitors.get(existingId, { sites: req.ctx.sites })) throw fail(403, `${row.first_name} ${row.last_name} is on record at a site this account can't see.`);
+      const before = visitors.get(existingId, { sites: req.ctx.sites });
       visitors.update(existingId, patch, plan(patch, existingId));
       if (link) visitors.setLink(existingId, link, { sites: req.ctx.sites });
+      if (c) validateFromImport(req, { kind: "visitor", id: existingId, name, validatedAt: before.clearanceValidatedAt }, c, from, todayStr);
       return "updated";
     }
-    visitors.create({ ...patch, links: link ? [link] : [] }, { ...plan(patch), source: "import" });
+    const made = visitors.create({ ...patch, links: link ? [link] : [] }, { ...plan(patch), source: "import" });
+    if (c) validateFromImport(req, { kind: "visitor", id: made.id, name, validatedAt: null }, c, from, todayStr);
     return "added";
   }, where, "imported", { skipProblems });
-  const ignored = ignoredColumns(rows, VISITOR_COLUMNS, writable).filter((c) => linksWritable ? !["host"].includes(c) : true);
+  const ignored = ignoredColumns(rows, VISITOR_COLUMNS, writable).filter((c) => (linksWritable ? !["host"].includes(c) : true) && !CLEARANCE_ROW_COLUMNS.includes(c));
   auditFrom(req, "import.visitors", importSummary(counts), `from ${from}`);
   return { ...counts, ignored };
 }
@@ -1007,7 +1054,7 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
   return { ...counts, ignored };
 }
 
-const CLEARANCE_COLUMNS = ["name", "first_name", "last_name", "kind", "company", "email", "level", "validated", "granted", "expires"];
+const CLEARANCE_COLUMNS = ["name", "first_name", "last_name", "kind", "company", "email", "level", "validated", "granted", "expires", "visiting", "phone", "citizenship", "visitor_type", "notes"];
 const NAME_SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv"]);
 // What the "Person or visitor" column may say.
 const HOLDER_KINDS = { person: "person", people: "person", tenant: "person", staff: "person", employee: "person", directory: "person", visitor: "visitor", visitors: "visitor", guest: "visitor" };
@@ -1025,12 +1072,13 @@ function nameWords(name) {
  * with the same name), the clearance level (a level's name, or Uncleared), the date validated
  * (empty: today), and when it was granted and expires. Each is validated as Security would, on
  * that date, by the person importing; one validated more recently in the app is left as it is.
- * Security only.
+ * With `addVisitors`, a name on record nowhere is added as a visitor (the company their own,
+ * `visiting` the tenant they visit, which an account limited to some sites must give), with
+ * their email, phone, citizenship, visitor type and notes, and validated. Security only.
  */
-function importClearances(req, rows, { where, from = "CSV", skipProblems = false } = {}) {
+function importClearances(req, rows, { where, from = "CSV", skipProblems = false, addVisitors = false } = {}) {
   checkImport(rows, ["level"]);
   const levels = clearance.levels();
-  const by = req.user?.displayName || req.user?.username || "import";
   const todayStr = clearanceToday();
   const lower = (v) => String(v ?? "").trim().toLowerCase();
   // Everyone on record: people (by first and last name, and preferred and last) and visitors.
@@ -1045,11 +1093,41 @@ function importClearances(req, rows, { where, from = "CSV", skipProblems = false
       .map((r) => ({ ...r, kind: "visitor", tenants: linked.get(r.id) || [] }))
   ];
   const byWord = new Map();
-  for (const r of everyone) {
+  const remember = (r) => {
     for (const first of new Set([r.first_name, r.preferred_name].filter(Boolean))) {
       const entry = { r, words: new Set(nameWords(`${first} ${r.last_name}`)) };
       for (const w of entry.words) byWord.set(w, [...(byWord.get(w) || []), entry]);
     }
+  };
+  everyone.forEach(remember);
+  /**
+   * Adds the row's visitor: first and last name from those columns, else from the name ("Last,
+   * First", or the last word as the last name), linked to the tenant they visit.
+   */
+  function addVisitor(row) {
+    let first = String(row.first_name || "").trim();
+    let last = String(row.last_name || "").trim();
+    if (!first || !last) {
+      const n = String(row.name || "").trim();
+      if (n.includes(",")) [last, first] = [n.slice(0, n.indexOf(",")).trim(), n.slice(n.indexOf(",") + 1).trim()];
+      else { const w = n.split(/\s+/); last = w.pop() || ""; first = w.join(" "); }
+    }
+    if (!first || !last) throw fail(400, `"${row.name || last || first}" needs a first and a last name to be added as a visitor.`);
+    let link = null;
+    if (row.visiting) {
+      const tenant = directory.findCompanyByName(row.visiting);
+      if (!tenant || !directory.getCompany(tenant.id, { sites: req.ctx.sites })) throw fail(400, `There is no company called "${row.visiting}" at your sites for them to visit.`);
+      link = { companyId: tenant.id, hostId: null };
+    } else if (req.ctx.sites) {
+      throw fail(400, `Give the company ${first} ${last} visits (a tenant at your sites) to add them.`);
+    }
+    const made = visitors.create({ firstName: first, lastName: last, organization: row.company || null, email: row.email || null, phone: row.phone || null,
+      citizenship: row.citizenship || null, ...(row.visitor_type ? { visitorType: row.visitor_type } : {}), notes: row.notes || null, links: link ? [link] : [] },
+    { sites: req.ctx.sites, source: "import" });
+    const r = { id: made.id, first_name: made.firstName, last_name: made.lastName, preferred_name: null, email: made.email, active: 1, company: made.organization, clearance_validated_at: null, kind: "visitor", tenants: link ? [lower(row.visiting)] : [] };
+    everyone.push(r);
+    remember(r);
+    return r;
   }
   const visible = (r) => Boolean(r.kind === "person" ? directory.getPerson(r.id, { sites: req.ctx.sites }) : visitors.get(r.id, { sites: req.ctx.sites }));
   const unique = (list) => [...new Map(list.map((r) => [`${r.kind}:${r.id}`, r])).values()];
@@ -1085,16 +1163,8 @@ function importClearances(req, rows, { where, from = "CSV", skipProblems = false
     // "Last, First M." is turned round; middle names and initials don't have to be on record.
     const written = row.name ? (String(row.name).includes(",") ? String(row.name).split(",").reverse().join(" ") : row.name) : `${row.first_name || ""} ${row.last_name || ""}`;
     const words = nameWords(written);
-    if (!row.level || !String(row.level).trim()) throw fail(400, `No clearance level for ${shown}.`);
-    let level = null;
-    if (!isUnclearedName(row.level)) {
-      level = levels.find((l) => lower(l.name) === lower(row.level));
-      if (!level) throw fail(400, `There is no clearance level called "${row.level}" (${[...levels.map((l) => l.name), UNCLEARED].join(", ")}).`);
-    }
-    const validated = row.validated ? importDate(row.validated, "the date validated") : todayStr;
-    if (validated > todayStr) throw fail(400, `The date validated, ${validated}, is still to come.`);
-    const granted = row.granted ? importDate(row.granted, "granted") : null;
-    const expires = row.expires ? importDate(row.expires, "expires") : null;
+    const c = clearanceOfRow(row, levels, todayStr);
+    if (!c) throw fail(400, `No clearance level for ${shown}.`);
     const kind = row.kind ? HOLDER_KINDS[lower(row.kind)] : null;
     if (row.kind && !kind) throw fail(400, `"${row.kind}" isn't person or visitor.`);
 
@@ -1107,6 +1177,12 @@ function importClearances(req, rows, { where, from = "CSV", skipProblems = false
     if (found.some((r) => r.active)) found = found.filter((r) => r.active);
     const place = kind === "visitor" ? "among the visitors" : kind === "person" ? "in the directory" : "among the people or visitors";
     const at = row.company ? ` at ${String(row.company).trim()}` : "";
+    // Nobody: added as a visitor, when asked to (and the name isn't someone else's the columns rule out).
+    let added = false;
+    if (!found.length && addVisitors && kind !== "person" && !(company && called(words, (r) => visible(r) && r.kind === "person").found.length)) {
+      found = [addVisitor(row)];
+      added = true;
+    }
     if (!found.length) {
       // Someone else the other columns rule out: say so, rather than validate someone the file may not mean.
       const elsewhere = kind || company ? called(words, visible).found : [];
@@ -1121,13 +1197,12 @@ function importClearances(req, rows, { where, from = "CSV", skipProblems = false
     if (seen.has(key)) throw fail(400, `${name}${lower(shown) === lower(name) ? "" : ` ("${shown}")`} is in the file already, on ${seen.get(key).toLowerCase()}.`);
     seen.set(key, where(i));
     // Validated more recently here than the file says: left as it is.
-    if (holder.clearance_validated_at && clearanceToday(undefined, holder.clearance_validated_at) > validated) return "unchanged";
-    const [y, m, d] = validated.split("-").map(Number);
-    // Midday on the day validated, so the day reads the same in every time zone nearby.
-    const validatedAt = validated === todayStr ? Date.now() : new Date(y, m - 1, d, 12).getTime();
-    clearance.validate({ kind: holder.kind, id: holder.id, levelId: level?.id ?? null, granted, expires, by, validatedAt });
-    auditFrom(req, "clearance.validate", name, `${holder.kind}; ${level ? level.name : UNCLEARED}${expires ? `, expires ${expires}` : ""}; validated ${validated}, imported from ${from}`);
-    return "updated";
+    const done = validateFromImport(req, { kind: holder.kind, id: holder.id, name, validatedAt: holder.clearance_validated_at }, c, from, todayStr);
+    if (added) {
+      auditFrom(req, "visitor.add", name, `with their clearance, imported from ${from}`);
+      return "added";
+    }
+    return done ? "updated" : "unchanged";
   }, where, "imported", { skipProblems });
   const ignored = Object.keys(rows[0]).filter((c) => !CLEARANCE_COLUMNS.includes(c));
   auditFrom(req, "import.clearances", importSummary(counts), `from ${from}`);

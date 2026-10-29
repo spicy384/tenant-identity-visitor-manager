@@ -760,7 +760,10 @@ A company's site can come from one column (a site's name) and its suite from ano
 - **Visitors**: first and last name (required), their organization, email, phone, notes,
   blocked (yes/no), the company they visit and their host there (by name), and custom fields.
   A visitor with the same email, else exactly the same name, is updated. Imported visitors
-  count as checked by staff. Clearances aren't imported: only Security sets them, by validating.
+  count as checked by staff. Clearance level, date validated (empty for today), granted and
+  expires come only from an account with the Security role (and visitor change access, Security
+  plus Front desk say): each visitor with a level is validated by them on the date given, unless
+  validated more recently here. Anyone else's file with a clearance in it is refused.
 - **Badges**: number and type (personnel or staff, tenant, visitor) required; clearance level
   (a level's name or Uncleared; empty is Uncleared for a new badge and leaves an existing one's
   as it is; a level's name only from roles that see clearance levels; a column called
@@ -784,7 +787,11 @@ A company's site can come from one column (a site's name) and its suite from ano
   importing, and each is in the audit log; a visitor's re-check is due counting from that date.
   Someone validated more recently in the app is left as they are. A name that matches nobody
   (with the nearest names on record), or more than one, or the same one twice, is a problem row,
-  listed with its line.
+  listed with its line. Tick **Add visitors who aren't on record yet** to add anyone the file
+  names who isn't found as a visitor, with their clearance: the first and last name (from those
+  columns, else the name: "Last, First", or the last word as the last name), their own company,
+  email, phone, citizenship, visitor type and notes, and the tenant they visit (which an account
+  limited to some sites must give). Never a person in the directory.
 
 The CSV column names below are what a CSV file is matched to automatically, and what the CSV import
 API takes.
@@ -800,7 +807,7 @@ Companies: `name` (required); `sites` (`Harbor Point: Suite 100; Riverside`), `p
 `email`, `website`, `address`, `notes`, `active`, and custom field keys. A company with the same
 name is updated.
 
-Clearances: `level` (required); `name`, or `first_name` and `last_name`; `kind` (person or visitor), `company`, `email`,
+Clearances: `level` (required); `name`, or `first_name` and `last_name`; `kind` (person or visitor), `company`, `email`, `visiting`, `phone`, `citizenship`, `visitor_type`, `notes`,
 `validated`, `granted`, `expires`.
 
 Companies may also give `site` and `suite` instead of `sites`. If any line has a problem, nothing

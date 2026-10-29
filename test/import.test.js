@@ -324,6 +324,51 @@ async function main() {
   r = await clearRun(security, "Name,Level\nSgt Kay Kiosk,TS\n", {}, { ...anyMap, kind: { value: "person" } });
   check("clearances: a rank in front still finds them", r.status === 200 && r.data.unchanged + r.data.updated === 1, JSON.stringify(r.data));
 
+  // Adding visitors who aren't on record yet, with their clearance (Security).
+  const addRun = (text, mapping, extra = {}) => clearRun(security, text, { addVisitors: true, ...extra }, mapping);
+  r = await clearRun(security, "Name,Level\nNew Comer,Secret\n", {}, anyMap);
+  check("add visitors: not without the box ticked", r.status === 400 && /Nobody called "New Comer"/.test(r.data.error));
+  r = await addRun("Name,Organization,Visiting,Email,Citizenship,Level,Validated\n\"Comer, New\",Fabrikam,Acme Corp,new@fabrikam.example,US,Secret,2025-06-01\nFirst Timer,,,,,TS,\n", { ...anyMap, company: { column: "Organization" }, visiting: { column: "Visiting" }, email: { column: "Email" }, citizenship: { column: "Citizenship" }, validated: { column: "Validated" } });
+  const comer = (await security.get("/api/visitors?q=Comer")).data.visitors[0];
+  check("add visitors: added, with their clearance and details", r.status === 200 && r.data.added === 2 && comer?.firstName === "New" && comer.lastName === "Comer" && comer.organization === "Fabrikam"
+    && comer.email === "new@fabrikam.example" && comer.citizenship === "US" && comer.companies?.[0]?.companyName === "Acme Corp" && comer.clearanceLevelName === "Secret" && localDay(comer.clearanceValidatedAt) === "2025-06-01", JSON.stringify([r.data, comer]));
+  const timer = (await security.get("/api/visitors?q=Timer")).data.visitors[0];
+  check("add visitors: \"First Last\" split at the last word, validated today", timer?.firstName === "First" && timer.lastName === "Timer" && timer.clearanceLevelName === "TS" && localDay(timer.clearanceValidatedAt) === localDay(Date.now()));
+  check("add visitors: in the audit log", (await admin.get("/api/audit?action=visitor.add")).data.entries.some((e) => e.target === "New Comer" && /with their clearance/.test(e.detail || "")));
+  r = await addRun("Name,Level\nNew Comer,TS\n", anyMap);
+  check("add visitors: found next time, not added twice", r.status === 200 && r.data.added === 0 && r.data.updated + r.data.unchanged === 1 && (await security.get("/api/visitors?q=Comer")).data.total === 1, JSON.stringify(r.data));
+  r = await addRun("Name,Level\nTwice Over,TS\nTwice Over,TS\n", anyMap);
+  check("add visitors: the same new name twice in a file is one visitor, and refused", r.status === 400 && /Line 3: Twice Over is in the file already, on line 2/.test(r.data.error) && (await security.get("/api/visitors?q=Twice")).data.total === 0, r.data.error);
+  r = await addRun("Name,Kind,Level\nNo Body,person,TS\n", { ...anyMap, kind: { column: "Kind" } });
+  check("add visitors: never a person in the directory", r.status === 400 && /Nobody called "No Body" is in the directory/.test(r.data.error));
+  r = await addRun("Name,Visiting,Level\nLost Soul,Nowhere Inc,TS\n", { ...anyMap, visiting: { column: "Visiting" } });
+  check("add visitors: the company they visit must be a tenant", r.status === 400 && /no company called "Nowhere Inc" at your sites for them to visit/.test(r.data.error));
+
+  // The visitor import takes clearance columns, from Security only.
+  const vmap = { first_name: { column: "First" }, last_name: { column: "Last" }, organization: { column: "Org" }, level: { column: "Level" }, validated: { column: "Validated" } };
+  const vcsv = "First,Last,Org,Level,Validated\nCleo Cleared,Visitor,Initech,TS,2025-07-07\n";
+  const visitorRun = async (who, text) => {
+    const read = await who.upload("/api/import/read?name=visitors.csv", Buffer.from(text, "utf8"));
+    const result = await who.post(`/api/import/${read.data.token}/run`, { table: "CSV", target: "visitors", mapping: vmap });
+    await who.del(`/api/import/${read.data.token}`);
+    return result;
+  };
+  r = await visitorRun(desk, vcsv);
+  check("visitor import: front desk can't import clearances", r.status === 403 && /Only Security imports clearances/.test(r.data.error));
+  r = await visitorRun(desk, "First,Last,Org,Level,Validated\nPlain,Guest,Initech,,\n");
+  check("visitor import: without them, as before", r.status === 200 && r.data.added === 1);
+  check("visitor import: Security alone can't import visitors", (await visitorRun(security, vcsv)).status === 403);
+  pw.secdesk = password();
+  await admin.post("/api/users", { username: "secdesk", password: pw.secdesk, roles: ["security", "frontdesk"] });
+  const secDesk = await as("secdesk");
+  r = await visitorRun(secDesk, vcsv + "Bad,Date,Initech,TS,2099-01-01\n");
+  check("visitor import: a clearance problem stops the lot", r.status === 400 && /Line 3: The date validated, 2099-01-01, is still to come/.test(r.data.error));
+  r = await visitorRun(secDesk, vcsv);
+  const cleo = (await security.get("/api/visitors?q=Cleo")).data.visitors[0];
+  check("visitor import: Security with visitor access adds them with their clearance", r.status === 200 && r.data.added === 1 && cleo?.clearanceLevelName === "TS" && localDay(cleo.clearanceValidatedAt) === "2025-07-07" && cleo.clearanceValidatedBy === "secdesk", JSON.stringify([r.data, cleo]));
+  r = await visitorRun(secDesk, "First,Last,Org,Level,Validated\nCleo Cleared,Visitor,Initech,Secret,2024-01-01\n");
+  check("visitor import: an older validation leaves the newer one", r.status === 200 && r.data.updated === 1 && (await security.get("/api/visitors?q=Cleo")).data.visitors[0].clearanceLevelName === "TS");
+
   // --- never on disk ------------------------------------------------------------------------------------
   const written = [];
   const walk = (dir) => { for (const f of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, f.name); if (f.isDirectory()) walk(p); else written.push(p); } };

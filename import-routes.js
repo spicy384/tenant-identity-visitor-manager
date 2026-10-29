@@ -192,7 +192,7 @@ function createImportRoutes({ access, importCompanies, importPeople, importVisit
     const result = target === "companies" ? importCompanies(req, rows, { where, from, skipProblems })
       : target === "visitors" ? importVisitors(req, rows, { where, from, skipProblems })
         : target === "badges" ? importBadges(req, rows, { where, from, skipProblems })
-          : target === "clearances" ? importClearances(req, rows, { where, from, skipProblems })
+          : target === "clearances" ? importClearances(req, rows, { where, from, skipProblems, addVisitors: body.addVisitors === true })
             : importPeople(req, rows, { createCompanies: Boolean(body.createCompanies), where, from, skipProblems });
     held.delete(req.params.token);
     res.json({ ok: true, ...result });
