@@ -440,13 +440,19 @@ function createVisitors({ db, fields }) {
       checkedOutAt: r.checked_out_at,
       checkoutMethod: r.checkout_method,
       checkedOutBy: r.checked_out_by,
-      // How many times its check-in or check-out time has been corrected.
-      timesCorrected: r.time_changes || 0
+      // How many times its check-in or check-out time has been corrected, which of them, and the latest.
+      timesCorrected: r.time_changes || 0,
+      timeChanged: r.time_changes ? { in: String(r.changed_fields || "").split(",").includes("in"), out: String(r.changed_fields || "").split(",").includes("out") } : null,
+      lastCorrection: r.time_changes ? { reason: r.last_reason, by: r.last_by, at: r.last_at } : null
     };
   }
 
   const VISIT_SELECT = `SELECT x.*, s.name AS site_name, v.first_name, v.last_name, v.organization, v.verified, v.blocked, v.citizenship, k.name AS kiosk_name,
-    (SELECT count(*) FROM visit_time_changes c WHERE c.visit_id = x.id) AS time_changes
+    (SELECT count(*) FROM visit_time_changes c WHERE c.visit_id = x.id) AS time_changes,
+    (SELECT group_concat(DISTINCT c.field) FROM visit_time_changes c WHERE c.visit_id = x.id) AS changed_fields,
+    (SELECT c.reason FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_reason,
+    (SELECT c.changed_by FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_by,
+    (SELECT c.changed_at FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_at
     FROM visits x JOIN sites s ON s.id = x.site_id JOIN visitors v ON v.id = x.visitor_id LEFT JOIN kiosks k ON k.id = x.kiosk_id`;
 
   function getVisit(id, { sites = null } = {}) {
@@ -459,7 +465,7 @@ function createVisitors({ db, fields }) {
    * Visits the caller may see. status: "open", "closed" or "all". from/to: timestamps on
    * the check-in time. q: words matched against visitor, company and host names.
    */
-  function listVisits({ sites = null, siteId = null, status = "all", from = null, to = null, companyId = null, hostId = null, visitorId = null, q = "", limit = 100, offset = 0 } = {}) {
+  function listVisits({ sites = null, siteId = null, status = "all", from = null, to = null, companyId = null, hostId = null, visitorId = null, corrected = false, q = "", limit = 100, offset = 0 } = {}) {
     const where = [];
     const params = [];
     if (sites) {
@@ -475,6 +481,8 @@ function createVisitors({ db, fields }) {
     if (companyId) { where.push("x.company_id = ?"); params.push(companyId); }
     if (hostId) { where.push("x.host_id = ?"); params.push(hostId); }
     if (visitorId) { where.push("x.visitor_id = ?"); params.push(visitorId); }
+    // Only visits whose times have been corrected.
+    if (corrected) where.push("EXISTS (SELECT 1 FROM visit_time_changes c WHERE c.visit_id = x.id)");
     for (const word of String(q || "").trim().split(/\s+/).filter(Boolean).slice(0, 8)) {
       const p = likeWord(word);
       where.push("(v.first_name LIKE ? ESCAPE '\\' OR v.last_name LIKE ? ESCAPE '\\' OR coalesce(v.organization, '') LIKE ? ESCAPE '\\' OR coalesce(x.company_name, '') LIKE ? ESCAPE '\\' OR coalesce(x.host_name, '') LIKE ? ESCAPE '\\')");

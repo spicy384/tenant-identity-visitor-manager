@@ -170,6 +170,7 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
       companyId: positiveInt(req.query.companyId),
       hostId: positiveInt(req.query.hostId),
       visitorId: positiveInt(req.query.visitorId),
+      corrected: str(req.query.corrected) === "1",
       q: str(req.query.q)
     };
   }

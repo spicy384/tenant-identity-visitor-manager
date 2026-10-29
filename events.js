@@ -311,13 +311,20 @@ function createEvents({ db, now = Date.now }) {
   }
 
   /** Takes a guest off the event or (scope "following") it and its series' later dates, where they haven't arrived. */
+  /**
+   * Takes a guest off an event, and with scope "following" its later dates (where they haven't
+   * come). A guest who came on this date stays on it, their visit with the event: they can only
+   * be taken off its later dates.
+   */
   function removeGuest(eventId, visitorId, { sites = null, scope = "one" } = {}) {
     const event = get(eventId, { sites });
     if (!event) throw fail(404, "No such event.");
+    const row = raw.prepare("SELECT visit_id FROM event_guests WHERE event_id = ? AND visitor_id = ?").get(event.id, Number(visitorId));
+    if (!row) throw fail(404, "They aren't a guest at this event.");
     const ids = reach(event, scope, sites);
-    // On this date as asked; on later ones only where they haven't come.
-    raw.prepare("DELETE FROM event_guests WHERE event_id = ? AND visitor_id = ?").run(event.id, Number(visitorId));
     const later = ids.filter((id) => id !== event.id);
+    if (row.visit_id && !later.length) throw fail(409, `They came to ${event.title}, so their visit stays with it${event.seriesId ? "; it has no later dates to take them off" : ""}.`);
+    if (!row.visit_id) raw.prepare("DELETE FROM event_guests WHERE event_id = ? AND visitor_id = ?").run(event.id, Number(visitorId));
     if (later.length) raw.prepare(`DELETE FROM event_guests WHERE event_id IN (${inList(later)}) AND visitor_id = ? AND visit_id IS NULL`).run(...later, Number(visitorId));
     return get(event.id);
   }

@@ -17,18 +17,26 @@ function visitsTable(visits, { showVisitor = true, onChange = () => {} } = {}) {
   const head = ["Arrived", "Left", ...(showVisitor ? ["Visitor"] : []), "Visiting", "Host", ...(allSites ? ["Site"] : []), ...(correcting ? [""] : [])];
   return h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
     h("thead", {}, h("tr", {}, head.map((t) => h("th", { text: t })))),
-    h("tbody", {}, visits.length ? visits.map((v) => h("tr", {},
-      h("td", { class: "nowrap small-text" }, fmtDateTime(v.checkedInAt), v.timesCorrected
-        ? h("div", {}, h("button", { type: "button", class: "link-btn small-text", title: "See the corrections and their reasons", text: `Corrected${v.timesCorrected > 1 ? ` (${v.timesCorrected})` : ""}`, onclick: async () => { if (await correctVisitTimes(v, { look: true })) onChange(); } }))
-        : null),
+    h("tbody", {}, visits.length ? visits.map((v) => h("tr", { class: v.timesCorrected ? "time-changed" : null },
+      h("td", { class: "nowrap small-text" }, fmtDateTime(v.checkedInAt), v.timeChanged?.in ? changedMark(v, onChange) : null),
       h("td", { class: "small-text" }, v.checkedOutAt
-        ? [fmtDateTime(v.checkedOutAt), h("div", { class: "muted", text: CHECKOUT_LABELS[v.checkoutMethod] || "" })]
+        ? [fmtDateTime(v.checkedOutAt), v.timeChanged?.out ? changedMark(v, onChange) : null, h("div", { class: "muted", text: CHECKOUT_LABELS[v.checkoutMethod] || "" })]
         : h("span", { class: "badge ok", text: "In the building" })),
       showVisitor ? h("td", {}, h("a", { href: `#visitor/${v.visitorId}`, text: visitorName(v.visitor) }), v.visitor.organization ? h("div", { class: "muted small-text", text: v.visitor.organization }) : null) : null,
       h("td", { text: v.companyName || "" }, v.purpose ? h("div", { class: "muted small-text", text: v.purpose }) : null),
       h("td", { text: v.hostName || "" }),
       allSites ? h("td", { class: "small-text", text: v.siteName }) : null,
       correcting ? h("td", {}, h("button", { type: "button", class: "link-btn small-text nowrap", text: "Correct times", onclick: async () => { if (await correctVisitTimes(v)) onChange(); } })) : null)) : emptyRow(head.length, "No visits."))));
+}
+
+/**
+ * The mark beside a time that was corrected: "Changed", with who changed it last and why on
+ * hover; it opens every correction to the visit.
+ */
+function changedMark(v, onChange) {
+  const last = v.lastCorrection;
+  const title = `${v.timesCorrected === 1 ? "Changed" : `Changed ${v.timesCorrected} times; last`} by ${last?.by || "staff"}, ${fmtDateTime(last?.at)}: ${last?.reason || ""}`;
+  return h("button", { type: "button", class: "badge warn time-changed-mark", title, "aria-label": title, text: "Changed", onclick: async () => { if (await correctVisitTimes(v, { look: true })) onChange(); } });
 }
 
 /** A timestamp as a datetime-local input's value, in this device's time. */
@@ -54,7 +62,7 @@ async function correctVisitTimes(v, { look = false } = {}) {
   }
   const field = { in: "Arrived", out: "Left" };
   const past = history.length ? h("div", { class: "stack" },
-    h("h4", { text: `Corrected before (${history.length})` }),
+    h("h4", { text: `Times changed (${history.length})` }),
     h("ul", { class: "plain-list small-text" }, history.map((c) => h("li", {},
       h("strong", { text: `${field[c.field]}: ` }), `${c.from ? fmtDateTime(c.from) : "not checked out"} to ${fmtDateTime(c.to)}`,
       h("div", { class: "muted", text: `${c.reason} (${c.by || "staff"}, ${fmtDateTime(c.at)})` }))))) : null;
@@ -104,6 +112,7 @@ function visitsQuery() {
     ...($("visits-from").value ? { from: $("visits-from").value } : {}),
     ...($("visits-to").value ? { to: $("visits-to").value } : {}),
     ...(q ? { q } : {}),
+    ...($("visits-corrected").checked ? { corrected: "1" } : {}),
     ...siteQuery()
   };
 }
@@ -126,7 +135,7 @@ async function loadVisits() {
 }
 
 const reloadVisits = debounce(() => { visitsView.offset = 0; loadVisits(); }, 250);
-for (const id of ["visits-status", "visits-from", "visits-to"]) $(id).addEventListener("change", reloadVisits);
+for (const id of ["visits-status", "visits-from", "visits-to", "visits-corrected"]) $(id).addEventListener("change", reloadVisits);
 $("visits-search").addEventListener("input", reloadVisits);
 $("visits-prev").addEventListener("click", () => { visitsView.offset = Math.max(0, visitsView.offset - VISITS_PAGE); loadVisits(); });
 $("visits-next").addEventListener("click", () => { visitsView.offset += VISITS_PAGE; loadVisits(); });

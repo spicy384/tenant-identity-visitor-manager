@@ -262,6 +262,22 @@ async function main() {
   r = await desk.del(`/api/events/${list[0].id}`);
   check("series: one date canceled alone", r.data.count === 1 && (await series()).length === 2);
   check("series: in the audit log", (await admin.get("/api/audit?action=event.add")).data.entries.some((e) => /every day, until 2099-03-05 \(5 dates\)/.test(e.detail)));
+
+  // A guest who came stays on that date; they can only be taken off the later ones.
+  check("remove: a guest who came stays on a one-off event", (await desk.del(`/api/events/${meeting.id}/guests/${graceId}`)).status === 409
+    && (await desk.get(`/api/events/${meeting.id}`)).data.event.guests.some((g) => g.visitorId === graceId));
+  const soon = (n) => { const d = new Date(`${day}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  r = await desk.post("/api/events", { siteId: site.id, title: "Daily walk-through", date: day, companyId: acme.id, hostId: host.id, repeat: { freq: "daily", until: soon(2) } });
+  const walk = r.data.event;
+  await desk.post(`/api/events/${walk.id}/guests`, { visitorId: graceId, scope: "following" });
+  const walks = async () => (await desk.get(`/api/events?from=${day}&to=${soon(2)}`)).data.events.filter((e) => e.seriesId === walk.id);
+  r = await desk.post("/api/checkins", { visitorId: graceId, siteId: site.id, hostId: host.id, purpose: "Walk-through", idType: "Passport" });
+  check("remove: she came to today's walk-through", r.status === 200 && (await walks())[0].guests.find((g) => g.visitorId === graceId)?.status === "here", JSON.stringify(r.data));
+  check("remove: not from today's, where she came", (await desk.del(`/api/events/${walk.id}/guests/${graceId}?scope=one`)).status === 409);
+  r = await desk.del(`/api/events/${walk.id}/guests/${graceId}?scope=following`);
+  const after = await walks();
+  check("remove: from the later dates, keeping today's", r.status === 200 && after.length === 3 && after[0].guests.some((g) => g.visitorId === graceId) && after.slice(1).every((e) => !e.guests.some((g) => g.visitorId === graceId)));
+  check("remove: in the audit log, saying she came", (await admin.get("/api/audit?action=event.guest_remove")).data.entries.some((e) => e.target === "Daily walk-through" && /the dates after .+ \(came on it\)/.test(e.detail)));
 }
 
 main()

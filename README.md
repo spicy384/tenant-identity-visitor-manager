@@ -174,7 +174,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   should have, **Correct times** on a visit (in the Visit log, or a visitor's visits) changes
   when they arrived and left, for staff who check visitors in. A reason is required. Each
   correction is kept with the visit (who, when, the times before and after, and why: the
-  Corrected link shows them) and in the audit log, and the CSV export counts them. Giving a
+  "Changed" badge beside each corrected time shows the latest reason, and opens them all) and
+  in the audit log, and the CSV export counts them. **Times changed only** in the Visit log
+  lists just the corrected visits. "Here since" and In the building use the corrected times. Giving a
   visit still open a time they left checks them out then; a visit that has ended can't be
   opened again. Times can't be in the future, nor leaving before arriving.
 - **End of day**: at each site's end-of-day time, in its own time zone, anyone still checked
@@ -453,7 +455,9 @@ visitors on record, or typed in under Someone new: pressing Done (or Enter, to a
 looks the name and email up, offers the visitor on record when there is one, and otherwise
 asks before adding them as a new visitor. Guests are linked to the event's company and host,
 so the kiosk recognizes them. **Check in**, here or on Home's Expected today card, starts the
-check-in with the event's company, host and purpose (its name) filled in.
+check-in with the event's company, host and purpose (its name) filled in. **Remove** takes a guest
+off (Add guest lists the event's guests too, each with Remove). A guest who came stays on
+that date, their visit with it; on a repeating event they can be taken off its later dates.
 At the kiosk an expected guest is offered their event's company and host first; checking
 in, at the kiosk or the desk, marks them arrived. The navigation counts guests expected
 today who haven't arrived.

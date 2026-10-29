@@ -102,14 +102,35 @@ function eventPanel(e) {
               }
             } }) : null,
             g.checkinStage ? h("button", { type: "button", class: "primary small", text: "Finish check-in", onclick: async () => { if (await continueCheckIn(g.visitId)) loadExpected(); } }) : null,
-            g.status === "expected" ? h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: async () => {
-              const scope = await seriesScope(e, { title: `Remove ${g.firstName} ${g.lastName}`, one: "From this date only", following: "From this and later dates", danger: true });
-              if (!scope) return;
-              await api(`/api/events/${e.id}/guests/${g.visitorId}?scope=${scope}`, { method: "DELETE" });
-              loadExpected();
-              refreshCounts();
-            } }) : null) : null))))))
+            removeGuestButton(e, g, loadExpected)) : null))))))
       : h("p", { class: "muted", text: "No guests yet." }));
+}
+
+/**
+ * Takes a guest off an event: one not yet arrived from this date (and, on a repeating event,
+ * its later dates if asked); one who came only from the later dates, their visit staying with
+ * this one. Null when there's nothing to take them off. after() runs once they're off.
+ */
+function removeGuestButton(e, g, after) {
+  const name = `${g.firstName} ${g.lastName}`;
+  const came = g.status !== "expected";
+  if (came && !e.seriesId) return null;
+  return h("button", { type: "button", class: "link-btn danger-text", text: came ? "Remove from later dates" : "Remove", onclick: async () => {
+    const scope = came
+      ? (await confirmDialog(`Take ${name} off the later dates of ${e.title}? They came on ${eventDay(e.date)}, so they stay on it.`, { title: `Remove ${name}`, danger: true, confirmLabel: "Remove from later dates" })) && "following"
+      : e.seriesId
+        ? await seriesScope(e, { title: `Remove ${name}`, one: "From this date only", following: "From this and later dates", danger: true })
+        : (await confirmDialog(`Take ${name} off ${e.title}? They stay on record as a visitor.`, { title: `Remove ${name}`, danger: true, confirmLabel: "Remove" })) && "one";
+    if (!scope) return;
+    try {
+      await api(`/api/events/${e.id}/guests/${g.visitorId}?scope=${scope}`, { method: "DELETE" });
+      toast(`${name} removed${came ? " from the later dates" : ""}.`);
+      after();
+      refreshCounts();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  } });
 }
 
 /** The visitor badge picked ahead for an expected guest, and (for those who give badges) picking it. */
@@ -411,6 +432,18 @@ async function editEvent(event, scope = "one") {
  */
 async function addGuestDialog(event, scope = "one") {
   let added = 0;
+  // The guests on this date, each with Remove.
+  const current = h("div", { class: "stack" });
+  const showCurrent = async () => {
+    const e = (await api(`/api/events/${event.id}`).catch(() => ({ event }))).event;
+    current.replaceChildren(h("h4", { text: `On this event${e.guests.length ? ` (${e.guests.length})` : ""}` }),
+      e.guests.length ? h("ul", { class: "plain-list" }, e.guests.map((g) => h("li", { class: "row-between" },
+        h("span", {}, h("strong", { text: `${g.firstName} ${g.lastName}` }), g.organization ? h("span", { class: "muted small-text", text: ` · ${g.organization}` }) : null,
+          g.status !== "expected" ? h("span", { class: "muted small-text", text: g.status === "here" ? " · here" : " · came" }) : null),
+        removeGuestButton(e, g, () => { added += 1; showCurrent(); }) || "")))
+        : h("p", { class: "muted", text: "No guests yet." }));
+  };
+  showCurrent();
   const results = h("div", { class: "choices-list" });
   const message = h("p", { class: "message", hidden: true });
   const search = h("input", { type: "search", placeholder: "Search visitors on record", autocomplete: "off" });
@@ -420,6 +453,7 @@ async function addGuestDialog(event, scope = "one") {
       await api(`/api/events/${event.id}/guests`, { method: "POST", body: { ...body, scope } });
       added += 1;
       say(`${name} added. Add another, or press Done.`);
+      showCurrent();
       return true;
     } catch (error) {
       // A likely duplicate: say who is on record, and offer to add a new one anyway.
@@ -498,7 +532,8 @@ async function addGuestDialog(event, scope = "one") {
     wide: true,
     body: h("div", { class: "stack" },
       message,
-      h("h4", { text: "On record" }), search, results,
+      current,
+      h("h4", { text: "Add someone on record" }), search, results,
       h("h4", { text: "Someone new" }),
       h("div", { class: "form-grid" }, first, last, org, email),
       h("p", { class: "muted small-text", text: "Type their name and press Done (or Enter, to add another after). If they're on record already you can add that visitor; otherwise you're asked before they're added as a new visitor, linked to the event's company and host, so the kiosk recognizes them on the day." })),

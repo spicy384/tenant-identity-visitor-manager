@@ -297,6 +297,12 @@ async function main() {
   check("times: each in the audit log, before and after, with the reason", corrected.length === 2 && corrected.every((e) => e.target === "Tia Typed")
     && corrected.some((e) => /arrived .+ -> .+\. Reason: Signed in at the kiosk late/.test(e.detail)) && corrected.some((e) => /left not checked out -> .+\. Reason: Left without checking out/.test(e.detail)), JSON.stringify(corrected));
   check("times: the log shows it was corrected", (await desk.get(`/api/visits?visitorId=${tia.id}`)).data.visits[0].timesCorrected === 2);
+  const logged = (await desk.get(`/api/visits?visitorId=${tia.id}`)).data.visits[0];
+  check("times: which times changed, and the latest reason", logged.timeChanged.in === true && logged.timeChanged.out === true
+    && logged.lastCorrection.reason === "Left without checking out; host says 2 hours ago" && logged.lastCorrection.by === "desk");
+  r = await desk.get("/api/visits?corrected=1&limit=1000");
+  check("times: the log lists only corrected visits when asked", r.data.total === 1 && r.data.visits[0].id === tiaVisit.id && (await desk.get("/api/visits?limit=1000")).data.total > 1);
+  check("times: an uncorrected visit has no marks", (await desk.get(`/api/visits?visitorId=${tim.id}`)).data.visits[0].timeChanged === null);
 }
 
 main()

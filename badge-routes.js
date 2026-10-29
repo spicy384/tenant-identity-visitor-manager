@@ -581,7 +581,8 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const guest = before.guests.find((g) => g.visitorId === positiveInt(req.params.visitorId));
     const scope = scopeOf(req.query.scope);
     const event = events.removeGuest(before.id, positiveInt(req.params.visitorId), { sites: req.ctx.sites, scope });
-    if (guest) auditFrom(req, "event.guest_remove", event.title, `${guest.firstName} ${guest.lastName}${scope === "following" && before.seriesId ? `, ${before.date} and later dates` : ""}`);
+    const came = guest && guest.status !== "expected";
+    if (guest) auditFrom(req, "event.guest_remove", event.title, `${guest.firstName} ${guest.lastName}${scope === "following" && before.seriesId ? (came ? `, the dates after ${before.date} (came on it)` : `, ${before.date} and later dates`) : ""}`);
     res.json({ ok: true, event });
   });
 

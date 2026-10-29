@@ -205,6 +205,10 @@ label.inline input { width: auto; }
 .badge { display: inline-block; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--primary-soft); color: var(--primary); margin-left: 6px; vertical-align: middle; white-space: nowrap; }
 .badge.ok { background: var(--success-soft); color: var(--success); }
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
+/* A visit whose times were corrected: an edge down the row, and "Changed" beside each changed time (opens the corrections). */
+tr.time-changed > td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+button.time-changed-mark { border: 0; cursor: pointer; font-family: inherit; line-height: inherit; }
+button.time-changed-mark:hover { filter: brightness(0.95); }
 .badge.bad { background: var(--danger-soft); color: var(--danger); }
 .badge.muted { background: var(--surface-3); color: var(--text-muted); }
 td > .badge:first-child, .line-actions .badge, .card-actions .badge { margin-left: 0; }
