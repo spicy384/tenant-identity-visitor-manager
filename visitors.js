@@ -443,16 +443,26 @@ function createVisitors({ db, fields }) {
       // How many times its check-in or check-out time has been corrected, which of them, and the latest.
       timesCorrected: r.time_changes || 0,
       timeChanged: r.time_changes ? { in: String(r.changed_fields || "").split(",").includes("in"), out: String(r.changed_fields || "").split(",").includes("out") } : null,
-      lastCorrection: r.time_changes ? { reason: r.last_reason, by: r.last_by, at: r.last_at } : null
+      lastCorrection: r.time_changes ? { reason: r.last_reason, by: r.last_by, at: r.last_at } : null,
+      // The visitor badges they had on this visit, and whether one was recorded after it.
+      badges: r.badge_labels ? String(r.badge_labels).split(", ") : [],
+      badgeRecordedLater: Boolean(r.badge_recorded_later)
     };
   }
 
+  // A visit's badges: given with it, or (given before badges went with visits) given to the
+  // visitor while they were there.
+  const VISIT_BADGE_WHERE = `a.holder_kind = 'visitor' AND a.holder_id = x.visitor_id AND (a.visit_id = x.id
+    OR (a.visit_id IS NULL AND a.assigned_at >= x.checked_in_at AND a.assigned_at <= coalesce(x.checked_out_at, 9007199254740991)))`;
+  const VISIT_BADGES = `(SELECT group_concat(coalesce(b.facility_code || '-', '') || b.number, ', ') FROM badge_assignments a JOIN badges b ON b.id = a.badge_id WHERE ${VISIT_BADGE_WHERE}) AS badge_labels,
+    (SELECT max(a.note = 'Recorded after the visit') FROM badge_assignments a WHERE ${VISIT_BADGE_WHERE}) AS badge_recorded_later`;
   const VISIT_SELECT = `SELECT x.*, s.name AS site_name, v.first_name, v.last_name, v.organization, v.verified, v.blocked, v.citizenship, k.name AS kiosk_name,
     (SELECT count(*) FROM visit_time_changes c WHERE c.visit_id = x.id) AS time_changes,
     (SELECT group_concat(DISTINCT c.field) FROM visit_time_changes c WHERE c.visit_id = x.id) AS changed_fields,
     (SELECT c.reason FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_reason,
     (SELECT c.changed_by FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_by,
-    (SELECT c.changed_at FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_at
+    (SELECT c.changed_at FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_at,
+    ${VISIT_BADGES}
     FROM visits x JOIN sites s ON s.id = x.site_id JOIN visitors v ON v.id = x.visitor_id LEFT JOIN kiosks k ON k.id = x.kiosk_id`;
 
   function getVisit(id, { sites = null } = {}) {

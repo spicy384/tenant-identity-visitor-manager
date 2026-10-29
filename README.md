@@ -169,7 +169,12 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Reserved badges**: a regular visitor can have a visitor badge kept for them (their
   visitor page, Reserved badge). Check-in tells the desk to hand them that badge; it goes
   back into stock when they leave and stays theirs. Nobody else can be given it.
-- **Visit log**: every visit with filters and a CSV export (administrators).
+- **Visit log**: every visit with filters and a CSV export (administrators), with the visitor
+  badge each visitor had (for those who see badges; a badge given from a visitor's page goes
+  with the visit they're on). **Add badge** enters one that wasn't recorded at the time: for a
+  visit that has ended it is recorded as theirs from arrival to departure, shown as "entered
+  later" and in the badge's history and the audit log, and refused if the badge was with
+  someone else then; for someone still here it is given to them now.
 - **Correcting arrival and departure times**: when a visitor didn't check in or out as they
   should have, **Correct times** on a visit (in the Visit log, or a visitor's visits) changes
   when they arrived and left, for staff who check visitors in. A reason is required. Each

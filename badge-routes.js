@@ -390,20 +390,24 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
    * be an active visitor badge valid at the site that they may hold. A badge they hold already
    * is confirmed rather than given again. Their check-in is then done.
    */
+  /** The badge a request names: { badgeId }, or { number, facilityCode } as typed (one badge, or refused). */
+  function badgeIdFrom(body) {
+    const badgeId = positiveInt(body.badgeId);
+    if (badgeId) return badgeId;
+    const number = str(body.number, 60);
+    if (!number || !number.trim()) throw fail(400, "Enter the badge number.");
+    const code = str(body.facilityCode, 10);
+    const found = badges.findByNumber(number, { facilityCode: code });
+    const typed = code ? `${code.trim()}-${number.trim()}` : number.trim();
+    if (!found.length) throw fail(404, `There's no badge ${typed}. Check the number${code ? " and facility code" : ""} on the badge.`);
+    if (found.length > 1) throw fail(409, `More than one badge is numbered ${number.trim()}: ${found.map((b) => b.label).join(", ")}. Enter its facility code too.`);
+    return found[0].id;
+  }
+
   router.post("/api/visits/:id/badge", giveVisitorBadges, (req, res) => {
     const visit = visitForBadge(req);
     const body = req.body || {};
-    let badgeId = positiveInt(body.badgeId);
-    if (!badgeId) {
-      const number = str(body.number, 60);
-      if (!number || !number.trim()) throw fail(400, "Enter the badge number.");
-      const code = str(body.facilityCode, 10);
-      const found = badges.findByNumber(number, { facilityCode: code });
-      const typed = code ? `${code.trim()}-${number.trim()}` : number.trim();
-      if (!found.length) throw fail(404, `There's no badge ${typed}. Check the number${code ? " and facility code" : ""} on the badge.`);
-      if (found.length > 1) throw fail(409, `More than one badge is numbered ${number.trim()}: ${found.map((b) => b.label).join(", ")}. Enter its facility code too.`);
-      badgeId = found[0].id;
-    }
+    const badgeId = badgeIdFrom(body);
     const badge = badges.get(badgeId, { sites: req.ctx.sites });
     if (!badge) throw fail(404, "There's no such badge at your sites.");
     if (badge.type !== "visitor") throw fail(400, `Badge ${badge.label} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`);
@@ -417,6 +421,29 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const given = badges.assign(badge.id, { kind: "visitor", holderId: visit.visitor.id, visitId: visit.id }, { by: staffName(req), sites: req.ctx.sites, levelNames: seesLevels(req) });
     auditFrom(req, "badge.assign", given.label, `to ${given.holder.name}${given.holder.company ? ` (${given.holder.company})` : ""}; at check-in`);
     return res.json({ ok: true, badge: badgeOut(req, given), already: false });
+  });
+
+  /**
+   * The badge a visitor had on a visit, when it wasn't recorded at the time ({ number,
+   * facilityCode } or { badgeId }): for a visit that has ended, recorded for its time; for one
+   * still open, given to them now.
+   */
+  router.post("/api/visits/:id/badge-record", giveVisitorBadges, editVisitors, (req, res) => {
+    const visit = visitors.getVisit(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!visit) throw fail(404, "No such visit.");
+    const badge = badges.get(badgeIdFrom(req.body || {}), { sites: req.ctx.sites });
+    if (!badge) throw fail(404, "There's no such badge at your sites.");
+    if (badge.type !== "visitor") throw fail(400, `Badge ${badge.label} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`);
+    if (!validAtSite(badge, visit.siteId)) throw fail(400, `Badge ${badge.label} isn't valid at ${visit.siteName}.`);
+    const name = `${visit.visitor.firstName} ${visit.visitor.lastName}`;
+    if (!visit.checkedOutAt) {
+      const given = badges.assign(badge.id, { kind: "visitor", holderId: visit.visitor.id, visitId: visit.id }, { by: staffName(req), sites: req.ctx.sites, levelNames: seesLevels(req) });
+      auditFrom(req, "badge.assign", given.label, `to ${given.holder.name}${given.holder.company ? ` (${given.holder.company})` : ""}; entered from the visit log`);
+      return res.json({ ok: true, badge: badgeOut(req, given), recorded: false });
+    }
+    badges.recordForVisit(badge.id, visit.id, { by: staffName(req), sites: req.ctx.sites });
+    auditFrom(req, "visit.badge_recorded", name, `badge ${badge.label}, recorded after the visit (${visit.siteName}, arrived ${new Date(visit.checkedInAt).toISOString()})`);
+    res.json({ ok: true, badge: badgeOut(req, badges.get(badge.id)), recorded: true });
   });
 
   /** Reserves a visitor badge for a regular visitor ({ badgeId }, or null to release it). */

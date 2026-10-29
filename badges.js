@@ -37,6 +37,9 @@ const FACILITY_CODE_RE = /^\d{2,3}$/;
 /** How a badge is written for people: its facility code and number ("101-12345"), or the number alone. */
 const badgeLabel = (facilityCode, number) => (facilityCode ? `${facilityCode}-${number}` : number);
 
+// The note on a badge recorded for a visit after it ended.
+const RECORDED_NOTE = "Recorded after the visit";
+
 function createBadges({ db, clearance, now = Date.now }) {
   const raw = db.raw;
 
@@ -398,6 +401,9 @@ function createBadges({ db, clearance, now = Date.now }) {
     const why = refusal(badge, h, { levelNames });
     if (why) throw fail(409, why);
     if (visitId && !raw.prepare("SELECT 1 FROM visits WHERE id = ? AND visitor_id = ?").get(visitId, h.id)) throw fail(400, "That visit isn't the visitor's.");
+    // A visitor's badge goes with the visit they're on now, however it was given (only recorded:
+    // their check-in isn't finished by it).
+    const onVisit = visitId || (kind === "visitor" ? raw.prepare("SELECT id FROM visits WHERE visitor_id = ? AND checked_out_at IS NULL ORDER BY checked_in_at DESC LIMIT 1").get(h.id)?.id ?? null : null);
     let replaces = null;
     let dueAt = null;
     const loan = isLoan(badge, h);
@@ -409,7 +415,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     }
     db.transaction(() => {
       raw.prepare(`INSERT INTO badge_assignments (badge_id, holder_kind, holder_id, holder_name, holder_company, visit_id, assigned_at, assigned_by, temporary, replaces_badge_id, due_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(badge.id, kind, h.id, h.name, h.company || null, visitId, now(), by, loan ? 1 : 0, replaces ? replaces.id : null, dueAt);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(badge.id, kind, h.id, h.name, h.company || null, onVisit, now(), by, loan ? 1 : 0, replaces ? replaces.id : null, dueAt);
       // A visitor waiting for a badge has one now: their check-in is done.
       if (kind === "visitor") {
         if (visitId) raw.prepare("UPDATE visits SET checkin_stage = 'done' WHERE id = ? AND checkin_stage IN ('id', 'badge')").run(visitId);
@@ -417,6 +423,31 @@ function createBadges({ db, clearance, now = Date.now }) {
       }
     });
     return get(badge.id);
+  }
+
+  /**
+   * Records the visitor badge a visitor had on a visit that has ended, when it wasn't recorded
+   * at the time: held from their arrival to when they left, and back. Refused when the visit
+   * has a badge already, or the badge was with someone else at any time during it.
+   */
+  function recordForVisit(badgeId, visitId, { by = null, sites = null } = {}) {
+    const badge = get(badgeId, { sites });
+    if (!badge) throw fail(404, "No such badge.");
+    if (badge.type !== "visitor") throw fail(400, `Badge ${badge.label} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`);
+    const visit = raw.prepare(`SELECT x.id, x.visitor_id, x.checked_in_at, x.checked_out_at, v.first_name, v.last_name, v.organization
+      FROM visits x JOIN visitors v ON v.id = x.visitor_id WHERE x.id = ?`).get(Number(visitId));
+    if (!visit) throw fail(404, "No such visit.");
+    if (!visit.checked_out_at) throw fail(409, "They're still here: give them the badge instead.");
+    if (raw.prepare("SELECT 1 FROM badge_assignments WHERE visit_id = ?").get(visit.id)) throw fail(409, "This visit has a badge recorded already.");
+    const clash = raw.prepare(`SELECT holder_kind, holder_id, holder_name, assigned_at, returned_at FROM badge_assignments
+      WHERE badge_id = ? AND assigned_at < ? AND (returned_at IS NULL OR returned_at > ?) ORDER BY assigned_at LIMIT 1`).get(badge.id, visit.checked_out_at, visit.checked_in_at);
+    // Still theirs from an earlier visit: recorded there already.
+    if (clash && clash.holder_kind === "visitor" && clash.holder_id === visit.visitor_id) throw fail(409, `${clash.holder_name} had badge ${badge.label} then already: it was given to them on an earlier visit${clash.returned_at ? "" : " and hasn't been taken back"}.`);
+    if (clash) throw fail(409, `Badge ${badge.label} was with ${clash.holder_name} then, so it can't have been this visitor's. Check the number.`);
+    raw.prepare(`INSERT INTO badge_assignments (badge_id, holder_kind, holder_id, holder_name, holder_company, visit_id, assigned_at, assigned_by, returned_at, returned_by, outcome, note)
+      VALUES (?, 'visitor', ?, ?, ?, ?, ?, ?, ?, ?, 'returned', ?)`)
+      .run(badge.id, visit.visitor_id, `${visit.first_name} ${visit.last_name}`, visit.organization || null, visit.id, visit.checked_in_at, by, visit.checked_out_at, by, RECORDED_NOTE);
+    return badge;
   }
 
   /** Takes a badge back. outcome "lost" also marks the badge lost. */
@@ -517,7 +548,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     return [...out.values()];
   }
 
-  return { list, get, history, forHolder, openForHolder, create, createRange, update, remove, holder, refusal, availableFor, assign, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
+  return { list, get, history, forHolder, openForHolder, create, createRange, update, remove, holder, refusal, availableFor, assign, recordForVisit, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
 }
 
-module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES, FACILITY_CODE_RE, badgeLabel };
+module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES, FACILITY_CODE_RE, badgeLabel, RECORDED_NOTE };

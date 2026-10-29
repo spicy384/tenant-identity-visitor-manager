@@ -53,7 +53,9 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
   /** A visit as the caller may see it: the visitor's company and citizenship only when those fields are visible. */
   function visitsOut(ctx, list) {
     const visible = new Set(access.fieldsFor(ctx, "visitor").map((f) => f.key));
-    return list.map((v) => ({ ...v, visitor: { ...v.visitor, organization: visible.has("organization") ? v.visitor.organization : undefined, citizenship: visible.has("citizenship") ? v.visitor.citizenship : undefined } }));
+    const seesBadges = access.canReadBadges(ctx);
+    return list.map((v) => ({ ...v, badges: seesBadges ? v.badges : undefined, badgeRecordedLater: seesBadges ? v.badgeRecordedLater : undefined,
+      visitor: { ...v.visitor, organization: visible.has("organization") ? v.visitor.organization : undefined, citizenship: visible.has("citizenship") ? v.visitor.citizenship : undefined } }));
   }
 
   function siteParam(req, value) {
@@ -231,8 +233,8 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
     const { visits } = visitors.listVisits({ ...visitFilter(req), limit: 1000000 });
     const iso = (ms) => (ms ? new Date(ms).toISOString() : "");
     const csv = toCsv(
-      ["checked_in", "checked_out", "site", "first_name", "last_name", "organization", "company", "host", "purpose", "checked_in_by", "checkout", "checked_out_by", "times_corrected"],
-      visits.map((v) => [iso(v.checkedInAt), iso(v.checkedOutAt), v.siteName, v.visitor.firstName, v.visitor.lastName, v.visitor.organization, v.companyName, v.hostName, v.purpose, v.checkedInBy, v.checkoutMethod, v.checkedOutBy, v.timesCorrected])
+      ["checked_in", "checked_out", "site", "first_name", "last_name", "organization", "company", "host", "purpose", "checked_in_by", "checkout", "checked_out_by", "times_corrected", "badge"],
+      visits.map((v) => [iso(v.checkedInAt), iso(v.checkedOutAt), v.siteName, v.visitor.firstName, v.visitor.lastName, v.visitor.organization, v.companyName, v.hostName, v.purpose, v.checkedInBy, v.checkoutMethod, v.checkedOutBy, v.timesCorrected, (v.badges || []).join("; ")])
     );
     auditFrom(req, "export.visits", `${visits.length} visits`);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");

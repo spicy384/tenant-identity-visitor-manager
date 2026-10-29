@@ -14,7 +14,10 @@ const CHECKOUT_LABELS = { kiosk: "at the kiosk", staff: "by staff", auto: "at en
 function visitsTable(visits, { showVisitor = true, onChange = () => {} } = {}) {
   const allSites = multiSite();
   const correcting = canEditVisitors();
-  const head = ["Arrived", "Left", ...(showVisitor ? ["Visitor"] : []), "Visiting", "Host", ...(allSites ? ["Site"] : []), ...(correcting ? [""] : [])];
+  // The badge each visitor had, for those who see badges; entered later by those who give them out.
+  const seesBadges = canReadBadges();
+  const entersBadges = correcting && canEditBadges();
+  const head = ["Arrived", "Left", ...(showVisitor ? ["Visitor"] : []), "Visiting", "Host", ...(seesBadges ? ["Badge"] : []), ...(allSites ? ["Site"] : []), ...(correcting ? [""] : [])];
   return h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
     h("thead", {}, h("tr", {}, head.map((t) => h("th", { text: t })))),
     h("tbody", {}, visits.length ? visits.map((v) => h("tr", { class: v.timesCorrected ? "time-changed" : null },
@@ -25,6 +28,9 @@ function visitsTable(visits, { showVisitor = true, onChange = () => {} } = {}) {
       showVisitor ? h("td", {}, h("a", { href: `#visitor/${v.visitorId}`, text: visitorName(v.visitor) }), v.visitor.organization ? h("div", { class: "muted small-text", text: v.visitor.organization }) : null) : null,
       h("td", { text: v.companyName || "" }, v.purpose ? h("div", { class: "muted small-text", text: v.purpose }) : null),
       h("td", { text: v.hostName || "" }),
+      seesBadges ? h("td", { class: "small-text" }, (v.badges || []).length
+        ? [h("span", { class: "mono", text: v.badges.join(", ") }), v.badgeRecordedLater ? h("div", { class: "muted", text: "entered later" }) : null]
+        : entersBadges ? h("button", { type: "button", class: "link-btn small-text nowrap", text: "Add badge", onclick: async () => { if (await recordVisitBadge(v)) onChange(); } }) : h("span", { class: "muted", text: "None" })) : null,
       allSites ? h("td", { class: "small-text", text: v.siteName }) : null,
       correcting ? h("td", {}, h("button", { type: "button", class: "link-btn small-text nowrap", text: "Correct times", onclick: async () => { if (await correctVisitTimes(v)) onChange(); } })) : null)) : emptyRow(head.length, "No visits."))));
 }
@@ -37,6 +43,34 @@ function changedMark(v, onChange) {
   const last = v.lastCorrection;
   const title = `${v.timesCorrected === 1 ? "Changed" : `Changed ${v.timesCorrected} times; last`} by ${last?.by || "staff"}, ${fmtDateTime(last?.at)}: ${last?.reason || ""}`;
   return h("button", { type: "button", class: "badge warn time-changed-mark", title, "aria-label": title, text: "Changed", onclick: async () => { if (await correctVisitTimes(v, { look: true })) onChange(); } });
+}
+
+/**
+ * Enters the badge a visitor had on a visit, when none was recorded at the time: for a visit
+ * that has ended, recorded for its time (and refused if it was with someone else then); for one
+ * still open, given to them now. Resolves true when it was entered.
+ */
+async function recordVisitBadge(v) {
+  const name = visitorName(v.visitor);
+  const ended = Boolean(v.checkedOutAt);
+  const saved = await formDialog({
+    title: `Badge for ${name}'s visit`,
+    intro: h("p", { class: "muted full-row", text: ended
+      ? `${v.siteName}, ${fmtDateTime(v.checkedInAt)} to ${fmtDateTime(v.checkedOutAt)}. The badge is recorded as theirs for that time, and back when they left. The badge's history shows it, noted as entered later.`
+      : `${name} is still here: the badge is given to them now, as at check-in.` }),
+    fields: [
+      { name: "number", label: "Badge number", required: true, half: true, autofocus: true, placeholder: "e.g. V-012 or 101-40001" },
+      { name: "facilityCode", label: "Facility code (optional)", half: true, placeholder: "2-3 digits", hint: "Only if the same number is under more than one code." }
+    ],
+    submitLabel: ended ? "Record the badge" : "Give the badge",
+    onSubmit: async (values) => {
+      const r = await api(`/api/visits/${v.id}/badge-record`, { method: "POST", body: { number: values.number, facilityCode: values.facilityCode || null } });
+      toast(r.recorded ? `Badge ${r.badge.label} recorded for the visit.` : `Badge ${r.badge.label} given to ${name}.`);
+      return true;
+    }
+  });
+  if (saved) refreshCounts();
+  return Boolean(saved);
 }
 
 /** A timestamp as a datetime-local input's value, in this device's time. */

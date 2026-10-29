@@ -303,6 +303,48 @@ async function main() {
   r = await desk.get("/api/visits?corrected=1&limit=1000");
   check("times: the log lists only corrected visits when asked", r.data.total === 1 && r.data.visits[0].id === tiaVisit.id && (await desk.get("/api/visits?limit=1000")).data.total > 1);
   check("times: an uncorrected visit has no marks", (await desk.get(`/api/visits?visitorId=${tim.id}`)).data.visits[0].timeChanged === null);
+
+  // --- the badge each visit had, and entering one later ----------------------------------------------
+  const visitOf = async (visitorId) => (await desk.get(`/api/visits?visitorId=${visitorId}`)).data.visits[0];
+  check("badge: the log shows the badge given at check-in", (await visitOf(tia.id)).badges.join() === "301-777" && (await visitOf(tia.id)).badgeRecordedLater === false);
+  await admin.post("/api/roles", { name: "Visit reader", directory: "none", visitors: "read", badges: "none" });
+  const vrPw = `Pw-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+  await admin.post("/api/users", { username: "visitreader", password: vrPw, role: "visit-reader" });
+  const visitReader = await as("visitreader", vrPw);
+  r = await visitReader.get(`/api/visits?visitorId=${tia.id}`);
+  check("badge: not to those who don't see badges", r.status === 200 && r.data.visits[0].badges === undefined, JSON.stringify(r.data).slice(0, 200));
+  check("badge: a visit with one can't have another entered", (await desk.post(`/api/visits/${tiaVisit.id}/badge-record`, { number: "V-3" })).status === 409);
+  const rita = (await desk.post("/api/visitors", { firstName: "Rita", lastName: "Record", organization: "Late Co", citizenship: "US" })).data.visitor;
+  const ritaVisit = (await desk.post("/api/checkins", { visitorId: rita.id, siteId: site.id, hostId: host.id, purpose: "Audit", idType: "Passport" })).data.visit;
+  await desk.post(`/api/visits/${ritaVisit.id}/badge-not-needed`);
+  await desk.post(`/api/visits/${ritaVisit.id}/checkout`);
+  check("badge: none recorded", (await visitOf(rita.id)).badges.length === 0);
+  const vRec = (await security.post("/api/badges", { number: "V-REC", type: "visitor" })).data.badge;
+  const tRec = (await security.post("/api/badges", { number: "T-REC", type: "tenant" })).data.badge;
+  check("badge: only those who give badges and check visitors in", (await viewer.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "V-REC" })).status === 403);
+  check("badge: a number that isn't a badge", (await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "NOPE-1" })).status === 404);
+  check("badge: only a visitor badge", (await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { badgeId: tRec.id })).status === 400);
+  r = await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "101-777" });
+  check("badge: not one that was with someone else then", r.status === 409 && /was with Tim Typed then/.test(r.data.error), r.data.error);
+  r = await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "v-rec" });
+  check("badge: entered for a visit that ended, held for its time and back", r.status === 200 && r.data.recorded === true && !r.data.badge.holder, JSON.stringify(r.data));
+  const ritaLogged = await visitOf(rita.id);
+  check("badge: the log shows it, marked entered later", ritaLogged.badges.join() === "V-REC" && ritaLogged.badgeRecordedLater === true);
+  const recHistory = (await desk.get(`/api/badges/${vRec.id}`)).data;
+  const recRow = (recHistory.history || recHistory.badge.history || [])[0];
+  check("badge: in the badge's history, noted", recRow && recRow.holderName === "Rita Record" && recRow.note === "Recorded after the visit" && recRow.assignedAt === ritaVisit.checkedInAt, JSON.stringify(recHistory).slice(0, 400));
+  check("badge: in the audit log", (await admin.get("/api/audit?action=visit.badge_recorded")).data.entries.some((e) => e.target === "Rita Record" && /V-REC, recorded after the visit/.test(e.detail)));
+  // Someone still here: entered from the log, it is given to them now.
+  const ola = (await desk.post("/api/visitors", { firstName: "Ola", lastName: "Open", organization: "Now Co", citizenship: "US" })).data.visitor;
+  const olaVisit = (await desk.post("/api/checkins", { visitorId: ola.id, siteId: site.id, hostId: host.id, purpose: "Audit", idType: "Passport" })).data.visit;
+  const vNow = (await security.post("/api/badges", { number: "V-NOW", type: "visitor" })).data.badge;
+  r = await desk.post(`/api/visits/${olaVisit.id}/badge-record`, { number: "V-NOW" });
+  check("badge: for someone still here, given now", r.status === 200 && r.data.recorded === false && r.data.badge.holder?.name === "Ola Open" && (await visitOf(ola.id)).badges.join() === "V-NOW");
+  await desk.post(`/api/badges/${vNow.id}/return`);
+  // A badge given from the visitor's page while they're here goes with that visit.
+  const vPage = (await security.post("/api/badges", { number: "V-PAGE", type: "visitor" })).data.badge;
+  await desk.post(`/api/badges/${vPage.id}/assign`, { kind: "visitor", holderId: ola.id });
+  check("badge: given from their page, it goes with the visit they're on", (await visitOf(ola.id)).badges.includes("V-PAGE"));
 }
 
 main()
