@@ -16,6 +16,7 @@ const { createFields } = require("../fields");
 const { createDirectory } = require("../directory");
 const { createVisitors } = require("../visitors");
 const { createClearance, statusFor } = require("../clearance");
+const { createLogRetention } = require("../log-retention");
 const { takeDigits, digitsBody } = require("../clearance-routes");
 
 const { check, report } = createChecker("Clearance validation");
@@ -80,6 +81,31 @@ function inProcess() {
   t += 60 * 60 * 1000 + 1000;
   check("expiry: the digits are wiped after their time", clearance.digitsOf(second.id) === null && clearance.openRequests()[0].digitsHeld === false);
   check("expiry: the request itself still waits", clearance.openCount() === 1 && clearance.openRequests()[0].hadDigits === true);
+
+  // How long digits are held is a setting: shortened, it applies to digits held already.
+  const heldReq = clearance.requestValidation({ kind: "person", id: person.id, last4: DIGITS, by: "manny" });
+  t += 3 * 60 * 60 * 1000;
+  check("hold: still held after 3 hours of 36", clearance.digitsOf(heldReq.id) !== null);
+  check("hold: 1 to 168 hours", throwsStatus(() => clearance.saveSettings({ digitsHours: 169 }), 400) === true && throwsStatus(() => clearance.saveSettings({ digitsHours: 0 }), 400) === true && throwsStatus(() => clearance.saveSettings({ digitsHours: 1.5 }), 400) === true);
+  clearance.saveSettings({ digitsHours: 2 });
+  check("hold: shortened to 2 hours, digits held 3 are wiped at once", clearance.DIGITS_TTL_HOURS === 2 && clearance.digitsOf(heldReq.id) === null && clearance.openRequests()[0].digitsHeld === false);
+  check("hold: the re-check period is kept beside it", clearance.settings().visitorRecheckDays === 90 && clearance.saveSettings({ visitorRecheckDays: 60 }).digitsHours === 2);
+  clearance.saveSettings({ digitsHours: 36, visitorRecheckDays: 90 });
+
+  // The audit log's retention: sign-ins and the rest, each its own number of days.
+  const logs = createLogRetention({ db, now: () => t });
+  db.raw.prepare("DELETE FROM audit").run();
+  const add = (daysAgo, action) => db.raw.prepare("INSERT INTO audit (at, username, ip, action) VALUES (?, 'x', '10.0.0.1', ?)").run(t - daysAgo * DAY, action);
+  add(400, "person.update"); add(100, "person.update"); add(10, "person.update");
+  add(400, "auth.login"); add(40, "auth.login"); add(3, "auth.logout");
+  check("retention: kept for ever to start with", logs.settings().auditDays === 0 && logs.settings().signinDays === 0 && logs.run().audit === 0 && db.raw.prepare("SELECT count(*) AS n FROM audit").get().n === 6);
+  check("retention: at least 30 days for changes and 7 for sign-ins, unless for ever", throwsStatus(() => logs.save({ auditDays: 29 }), 400) === true && throwsStatus(() => logs.save({ signinDays: 6 }), 400) === true && throwsStatus(() => logs.save({ auditDays: 3651 }), 400) === true);
+  logs.save({ auditDays: 365, signinDays: 30 });
+  check("retention: what a run would delete, before it does", JSON.stringify(logs.preview()) === JSON.stringify({ audit: 1, signins: 2 }) && JSON.stringify(logs.preview({ auditDays: 30, signinDays: 0 })) === JSON.stringify({ audit: 2, signins: 0 }));
+  const removed = logs.run();
+  const left = db.raw.prepare("SELECT action, at FROM audit WHERE action <> 'audit.retention' ORDER BY at").all().map((r) => `${r.action}@${Math.round((t - r.at) / DAY)}`);
+  check("retention: each part trimmed to its own days", removed.audit === 1 && removed.signins === 2 && left.join() === "person.update@100,person.update@10,auth.logout@3", left.join());
+  check("retention: the run is recorded", /1 audit entries older than 365 days and 2 sign-ins older than 30 days deleted/.test(db.raw.prepare("SELECT detail FROM audit WHERE action = 'audit.retention'").get()?.detail || ""));
 
   const third = clearance.requestValidation({ kind: "person", id: person.id, last4: DIGITS, by: "manny" });
   const done = clearance.validate({ kind: "person", id: person.id, levelId: L.TS.id, granted: "2025-01-02", expires: "2030-01-02", by: "sec" });
@@ -277,6 +303,37 @@ async function overHttp() {
   check("http: Security reads them, one request at a time, never cached", r.status === 200 && r.data.last4 === DIGITS && r.cache === "no-store");
   check("http: with no ETag (a hash of four digits gives them away)", r.etag === null);
   check("http: the lifetime comes from CLEARANCE_DIGITS_HOURS", (await security.get("/api/clearance/requests")).data.digitsHeldHours === 12 && (await manager.get("/api/config")).data.clearance.digitsHeldHours === 12);
+
+  // Settings > Logs and retention.
+  check("retention: only administrators", (await security.get("/api/settings/retention")).status === 403 && (await security.put("/api/settings/retention", { digitsHours: 2 })).status === 403);
+  r = await admin.get("/api/settings/retention");
+  check("retention: each log's keeping, the environment's hours to start with", r.status === 200 && r.data.clearance.digitsHours === 12 && r.data.clearance.maxDigitsHours === 168
+    && r.data.audit.auditDays === 0 && r.data.visits.retentionMonths === 0 && r.data.securityMail.keepDays === 365, JSON.stringify(r.data));
+  check("retention: a bad value saves nothing", (await admin.put("/api/settings/retention", { auditDays: 365, digitsHours: 200 })).status === 400 && (await admin.get("/api/settings/retention")).data.audit.auditDays === 0);
+  r = await admin.put("/api/settings/retention", { auditDays: 365, signinDays: 90, visitsMonths: 24, securityMailDays: 400, digitsHours: 8 });
+  check("retention: all saved together", r.status === 200 && r.data.audit.auditDays === 365 && r.data.audit.signinDays === 90 && r.data.visits.retentionMonths === 24 && r.data.securityMail.keepDays === 400 && r.data.clearance.digitsHours === 8, JSON.stringify(r.data));
+  check("retention: the hours reach Security's queue at once", (await security.get("/api/clearance/requests")).data.digitsHeldHours === 8 && (await manager.get("/api/config")).data.clearance.digitsHeldHours === 8);
+  check("retention: the change in the audit log", (await admin.get("/api/audit?action=settings.retention")).data.entries.some((e) => /audit log 365 days; sign-ins 90 days; visits 24 months; alarms and guard reports 400 days; SSN digits held 8 hours/.test(e.detail)));
+  check("retention: the preview for other days", typeof (await admin.get("/api/settings/retention/preview?auditDays=30&signinDays=7")).data.audit === "number");
+
+  // The audit log's filters: user, action, sign-ins, IP, dates.
+  const all = (await admin.get("/api/audit?limit=500")).data.entries;
+  const facets = (await admin.get("/api/audit/facets")).data;
+  check("filters: the users and actions to choose from", facets.users.includes("admin") && facets.users.includes("sec") && facets.actions.includes("auth.login") && facets.actions.includes("settings.retention"));
+  r = await admin.get("/api/audit?username=sec&limit=500");
+  check("filters: by user", r.data.entries.length > 0 && r.data.entries.every((e) => e.username === "sec"));
+  r = await admin.get("/api/audit?action=auth.login&limit=500");
+  check("filters: by action", r.data.entries.length > 0 && r.data.entries.every((e) => e.action === "auth.login"));
+  check("filters: by a group of actions", (await admin.get("/api/audit?action=clearance.&limit=500")).data.entries.every((e) => e.action.startsWith("clearance.")));
+  check("filters: sign-ins only, or none", (await admin.get("/api/audit?signins=only&limit=500")).data.entries.every((e) => e.action.startsWith("auth."))
+    && !(await admin.get("/api/audit?signins=hide&limit=500")).data.entries.some((e) => e.action.startsWith("auth.")));
+  const anIp = all.find((e) => e.ip)?.ip;
+  r = await admin.get(`/api/audit?ip=${encodeURIComponent(anIp.slice(0, 4))}&limit=500`);
+  check("filters: by the start of an IP address", r.data.entries.length > 0 && r.data.entries.every((e) => String(e.ip).startsWith(anIp.slice(0, 4))) && (await admin.get("/api/audit?ip=203.0.113.&limit=500")).data.entries.length === 0);
+  const day = new Date(); const ymd = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+  check("filters: by dates", (await admin.get(`/api/audit?from=${ymd}&to=${ymd}&limit=500`)).data.entries.length === all.length && (await admin.get("/api/audit?to=2000-01-01")).data.entries.length === 0);
+  check("filters: together", (await admin.get(`/api/audit?username=sec&signins=only&limit=500`)).data.entries.every((e) => e.username === "sec" && e.action.startsWith("auth.")));
+  check("filters: administrators only", (await security.get("/api/audit")).status === 403 && (await security.get("/api/audit/facets")).status === 403);
   check("http: the config tells Security how many wait", (await security.get("/api/config")).data.clearance.queue === 2 && (await manager.get("/api/config")).data.clearance.queue === 0);
 
   // Only Security sets a clearance.

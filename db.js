@@ -820,14 +820,34 @@ function openDatabase({ dataDir, key, file = DB_FILE }) {
     auditStmt.run(Date.now(), username, ip, String(action), target === null ? null : String(target).slice(0, 300), detail === null ? null : String(detail).slice(0, 2000));
   }
 
-  function auditLog({ limit = 100, before = null, action = null, username = null } = {}) {
+  /**
+   * The audit log, newest first, a page at a time (before: the last id of the page before).
+   * action: those starting with it (an exact action, or "badge." for every badge one);
+   * username: that account's; ip: from addresses starting with it; signins: "only" for
+   * sign-ins (auth.*), "hide" for everything but; from and to: timestamps.
+   */
+  function auditLog({ limit = 100, before = null, action = null, username = null, ip = null, signins = null, from = null, to = null } = {}) {
     const where = [];
     const params = [];
+    const like = (s) => `${String(s).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     if (before) { where.push("id < ?"); params.push(before); }
-    if (action) { where.push("action LIKE ?"); params.push(`${action}%`); }
+    if (action) { where.push("action LIKE ? ESCAPE '\\'"); params.push(like(action)); }
     if (username) { where.push("username = ?"); params.push(username); }
+    if (ip) { where.push("ip LIKE ? ESCAPE '\\'"); params.push(like(ip)); }
+    if (signins === "only") where.push("action LIKE 'auth.%'");
+    if (signins === "hide") where.push("action NOT LIKE 'auth.%'");
+    if (from) { where.push("at >= ?"); params.push(from); }
+    if (to) { where.push("at < ?"); params.push(to); }
     const rows = db.prepare(`SELECT * FROM audit ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`).all(...params, limit + 1);
     return { entries: rows.slice(0, limit), more: rows.length > limit };
+  }
+
+  /** The accounts and actions in the audit log, for its filters. */
+  function auditFacets() {
+    return {
+      users: db.prepare("SELECT DISTINCT username FROM audit WHERE username IS NOT NULL ORDER BY username COLLATE NOCASE").all().map((r) => r.username),
+      actions: db.prepare("SELECT DISTINCT action FROM audit ORDER BY action").all().map((r) => r.action)
+    };
   }
 
   // --- backup ------------------------------------------------------------------------
@@ -847,6 +867,7 @@ function openDatabase({ dataDir, key, file = DB_FILE }) {
     transaction,
     readDoc,
     writeDoc,
+    auditFacets,
     getSetting,
     setSetting,
     audit,

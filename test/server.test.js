@@ -98,8 +98,31 @@ async function signIn(username, pw) {
   return c;
 }
 
+/** The address limit tells its owner once each time an address is blocked, for the audit log. */
+function limiterUnit() {
+  const { createRateLimiter } = require("../rate-limit");
+  let t = 1000000;
+  const blocks = [];
+  const limiter = createRateLimiter({ maxFailures: 2, windowMs: 60000, now: () => t, keyFor: (req) => req.ip, onBlock: (req, seconds) => blocks.push([req.ip, seconds]) });
+  const hit = (ip, status = 401) => {
+    const res = { statusCode: 200, headers: {}, setHeader(k, v) { this.headers[k] = v; }, status(code) { this.statusCode = code; return this; }, json() { return this; }, on(ev, fn) { this.done = fn; } };
+    let passed = false;
+    limiter.middleware({ ip }, res, () => { passed = true; });
+    if (passed) { res.statusCode = status; res.done(); }
+    return res.statusCode;
+  };
+  hit("10.0.0.9"); hit("10.0.0.9");
+  const first = [hit("10.0.0.9"), hit("10.0.0.9"), hit("10.0.0.9")];
+  check("limit: an address blocked after its failures, told once however often it tries", first.every((s) => s === 429) && blocks.length === 1 && blocks[0][0] === "10.0.0.9" && blocks[0][1] > 0, JSON.stringify([first, blocks]));
+  t += 61000;
+  hit("10.0.0.9"); hit("10.0.0.9");
+  hit("10.0.0.9");
+  check("limit: blocked again later, told again", blocks.length === 2);
+}
+
 let server;
 async function main() {
+  limiterUnit();
   // Without a key the server must refuse to start, saying why.
   const noKey = spawnSync(process.execPath, ["server.js"], { cwd: PROJECT, env: { ...process.env, DB_KEY: "", DB_KEY_FILE: "", DATA_DIR, PORT: String(PORT) }, encoding: "utf8", timeout: 20000 });
   check("boot: refuses to start without a database key", noKey.status === 1 && /No database key/.test(noKey.stderr), noKey.stderr);
@@ -346,6 +369,25 @@ async function main() {
 
   await viewer.post("/api/auth/logout");
   check("logout: session ended", (await viewer.get("/api/companies")).status === 401);
+
+  // --- failed sign-ins, in the audit log ------------------------------------------------------------
+  const failures = async () => (await admin.get("/api/audit?action=auth.login_failed&limit=500")).data.entries;
+  const typedSecret = "Hunter2-typed-in-the-wrong-box";
+  await client().post("/api/auth/login", { username: typedSecret, password: "whatever" });
+  let f = await failures();
+  check("failed: a username matching no account is recorded, never what was typed", f[0]?.target === "unknown account" && f[0].username === null && /matches no account/.test(f[0].detail)
+    && !JSON.stringify(await admin.get("/api/audit?limit=500")).includes(typedSecret));
+  await client().post("/api/auth/login", { username: "fran", password: "not her password" });
+  f = await failures();
+  check("failed: a wrong password, against the account, never the password", f[0]?.username === "fran" && f[0].target === "fran" && f[0].detail === "wrong password" && f[0].ip
+    && !JSON.stringify(f).includes("not her password"));
+  for (let i = 0; i < 4; i += 1) await client().post("/api/auth/login", { username: "fran", password: `wrong ${i}` });
+  f = await failures();
+  check("failed: the attempt that locks the account says so", /wrong password; the account is locked for 15 minutes/.test(f[0]?.detail || ""), f[0]?.detail);
+  r = await client().post("/api/auth/login", { username: "fran", password: pw.frontdesk });
+  f = await failures();
+  check("failed: the right password while locked is recorded too", r.status === 429 && /right password, but the account is locked/.test(f[0]?.detail || ""));
+  check("failed: among the sign-ins, filtered by user", (await admin.get("/api/audit?signins=only&username=fran&limit=500")).data.entries.filter((e) => e.action === "auth.login_failed").length === 6);
 }
 
 main()

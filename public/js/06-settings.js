@@ -79,7 +79,7 @@ async function renderSettings() {
   for (const g of $("settings-tabs").querySelectorAll(".settings-group")) g.hidden = ![...g.querySelectorAll("button[data-tab]")].some((b) => !b.hidden);
   const body = clear($("settings-body"));
   try {
-    const render = { general: settingsGeneral, sites: settingsSites, fields: settingsFields, access: settingsAccess, visits: settingsVisits, kiosks: settingsKiosks, badges: settingsBadges, "security-mail": settingsSecurityMail, api: settingsApiClients, roles: settingsRoles, users: settingsUsers, entra: settingsEntra, data: settingsData, audit: settingsAudit }[settingsTab] || settingsSites;
+    const render = { general: settingsGeneral, sites: settingsSites, fields: settingsFields, access: settingsAccess, visits: settingsVisits, kiosks: settingsKiosks, badges: settingsBadges, "security-mail": settingsSecurityMail, api: settingsApiClients, roles: settingsRoles, users: settingsUsers, entra: settingsEntra, data: settingsData, retention: settingsRetention, audit: settingsAudit }[settingsTab] || settingsSites;
     await render(body);
   } catch (error) {
     body.append(h("p", { class: "message error", text: error.message }));
@@ -719,27 +719,119 @@ async function settingsData(body) {
 
 // --- audit log -------------------------------------------------------------------------------------------------
 
+// --- Settings > Logs and retention ------------------------------------------------------------------
+
+/**
+ * How long each log is kept, in one place: the audit log (sign-ins apart from the rest), visits,
+ * alarms and guard reports, and how long a validation request's SSN digits are held. What a
+ * change to the audit log would delete is shown before it is saved.
+ */
+async function settingsRetention(body) {
+  const r = await api("/api/settings/retention");
+  const keepText = (n, unit) => (n ? `${n.toLocaleString()} ${unit}` : "for ever");
+  const preview = h("p", { class: "muted small-text full-row", text: "Change the days to see what the next daily run would delete." });
+  const fields = [
+    { type: "heading", label: "Audit log" },
+    { name: "auditDays", label: "Keep changes for (days)", type: "number", half: true, value: r.audit.auditDays,
+      hint: `0 keeps them for ever; otherwise ${r.audit.least.auditDays} to ${r.audit.most.toLocaleString()}. Who changed what, everything but sign-ins.`, onChange: (input, inputs) => showPreview(inputs) },
+    { name: "signinDays", label: "Keep sign-ins for (days)", type: "number", half: true, value: r.audit.signinDays,
+      hint: `0 keeps them for ever; otherwise ${r.audit.least.signinDays} to ${r.audit.most.toLocaleString()}. Signing in and out, failed attempts, and addresses blocked for too many.`, onChange: (input, inputs) => showPreview(inputs) },
+    { node: preview },
+    { type: "heading", label: "Visits and Security" },
+    { name: "visitsMonths", label: "Keep visits for (months)", type: "number", half: true, value: r.visits.retentionMonths,
+      hint: "0 keeps them for ever. The visit log, with its corrections; visits still open are never deleted. Also under Settings > Visits." },
+    { name: "securityMailDays", label: "Keep alarms and guard reports for (days)", type: "number", half: true, value: r.securityMail.keepDays,
+      hint: "30 to 3,650. Also under Settings > Security mail." },
+    { type: "heading", label: "Clearance validation requests" },
+    { name: "digitsHours", label: "Hold a request's SSN digits for (hours)", type: "number", half: true, value: r.clearance.digitsHours,
+      hint: `1 to ${r.clearance.maxDigitsHours} (a week at most). The last four digits given with a request are kept in memory only, never stored or logged, and wiped when Security validates or cancels it, or after this long. A shorter time applies to digits already held.` }
+  ];
+  const showPreview = debounce(async (inputs) => {
+    try {
+      const p = await api(`/api/settings/retention/preview?${new URLSearchParams({ auditDays: inputs.auditDays.value || "0", signinDays: inputs.signinDays.value || "0" })}`);
+      preview.textContent = p.audit || p.signins
+        ? `With these, the next daily run deletes ${p.audit.toLocaleString()} audit ${p.audit === 1 ? "entry" : "entries"} and ${p.signins.toLocaleString()} ${p.signins === 1 ? "sign-in" : "sign-ins"}.`
+        : "With these, nothing in the audit log is old enough to delete yet.";
+    } catch {
+      preview.textContent = "";
+    }
+  }, 300);
+  const form = h("div", { class: "panel" },
+    h("div", { class: "panel-head" }, h("h3", { text: "Logs and retention" })),
+    h("p", { class: "muted", text: `How long each record is kept; older ones are deleted once a day.${(r.audit.auditDays || r.audit.signinDays) && r.audit.lastRun ? ` The audit log was last trimmed ${fmtDateTime(r.audit.lastRun)}.` : ""}` }));
+  const editBtn = h("button", { type: "button", class: "primary small", text: "Change", onclick: async () => {
+    const saved = await formDialog({
+      title: "Logs and retention",
+      fields,
+      submitLabel: "Save",
+      onSubmit: async (v) => {
+        await api("/api/settings/retention", { method: "PUT", body: { auditDays: Number(v.auditDays), signinDays: Number(v.signinDays), visitsMonths: Number(v.visitsMonths), securityMailDays: Number(v.securityMailDays), digitsHours: Number(v.digitsHours) } });
+        return true;
+      }
+    });
+    if (saved) {
+      toast("Saved.");
+      await reloadConfig();
+      renderSettings();
+    }
+  } });
+  form.querySelector(".panel-head").append(editBtn);
+  const rows = [
+    ["Audit log: changes", keepText(r.audit.auditDays, "days"), r.audit.wouldDelete.audit ? `${r.audit.wouldDelete.audit.toLocaleString()} older, deleted at the next run` : ""],
+    ["Audit log: sign-ins", keepText(r.audit.signinDays, "days"), r.audit.wouldDelete.signins ? `${r.audit.wouldDelete.signins.toLocaleString()} older, deleted at the next run` : ""],
+    ["Visits (the visit log)", keepText(r.visits.retentionMonths, "months"), r.visits.wouldDelete?.visits ? `${r.visits.wouldDelete.visits.toLocaleString()} older, deleted at the next run` : ""],
+    ["Alarms and guard reports", `${r.securityMail.keepDays.toLocaleString()} days`, ""],
+    ["SSN digits with a validation request", `${r.clearance.digitsHours} hours, in memory only`, ""]
+  ];
+  form.append(h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+    h("thead", {}, h("tr", {}, ["Record", "Kept", ""].map((t) => h("th", { text: t })))),
+    h("tbody", {}, rows.map(([what, kept, note]) => h("tr", {}, h("td", { text: what }), h("td", { text: kept }), h("td", { class: "muted small-text", text: note })))))));
+  body.append(form);
+}
+
+// --- Settings > Audit log -----------------------------------------------------------------------------
+
 async function settingsAudit(body) {
   let before = null;
   const tbody = h("tbody");
   const more = h("button", { type: "button", class: "secondary small", text: "Older entries", hidden: true });
+  // Filters: who, what, sign-ins, where from, and when.
+  const facets = await api("/api/audit/facets").catch(() => ({ users: [], actions: [] }));
+  const user = h("select", { "aria-label": "User" }, h("option", { value: "", text: "Every user" }), facets.users.map((u) => h("option", { value: u, text: u })));
+  const groups = [...new Set(facets.actions.map((a) => a.split(".")[0]))];
+  const action = h("select", { "aria-label": "Action" }, h("option", { value: "", text: "Every action" }),
+    groups.map((g) => h("optgroup", { label: g }, h("option", { value: `${g}.`, text: `All ${g}` }), facets.actions.filter((a) => a.startsWith(`${g}.`)).map((a) => h("option", { value: a, text: a })))));
+  const signins = h("select", { "aria-label": "Sign-ins" }, h("option", { value: "", text: "Sign-ins and changes" }), h("option", { value: "only", text: "Sign-ins only" }), h("option", { value: "hide", text: "Changes only (no sign-ins)" }));
+  const ip = h("input", { type: "search", placeholder: "IP address", "aria-label": "IP address", autocomplete: "off", class: "audit-ip" });
+  const from = h("input", { type: "date", "aria-label": "From" });
+  const to = h("input", { type: "date", "aria-label": "To" });
+  const clearBtn = h("button", { type: "button", class: "link-btn small-text", text: "Clear filters", onclick: () => { for (const el of [user, action, signins, ip, from, to]) el.value = ""; restart(); } });
+  const query = () => new URLSearchParams(Object.fromEntries([["username", user.value], ["action", action.value], ["signins", signins.value], ["ip", ip.value.trim()], ["from", from.value], ["to", to.value]].filter(([, v]) => v)));
+  async function restart() {
+    before = null;
+    tbody.replaceChildren();
+    await page();
+  }
+  for (const el of [user, action, signins, from, to]) el.addEventListener("change", restart);
+  ip.addEventListener("input", debounce(restart, 300));
   async function page() {
-    const data = await api(`/api/audit?limit=100${before ? `&before=${before}` : ""}`);
+    const data = await api(`/api/audit?limit=100${before ? `&before=${before}` : ""}&${query()}`);
     for (const e of data.entries) {
       tbody.append(h("tr", {},
         h("td", { class: "small-text nowrap", text: fmtDateTime(e.at) }),
-        h("td", { class: "small-text", text: e.username || "" }),
+        h("td", { class: "small-text" }, e.username ? h("button", { type: "button", class: "link-btn small-text", text: e.username, title: `Only ${e.username}`, onclick: () => { user.value = e.username; restart(); } }) : ""),
         h("td", { class: "mono small-text", text: e.action }),
         h("td", { class: "small-text", text: [e.target, e.detail].filter(Boolean).join(": ") }),
-        h("td", { class: "muted small-text mono", text: e.ip || "" })));
+        h("td", { class: "small-text mono" }, e.ip ? h("button", { type: "button", class: "link-btn small-text mono", text: e.ip, title: `Only from ${e.ip}`, onclick: () => { ip.value = e.ip; restart(); } }) : "")));
       before = e.id;
     }
-    if (!tbody.children.length) tbody.append(emptyRow(5, "Nothing recorded yet."));
+    if (!tbody.children.length) tbody.append(emptyRow(5, [...query().keys()].length ? "Nothing matches these filters." : "Nothing recorded yet."));
     more.hidden = !data.more;
   }
   more.addEventListener("click", page);
   body.append(h("div", { class: "panel" }, h("h3", { text: "Audit log" }),
-    h("p", { class: "muted", text: "Who changed what, and from where. Changes name the fields that changed, never their values." }),
+    h("p", { class: "muted", text: "Who changed what, and from where. Changes name the fields that changed, never their values. Click a user or an address to see only theirs. How long entries are kept is under Logs and retention." }),
+    h("div", { class: "toolbar audit-filters" }, user, action, signins, ip, h("label", { class: "inline" }, "From ", from), h("label", { class: "inline" }, "To ", to), clearBtn),
     h("div", { class: "table-wrap" }, h("table", { class: "table compact" }, h("thead", {}, h("tr", {}, ["When", "Who", "Action", "Detail", "From"].map((t) => h("th", { text: t })))), tbody)),
     more));
   await page();

@@ -221,7 +221,7 @@ function createClearanceRoutes({ access, clearance, directory, visitors, admin, 
   });
 
   router.put("/api/clearance/settings", admin, (req, res) => {
-    const saved = clearance.saveSettings(req.body || {});
+    const saved = clearance.saveSettings({ visitorRecheckDays: req.body?.visitorRecheckDays });
     auditFrom(req, "clearance.settings", "Visitor clearance re-check", `every ${saved.visitorRecheckDays} days`);
     res.json({ ok: true, ...saved });
   });

@@ -15,7 +15,8 @@ function clientAddress(req) {
   return req.ip || req.socket?.remoteAddress || "unknown";
 }
 
-function createRateLimiter({ windowMs = DEFAULT_WINDOW_MS, maxFailures = DEFAULT_MAX_FAILURES, now = Date.now, keyFor = clientAddress } = {}) {
+/** onBlock(req, seconds): told once each time an address is blocked (to record it). */
+function createRateLimiter({ windowMs = DEFAULT_WINDOW_MS, maxFailures = DEFAULT_MAX_FAILURES, now = Date.now, keyFor = clientAddress, onBlock = () => {} } = {}) {
   const buckets = new Map(); // key -> { failures: [timestamps], blockedUntil }
 
   function bucket(key) {
@@ -60,6 +61,11 @@ function createRateLimiter({ windowMs = DEFAULT_WINDOW_MS, maxFailures = DEFAULT
     const key = keyFor(req);
     const wait = retryAfter(key);
     if (wait > 0) {
+      const b = bucket(key);
+      if (b.reported !== b.blockedUntil) {
+        b.reported = b.blockedUntil;
+        try { onBlock(req, wait); } catch { /* recording it never stops the answer */ }
+      }
       res.setHeader("Retry-After", String(wait));
       return res.status(429).json({ error: `Too many failed sign-in attempts from your address. Try again in ${wait >= 120 ? `${Math.ceil(wait / 60)} minutes` : `${wait} seconds`}.` });
     }

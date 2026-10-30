@@ -116,7 +116,21 @@ The design and decisions are in [PLAN.md](PLAN.md).
   - To renew without a gap: make a new certificate, add it in Entra, test it, choose **Use this
     one**, then remove the old one here and in Entra. Up to 5 can be kept.
 - **CSV import and export**, an **encrypted backup download** and an **audit log** that
-  records which fields changed, never their values.
+  records which fields changed, never their values. Settings > Audit log filters it by user,
+  action (or a group of them, such as every badge action), sign-ins (only, or none), the start
+  of an IP address, and dates; click a user or an address in it to see only theirs.
+  Sign-ins include failed ones (`auth.login_failed`): a wrong password (and when it locks the
+  account), the right password while locked, a wrong or reused authenticator code, a wrong
+  recovery code, and a passkey that doesn't check out, each against the account tried, with
+  its address. Never what was typed: a username that matches no account is recorded only as
+  "unknown account" (people type their password into the username box). An address blocked
+  for too many failures is recorded once per block (`auth.address_blocked`).
+- **Logs and retention** (Settings, administrators) sets how long each record is kept, in one
+  place: the audit log's changes and its sign-ins (each for ever, or a number of days: at least
+  30 for changes, 7 for sign-ins), visits (months), alarms and guard reports (days), and how
+  many hours a clearance validation request's SSN digits are held (1 to 168). It shows what
+  the next daily run would delete before you save. Old audit entries are deleted once a day,
+  and the run is itself recorded; every change to these settings is in the audit log.
 
 ## Visitors
 
@@ -232,7 +246,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
   Security sees it), shows the digits when needed (one request at a time, for 30 seconds),
   chooses the level and validates. The digits are held in the server's memory only: never in
   the database, a log, the audit trail or a URL, and wiped when Security validates or
-  cancels, when the person is deleted, after 36 hours (`CLEARANCE_DIGITS_HOURS`, up to 168), or when the server stops (a restart
+  cancels, when the person is deleted, after the hours set under Settings > Logs and retention (36 to start with, at most 168; a shorter time applies to digits held already), or when the server stops (a restart
   loses them, and the request then shows "Wiped"; ask again). The audit trail records that
   digits were given or viewed, never what they were.
 - **Validating several at once.** For people already checked outside the app, Security ticks
@@ -641,7 +655,7 @@ override the compose file's defaults.
 | `ENTRA_DEFAULT_ROLE` | `none` | The role a new Entra user gets |
 | `ENTRA_CERT_FILE`, `ENTRA_KEY_FILE`, `ENTRA_KEY_PASSPHRASE` | | Sign in to Entra with a certificate (PEM files) instead of `ENTRA_CLIENT_SECRET`; they win over a secret |
 | `ENTRA_PFX_FILE`, `ENTRA_PFX_PASSWORD` (or `ENTRA_PFX_PASSWORD_FILE`) | | The same from one PFX/P12 file |
-| `CLEARANCE_DIGITS_HOURS` | `36` | Hours SSN digits given for clearance validation stay in memory (at most 168) |
+| `CLEARANCE_DIGITS_HOURS` | `36` | Hours SSN digits given for clearance validation stay in memory (at most 168), until Settings > Logs and retention sets it |
 | `LOGIN_RATE_LIMIT` | `20` | Failed sign-ins allowed before a pause; `0` turns the limit off |
 | `PASSKEY_RP_ID`, `PASSKEY_ORIGIN` | from the request | The passkey domain and origin, if the proxy hides them |
 | `DB_KEY_FILE`, `DB_KEY_CREATE` | `/keys/db_key`, `true` | Where the database key is, and whether a fresh install makes one |

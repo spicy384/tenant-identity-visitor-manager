@@ -12,6 +12,7 @@ const { createDirectory } = require("./directory");
 const { createVisitors } = require("./visitors");
 const { createKiosks } = require("./kiosks");
 const { createVisitClock } = require("./visit-clock");
+const { createLogRetention } = require("./log-retention");
 const { createKioskRoutes } = require("./kiosk-routes");
 const { createVisitorRoutes } = require("./visitor-routes");
 const { COUNTRIES } = require("./countries");
@@ -224,6 +225,7 @@ const quickbooks = createQuickBooks({ db, billing });
 const visitors = createVisitors({ db, fields });
 const kiosks = createKiosks({ db });
 const clock = createVisitClock({ db, visitors, log: (message) => console.error(message) });
+const logRetention = createLogRetention({ db });
 const apiClients = createApiClients({ db, access, sites });
 const clearance = createClearance({ db, digitsHours: CLEARANCE_DIGITS_HOURS });
 const badges = createBadges({ db, clearance });
@@ -1482,8 +1484,78 @@ app.post("/api/entra/test", admin, async (req, res) => {
   res.json(result);
 });
 
+/** A YYYY-MM-DD day's start in the server's time (with `next`, the start of the day after), or null. */
+function dayStart(value, next = false) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str(value) || "");
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + (next ? 1 : 0)).getTime() : null;
+}
+
 app.get("/api/audit", admin, (req, res) => {
-  res.json(db.auditLog({ limit: Math.min(positiveInt(req.query.limit, 100), 500), before: positiveInt(req.query.before), action: str(req.query.action), username: str(req.query.username) }));
+  const signins = ["only", "hide"].includes(str(req.query.signins)) ? str(req.query.signins) : null;
+  res.json(db.auditLog({ limit: Math.min(positiveInt(req.query.limit, 100), 500), before: positiveInt(req.query.before), action: str(req.query.action), username: str(req.query.username),
+    ip: str(req.query.ip), signins, from: dayStart(req.query.from), to: dayStart(req.query.to, true) }));
+});
+
+/** The accounts and actions recorded, for the audit log's filters. */
+app.get("/api/audit/facets", admin, (req, res) => {
+  res.json(db.auditFacets());
+});
+
+// --- Settings > Logs and retention (administrators) ------------------------------------------------
+
+function retentionOut() {
+  const log = logRetention.settings();
+  return {
+    audit: { auditDays: log.auditDays, signinDays: log.signinDays, lastRun: log.lastRun || null, least: logRetention.LEAST, most: logRetention.MOST, wouldDelete: logRetention.preview() },
+    visits: { retentionMonths: clock.settings().retentionMonths, wouldDelete: clock.retentionCutoff() ? visitors.retentionPreview(clock.retentionCutoff()) : null },
+    securityMail: { keepDays: securityMailbox.settings().keepDays },
+    clearance: { digitsHours: clearance.settings().digitsHours, maxDigitsHours: MAX_DIGITS_HOURS }
+  };
+}
+
+app.get("/api/settings/retention", admin, (req, res) => {
+  res.json(retentionOut());
+});
+
+/** What the audit log's parts would lose with these days, before they are saved. */
+app.get("/api/settings/retention/preview", admin, (req, res) => {
+  const n = (v) => (Number.isInteger(Number(v)) && Number(v) >= 0 ? Number(v) : 0);
+  res.json(logRetention.preview({ auditDays: n(req.query.auditDays), signinDays: n(req.query.signinDays) }));
+});
+
+/**
+ * Saves how long each log is kept: { auditDays, signinDays, visitsMonths, securityMailDays,
+ * digitsHours }, any of them. Everything is checked before anything is saved.
+ */
+app.put("/api/settings/retention", admin, (req, res) => {
+  const b = req.body || {};
+  const before = retentionOut();
+  const checkOnly = { ...logRetention.settings(), auditDays: b.auditDays ?? before.audit.auditDays, signinDays: b.signinDays ?? before.audit.signinDays };
+  // Every value checked first: a bad one refuses the lot.
+  for (const [key, label] of [["auditDays", "the audit log"], ["signinDays", "sign-ins"]]) {
+    const v = Number(checkOnly[key]);
+    if (!Number.isInteger(v) || (v !== 0 && (v < logRetention.LEAST[key] || v > logRetention.MOST))) throw fail(400, `Keep ${label} for 0 (for ever) or ${logRetention.LEAST[key]} to ${logRetention.MOST.toLocaleString("en-US")} days.`);
+  }
+  if (b.visitsMonths !== undefined && (!Number.isInteger(Number(b.visitsMonths)) || Number(b.visitsMonths) < 0 || Number(b.visitsMonths) > 240)) throw fail(400, "Keep visits for 0 (for ever) to 240 months.");
+  if (b.securityMailDays !== undefined && (!Number.isInteger(Number(b.securityMailDays)) || Number(b.securityMailDays) < 30 || Number(b.securityMailDays) > 3650)) throw fail(400, "Keep alarms and guard reports for 30 to 3,650 days.");
+  if (b.digitsHours !== undefined && (!Number.isInteger(Number(b.digitsHours)) || Number(b.digitsHours) < 1 || Number(b.digitsHours) > MAX_DIGITS_HOURS)) throw fail(400, `Hold the digits for 1 to ${MAX_DIGITS_HOURS} hours.`);
+  db.transaction(() => {
+    logRetention.save({ auditDays: checkOnly.auditDays, signinDays: checkOnly.signinDays });
+    if (b.visitsMonths !== undefined) clock.saveSettings({ retentionMonths: Number(b.visitsMonths) });
+    if (b.securityMailDays !== undefined) securityMailbox.save({ keepDays: Number(b.securityMailDays) });
+    if (b.digitsHours !== undefined) clearance.saveSettings({ digitsHours: Number(b.digitsHours) });
+  });
+  const after = retentionOut();
+  const kept = (n, unit) => (n ? `${n} ${unit}` : "for ever");
+  const changes = [
+    before.audit.auditDays !== after.audit.auditDays ? `audit log ${kept(after.audit.auditDays, "days")}` : null,
+    before.audit.signinDays !== after.audit.signinDays ? `sign-ins ${kept(after.audit.signinDays, "days")}` : null,
+    before.visits.retentionMonths !== after.visits.retentionMonths ? `visits ${kept(after.visits.retentionMonths, "months")}` : null,
+    before.securityMail.keepDays !== after.securityMail.keepDays ? `alarms and guard reports ${after.securityMail.keepDays} days` : null,
+    before.clearance.digitsHours !== after.clearance.digitsHours ? `SSN digits held ${after.clearance.digitsHours} hours` : null
+  ].filter(Boolean);
+  if (changes.length) auditFrom(req, "settings.retention", "Logs and retention", changes.join("; "));
+  res.json({ ok: true, ...after });
 });
 
 /** Where an iPad opens the kiosk, for Settings > Kiosks. */
@@ -1568,6 +1640,7 @@ if (require.main === module) {
     console.log(`Kiosks: ${kiosks.list().length} (${KIOSK_PORT ? `on port ${KIOSK_PORT}` : "pages at /kiosk/ on this port"})`);
     console.log(`API clients: ${apiClients.list().length} (API at /api/v1)`);
     clock.start();
+    logRetention.start();
     securityMailbox.start();
     const mail = securityMailbox.settings();
     console.log(`Security mail: ${mail.enabled && mail.mailbox ? `checking ${mail.mailbox} every ${mail.pollMinutes} min` : "mailbox off (files can still be dropped in)"}`);
@@ -1586,6 +1659,7 @@ if (require.main === module) {
 
   const shutdown = () => {
     clock.stop();
+    logRetention.stop();
     clearance.stop();
     if (kioskServer) kioskServer.close();
     server.close(() => {

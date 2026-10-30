@@ -13,8 +13,8 @@
  * change a record can ask for validation, optionally with the last four digits of the
  * person's SSN. Those digits are held only in this process's memory, never in the database,
  * a log or a response other than the Security role's, and are wiped when the request is
- * validated or canceled, after `digitsHours` (CLEARANCE_DIGITS_HOURS, 36 to start with), or
- * when the process stops. They are kept and handed around as Buffers, never strings: a
+ * validated or canceled, after the hours set under Settings > Logs and retention (at most a
+ * week; CLEARANCE_DIGITS_HOURS, else 36, until one is saved), or when the process stops. They are kept and handed around as Buffers, never strings: a
  * string can't be overwritten and lingers until the garbage collector reuses its memory. A clearance
  * counts for badges only once validated; a visitor's only within the re-check period
  * (Settings, 90 days to start with).
@@ -90,7 +90,15 @@ function cleanDate(value, label) {
 }
 
 function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOURS }) {
-  const digitsTtlMs = digitsHours * HOUR_MS;
+  /** How long digits are held, in hours: as saved in the settings, else `digitsHours` (the environment's). */
+  function heldHours() {
+    try {
+      const n = Number(JSON.parse(db.getSetting(SETTINGS_KEY) || "{}").digitsHours);
+      return Number.isFinite(n) && n > 0 && n <= MAX_DIGITS_HOURS ? n : digitsHours;
+    } catch {
+      return digitsHours;
+    }
+  }
   const raw = db.raw;
 
   // The defaults, once, on an empty database.
@@ -194,19 +202,36 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
   // --- settings ---------------------------------------------------------------------------
 
   function settings() {
-    return { visitorRecheckDays: recheckDays(db) };
+    return { visitorRecheckDays: recheckDays(db), digitsHours: heldHours() };
   }
 
-  function saveSettings({ visitorRecheckDays } = {}) {
-    const n = Number(visitorRecheckDays);
-    if (!Number.isInteger(n) || n < 1 || n > 3650) throw fail(400, "Re-check visitors' clearances every 1 to 3,650 days.");
-    db.setSetting(SETTINGS_KEY, JSON.stringify({ visitorRecheckDays: n }));
+  /** Saves what is given: visitorRecheckDays, digitsHours (whole hours, at most a week). */
+  function saveSettings({ visitorRecheckDays, digitsHours: hours } = {}) {
+    let stored = {};
+    try {
+      stored = JSON.parse(db.getSetting(SETTINGS_KEY) || "{}") || {};
+    } catch {
+      stored = {};
+    }
+    if (visitorRecheckDays !== undefined) {
+      const n = Number(visitorRecheckDays);
+      if (!Number.isInteger(n) || n < 1 || n > 3650) throw fail(400, "Re-check visitors' clearances every 1 to 3,650 days.");
+      stored.visitorRecheckDays = n;
+    }
+    if (hours !== undefined) {
+      const n = Number(hours);
+      if (!Number.isInteger(n) || n < 1 || n > MAX_DIGITS_HOURS) throw fail(400, `Hold the digits for 1 to ${MAX_DIGITS_HOURS} hours.`);
+      stored.digitsHours = n;
+    }
+    db.setSetting(SETTINGS_KEY, JSON.stringify(stored));
+    // Held for less time now: digits already past it go at once.
+    sweepDigits();
     return settings();
   }
 
   // --- the last four digits, in memory only ---------------------------------------------------
 
-  // request id -> { digits: Buffer (four bytes, zero-filled when wiped), expiresAt }. Never written anywhere.
+  // request id -> { digits: Buffer (four bytes, zero-filled when wiped), at (when given) }. Never written anywhere.
   const digitsStore = new Map();
 
   function wipeDigits(requestId) {
@@ -221,7 +246,9 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
   function sweepDigits() {
     if (!digitsStore.size) return;
     const open = new Set(raw.prepare("SELECT id FROM clearance_requests WHERE status = 'open'").all().map((r) => r.id));
-    for (const [id, entry] of digitsStore) if (entry.expiresAt <= now() || !open.has(id)) wipeDigits(id);
+    // The hours as set now, so a shorter hold applies to digits already held.
+    const ttl = heldHours() * HOUR_MS;
+    for (const [id, entry] of digitsStore) if (entry.at + ttl <= now() || !open.has(id)) wipeDigits(id);
   }
   const sweeper = setInterval(sweepDigits, 10 * 60 * 1000);
   sweeper.unref();
@@ -293,7 +320,7 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
       if (digits) digits.fill(0);
       throw error;
     }
-    if (digits) digitsStore.set(Number(requestId), { digits, expiresAt: now() + digitsTtlMs });
+    if (digits) digitsStore.set(Number(requestId), { digits, at: now() });
     digits = null;
     return { id: Number(requestId), holder: h, hadDigits: digitsStore.has(Number(requestId)) };
   }
@@ -460,7 +487,9 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     openCount,
     hasOpen,
     digitsOf: digitsFor,
-    DIGITS_TTL_HOURS: digitsHours,
+    get DIGITS_TTL_HOURS() {
+      return heldHours();
+    },
     validate,
     validateMany,
     cancelRequest,

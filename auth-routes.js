@@ -261,6 +261,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     return Boolean(user?.lockedUntil && Date.now() < user.lockedUntil);
   }
 
+  /** Counts a failed attempt; true when it locks the account. */
   function registerFailure(user) {
     const failed = (user.failedAttempts || 0) + 1;
     const patch = { failedAttempts: failed };
@@ -269,6 +270,17 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       patch.failedAttempts = 0;
     }
     updateUser(user.id, patch);
+    return Boolean(patch.lockedUntil);
+  }
+
+  /**
+   * Records a failed sign-in (auth.login_failed) against the account tried, with why. Never
+   * what was typed: not the password or code, and not a username that matches no account
+   * (people type their password into the username box). user: null for no such account.
+   */
+  function logFailure(req, user, why, locked = false) {
+    const lockText = locked ? `; the account is locked for ${Math.round(LOCKOUT_MS / 60000)} minutes` : "";
+    log(req, "auth.login_failed", user ? user.username : "unknown account", `${why}${lockText}`, user ? user.username : null);
   }
 
   function clearFailures(user) {
@@ -442,7 +454,9 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
 
   // Address-based throttle on everything that takes a credential while signed out.
   if (LOGIN_RATE_LIMIT > 0) {
-    const limiter = createRateLimiter({ maxFailures: LOGIN_RATE_LIMIT });
+    const limiter = createRateLimiter({ maxFailures: LOGIN_RATE_LIMIT,
+      // Once per block: the address, and for how long (each attempt it refuses isn't recorded).
+      onBlock: (req, seconds) => log(req, "auth.address_blocked", req.ip || "unknown address", `too many failed sign-ins from this address; refused for ${Math.ceil(seconds / 60)} minutes`, null) });
     router.use(["/api/auth/setup", "/api/auth/login", "/api/auth/login/mfa", "/api/auth/login/recovery", "/api/auth/passkeys/login/verify"], limiter.middleware);
   }
 
@@ -536,18 +550,23 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     if (!user) {
       // Spend comparable time so timing does not reveal existence.
       auth.verifyPassword(password, "scrypt$16384$8$1$00$00");
+      // An account that signs in with Microsoft is named (it exists); a name matching no account isn't.
+      logFailure(req, found || null, found ? "password tried on an account that signs in with Microsoft" : "password sign-in with a username that matches no account");
       return invalid();
     }
 
     // The password is checked before the lockout is mentioned, so a locked account with a
     // wrong password answers exactly like an unknown username.
     if (!auth.verifyPassword(password, user.passwordHash)) {
-      if (!isLockedOut(user)) registerFailure(user);
+      const lockedAlready = isLockedOut(user);
+      const locks = !lockedAlready && registerFailure(user);
+      logFailure(req, user, lockedAlready ? "wrong password, while the account is locked" : "wrong password", locks);
       return invalid();
     }
 
     if (isLockedOut(user)) {
       const mins = Math.ceil((user.lockedUntil - Date.now()) / 60000);
+      logFailure(req, user, "right password, but the account is locked after too many failed attempts");
       return res.status(429).json({ error: `Too many failed attempts. Try again in ${mins} minute(s).` });
     }
 
@@ -595,12 +614,13 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
 
     const counter = auth.verifyTotp(user.totpSecret, req.body?.code);
     if (counter === null) {
-      registerFailure(user);
+      logFailure(req, user, "right password, wrong authenticator code", registerFailure(user));
       return res.status(401).json({ error: "Incorrect authentication code." });
     }
 
     // Reject codes already used: a 30s window would otherwise allow replay.
     if (counter <= (user.lastTotpCounter || 0)) {
+      logFailure(req, user, "right password, an authenticator code already used");
       return res.status(401).json({ error: "That code has already been used. Wait for the next one." });
     }
 
@@ -632,7 +652,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     const remaining = (user.recoveryCodes || []).filter((h) => h !== supplied);
 
     if (remaining.length === (user.recoveryCodes || []).length) {
-      registerFailure(user);
+      logFailure(req, user, "right password, wrong recovery code", registerFailure(user));
       return res.status(401).json({ error: "Incorrect recovery code." });
     }
 
@@ -875,7 +895,10 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     }
     const refuse = () => res.status(401).json({ error: "That passkey is not recognized here." });
     const found = findUserByPasskey(response.id);
-    if (!found) return refuse();
+    if (!found) {
+      logFailure(req, null, "a passkey this app doesn't know");
+      return refuse();
+    }
     const { user, passkey } = found;
     if (isLockedOut(user)) {
       return res.status(429).json({ error: "Too many failed attempts. Try again later." });
@@ -897,11 +920,11 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
         }
       });
     } catch (error) {
-      registerFailure(user);
+      logFailure(req, user, `passkey "${passkey.name}" didn't check out`, registerFailure(user));
       return res.status(401).json({ error: `Passkey sign-in failed: ${error.message}` });
     }
     if (!verification.verified) {
-      registerFailure(user);
+      logFailure(req, user, `passkey "${passkey.name}" didn't check out`, registerFailure(user));
       return refuse();
     }
     const passkeys = (user.passkeys || []).map((p) => (p.id === passkey.id
