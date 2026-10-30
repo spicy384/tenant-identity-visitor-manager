@@ -1529,6 +1529,11 @@ app.get("/api/settings/retention/preview", admin, (req, res) => {
  */
 app.put("/api/settings/retention", admin, (req, res) => {
   const b = req.body || {};
+  // A blank isn't 0 (for ever): each part given must be a number, typed on purpose.
+  const given = (v) => typeof v === "number" || (typeof v === "string" && v.trim() !== "");
+  for (const [key, label] of [["auditDays", "the audit log"], ["signinDays", "sign-ins"], ["visitsMonths", "visits"], ["securityMailDays", "alarms and guard reports"], ["digitsHours", "the SSN digits"]]) {
+    if (b[key] !== undefined && !given(b[key])) throw fail(400, `Enter how long to keep ${label}.`);
+  }
   const before = retentionOut();
   const checkOnly = { ...logRetention.settings(), auditDays: b.auditDays ?? before.audit.auditDays, signinDays: b.signinDays ?? before.audit.signinDays };
   // Every value checked first: a bad one refuses the lot.

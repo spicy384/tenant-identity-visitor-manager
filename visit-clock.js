@@ -95,7 +95,10 @@ function createVisitClock({ db, visitors, now = Date.now, log = () => {} }) {
   function saveSettings(patch = {}) {
     const next = settings();
     if (patch.retentionMonths !== undefined) {
-      const n = Number(patch.retentionMonths);
+      // A blank isn't 0: keeping visits for ever is chosen by typing 0.
+      const v = patch.retentionMonths;
+      if (!(typeof v === "number" || (typeof v === "string" && v.trim()))) throw fail(400, "Enter how many months to keep visits; 0 keeps them for ever.");
+      const n = Number(v);
       if (!Number.isInteger(n) || n < 0 || n > 240) throw fail(400, "Keep visits for 0 (forever) to 240 months.");
       next.retentionMonths = n;
     }

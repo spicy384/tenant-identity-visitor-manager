@@ -309,6 +309,7 @@ async function overHttp() {
   r = await admin.get("/api/settings/retention");
   check("retention: each log's keeping, the environment's hours to start with", r.status === 200 && r.data.clearance.digitsHours === 12 && r.data.clearance.maxDigitsHours === 168
     && r.data.audit.auditDays === 0 && r.data.visits.retentionMonths === 0 && r.data.securityMail.keepDays === 365, JSON.stringify(r.data));
+  check("retention: a blank isn't for ever", (await Promise.all([{ auditDays: "" }, { signinDays: " " }, { visitsMonths: null }, { digitsHours: "" }].map((b) => admin.put("/api/settings/retention", b)))).every((x) => x.status === 400));
   check("retention: a bad value saves nothing", (await admin.put("/api/settings/retention", { auditDays: 365, digitsHours: 200 })).status === 400 && (await admin.get("/api/settings/retention")).data.audit.auditDays === 0);
   r = await admin.put("/api/settings/retention", { auditDays: 365, signinDays: 90, visitsMonths: 24, securityMailDays: 400, digitsHours: 8 });
   check("retention: all saved together", r.status === 200 && r.data.audit.auditDays === 365 && r.data.audit.signinDays === 90 && r.data.visits.retentionMonths === 24 && r.data.securityMail.keepDays === 400 && r.data.clearance.digitsHours === 8, JSON.stringify(r.data));

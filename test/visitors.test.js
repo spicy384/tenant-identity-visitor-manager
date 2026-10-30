@@ -121,7 +121,7 @@ check("retention: a checked visitor stays even with no visits", (() => {
   visitors.applyRetention(Date.parse("2020-01-01T00:00:00Z"));
   return Boolean(visitors.get(old.id));
 })());
-check("retention: months must be sensible", throwsStatus(() => clock.saveSettings({ retentionMonths: -1 }), 400) === true && throwsStatus(() => clock.saveSettings({ kioskIdleSeconds: 2 }), 400) === true);
+check("retention: months must be sensible", throwsStatus(() => clock.saveSettings({ retentionMonths: -1 }), 400) === true && throwsStatus(() => clock.saveSettings({ retentionMonths: "" }), 400) === true && throwsStatus(() => clock.saveSettings({ retentionMonths: null }), 400) === true && throwsStatus(() => clock.saveSettings({ kioskIdleSeconds: 2 }), 400) === true);
 
 // --- merge ------------------------------------------------------------------------------------
 

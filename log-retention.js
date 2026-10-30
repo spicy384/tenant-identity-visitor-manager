@@ -35,6 +35,8 @@ function createLogRetention({ db, now = Date.now, log = (m) => console.error(m) 
   }
 
   function days(value, key, label) {
+    // A blank isn't 0: keeping a log for ever is chosen by typing 0.
+    if (!(typeof value === "number" || (typeof value === "string" && value.trim()))) throw fail(400, `Enter how many days to keep ${label}; 0 keeps them for ever.`);
     const n = Number(value);
     if (!Number.isInteger(n) || (n !== 0 && (n < LEAST[key] || n > MOST))) throw fail(400, `Keep ${label} for 0 (for ever) or ${LEAST[key]} to ${MOST.toLocaleString("en-US")} days.`);
     return n;

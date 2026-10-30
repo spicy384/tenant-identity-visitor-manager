@@ -19,7 +19,7 @@ async function settingsVisits(body) {
     title: "Visits",
     intro: "Each site's end-of-day check-out time is set under Sites.",
     fields: [
-      { name: "retentionMonths", label: "Keep visits for (months)", type: "number", value: s.retentionMonths, half: true, hint: "0 keeps them for ever. Older visits are deleted once a day, with visitors who registered at a kiosk, were never checked and have no visits left. Visits still open are never deleted." },
+      { name: "retentionMonths", label: "Keep visits for (months)", type: "number", value: s.retentionMonths, half: true, required: true, min: 0, max: 240, step: 1, hint: "Type 0 to keep them for ever; otherwise up to 240. Older visits are deleted once a day, with visitors who registered at a kiosk, were never checked and have no visits left. Visits still open are never deleted." },
       { node: preview },
       { name: "kioskIdleSeconds", label: "Kiosk goes back to the start after (seconds)", type: "number", value: s.kioskIdleSeconds, half: true, hint: "Without a touch, from any screen. 15 to 600." }
     ],

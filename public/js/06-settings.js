@@ -31,8 +31,12 @@ function settingsForm({ title, intro, fields, onSave, saveLabel = "Save", extra 
       input.checked = Boolean(f.value);
     } else {
       input = h("input", { type: f.type || "text", name: f.name, placeholder: f.placeholder || "", autocomplete: f.type === "password" ? "new-password" : "off" });
+      if (f.min !== undefined) input.min = f.min;
+      if (f.max !== undefined) input.max = f.max;
+      if (f.step !== undefined) input.step = f.step;
       input.value = f.value ?? "";
     }
+    if (f.required) input.required = true;
     if (f.disabled) input.disabled = true;
     inputs[f.name] = input;
     const hint = f.hint ? h("span", { class: "hint", text: f.hint }) : null;
@@ -732,18 +736,18 @@ async function settingsRetention(body) {
   const preview = h("p", { class: "muted small-text full-row", text: "Change the days to see what the next daily run would delete." });
   const fields = [
     { type: "heading", label: "Audit log" },
-    { name: "auditDays", label: "Keep changes for (days)", type: "number", half: true, value: r.audit.auditDays,
-      hint: `0 keeps them for ever; otherwise ${r.audit.least.auditDays} to ${r.audit.most.toLocaleString()}. Who changed what, everything but sign-ins.`, onChange: (input, inputs) => showPreview(inputs) },
-    { name: "signinDays", label: "Keep sign-ins for (days)", type: "number", half: true, value: r.audit.signinDays,
-      hint: `0 keeps them for ever; otherwise ${r.audit.least.signinDays} to ${r.audit.most.toLocaleString()}. Signing in and out, failed attempts, and addresses blocked for too many.`, onChange: (input, inputs) => showPreview(inputs) },
+    { name: "auditDays", label: "Keep changes for (days)", type: "number", half: true, value: r.audit.auditDays, required: true, min: 0, max: r.audit.most, step: 1,
+      hint: `Type 0 to keep them for ever; otherwise ${r.audit.least.auditDays} to ${r.audit.most.toLocaleString()}. Who changed what, everything but sign-ins.`, onChange: (input, inputs) => showPreview(inputs) },
+    { name: "signinDays", label: "Keep sign-ins for (days)", type: "number", half: true, value: r.audit.signinDays, required: true, min: 0, max: r.audit.most, step: 1,
+      hint: `Type 0 to keep them for ever; otherwise ${r.audit.least.signinDays} to ${r.audit.most.toLocaleString()}. Signing in and out, failed attempts, and addresses blocked for too many.`, onChange: (input, inputs) => showPreview(inputs) },
     { node: preview },
     { type: "heading", label: "Visits and Security" },
-    { name: "visitsMonths", label: "Keep visits for (months)", type: "number", half: true, value: r.visits.retentionMonths,
-      hint: "0 keeps them for ever. The visit log, with its corrections; visits still open are never deleted. Also under Settings > Visits." },
-    { name: "securityMailDays", label: "Keep alarms and guard reports for (days)", type: "number", half: true, value: r.securityMail.keepDays,
+    { name: "visitsMonths", label: "Keep visits for (months)", type: "number", half: true, value: r.visits.retentionMonths, required: true, min: 0, max: 240, step: 1,
+      hint: "Type 0 to keep them for ever; otherwise up to 240. The visit log, with its corrections; visits still open are never deleted. Also under Settings > Visits." },
+    { name: "securityMailDays", label: "Keep alarms and guard reports for (days)", type: "number", half: true, value: r.securityMail.keepDays, required: true, min: 30, max: 3650, step: 1,
       hint: "30 to 3,650. Also under Settings > Security mail." },
     { type: "heading", label: "Clearance validation requests" },
-    { name: "digitsHours", label: "Hold a request's SSN digits for (hours)", type: "number", half: true, value: r.clearance.digitsHours,
+    { name: "digitsHours", label: "Hold a request's SSN digits for (hours)", type: "number", half: true, value: r.clearance.digitsHours, required: true, min: 1, max: r.clearance.maxDigitsHours, step: 1,
       hint: `1 to ${r.clearance.maxDigitsHours} (a week at most). The last four digits given with a request are kept in memory only, never stored or logged, and wiped when Security validates or cancels it, or after this long. A shorter time applies to digits already held.` }
   ];
   const showPreview = debounce(async (inputs) => {
