@@ -348,7 +348,7 @@ app.get("/api/config", (req, res) => {
   const ctx = req.ctx;
   res.json({
     version: pkg.version,
-    access: { role: ctx.role?.id || null, roles: ctx.roles.map((r) => r.id), roleName: ctx.roles.map((r) => r.name).join(", ") || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), facilities: ctx.facilities, finance: ctx.finance, fieldEntities: access.fieldEntitiesFor(ctx), alarms: access.canReadAlarms(ctx), sitesLimited: Boolean(ctx.sites) },
+    access: { role: ctx.role?.id || null, roles: ctx.roles.map((r) => r.id), roleName: ctx.roles.map((r) => r.name).join(", ") || null, isAdmin: ctx.isAdmin, directory: ctx.directory, visitors: ctx.visitors, badges: ctx.badges, clearances: access.canSeeClearances(ctx), facilities: ctx.facilities, finance: ctx.finance, fieldEntities: access.fieldEntitiesFor(ctx), alarms: access.canReadAlarms(ctx), correctVisits: access.canCorrectVisits(ctx), sitesLimited: Boolean(ctx.sites) },
     branding: branding(),
     visits: access.canReadVisitors(ctx) ? { here: visitors.hereNow(ctx.sites), review: visitors.reviewCount(ctx.sites), expected: events.expectedCount(ctx.sites), badgesLeft: access.canReadBadges(ctx) ? badges.leftCount(ctx.sites) : 0, tempOverdue: access.canReadBadges(ctx) ? badges.overdueCount(ctx.sites) : 0 } : null,
     // Level names only for roles that see them; the rest see badge template images.

@@ -53,6 +53,8 @@ const isAdmin = () => Boolean(state.config?.access?.isAdmin);
 const canEditDirectory = () => state.config?.access?.directory === "edit";
 const canReadVisitors = () => ["read", "edit"].includes(state.config?.access?.visitors);
 const canEditVisitors = () => state.config?.access?.visitors === "edit";
+// Corrects the visit log's times and badges: those who change visitors, and Security.
+const canCorrectVisits = () => Boolean(state.config?.access?.correctVisits);
 const canReadBadges = () => ["read", "edit", "manage"].includes(state.config?.access?.badges);
 /** Gives badges out and takes them back. */
 const canEditBadges = () => ["edit", "manage"].includes(state.config?.access?.badges);

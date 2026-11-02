@@ -43,6 +43,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
   const manageBadges = need(access.canManageBadges, "Only Security adds, changes and removes badges.");
   const readVisitors = need(access.canReadVisitors, "This account can't see visitors.");
   const editVisitors = need(access.canEditVisitors, "This account can't change visitors.");
+  const correctVisits = need(access.canCorrectVisits, "This account can't correct visits.");
 
   function siteParam(req, value) {
     const siteId = positiveInt(value);
@@ -428,7 +429,7 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
    * facilityCode } or { badgeId }): for a visit that has ended, recorded for its time; for one
    * still open, given to them now.
    */
-  router.post("/api/visits/:id/badge-record", giveVisitorBadges, editVisitors, (req, res) => {
+  router.post("/api/visits/:id/badge-record", giveVisitorBadges, correctVisits, (req, res) => {
     const visit = visitors.getVisit(positiveInt(req.params.id), { sites: req.ctx.sites });
     if (!visit) throw fail(404, "No such visit.");
     const badge = badges.get(badgeIdFrom(req.body || {}), { sites: req.ctx.sites });

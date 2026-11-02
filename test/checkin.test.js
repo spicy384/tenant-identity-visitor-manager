@@ -303,6 +303,10 @@ async function main() {
   r = await desk.get("/api/visits?corrected=1&limit=1000");
   check("times: the log lists only corrected visits when asked", r.data.total === 1 && r.data.visits[0].id === tiaVisit.id && (await desk.get("/api/visits?limit=1000")).data.total > 1);
   check("times: an uncorrected visit has no marks", (await desk.get(`/api/visits?visitorId=${tim.id}`)).data.visits[0].timeChanged === null);
+  // Security corrects times too, though it otherwise only reads visitors.
+  r = await security.put(`/api/visits/${timVisit.id}/times`, { checkedInAt: timVisit.checkedInAt - HOUR, reason: "The door log shows an earlier arrival" });
+  check("times: Security corrects them too", r.status === 200 && r.data.visit.timesCorrected === 1, JSON.stringify(r.data).slice(0, 200));
+  check("times: Security still can't change a visitor", (await security.put(`/api/visitors/${tim.id}`, { organization: "Other Co" })).status === 403);
 
   // --- the badge each visit had, and entering one later ----------------------------------------------
   const visitOf = async (visitorId) => (await desk.get(`/api/visits?visitorId=${visitorId}`)).data.visits[0];
@@ -326,8 +330,8 @@ async function main() {
   check("badge: only a visitor badge", (await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { badgeId: tRec.id })).status === 400);
   r = await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "101-777" });
   check("badge: not one that was with someone else then", r.status === 409 && /was with Tim Typed then/.test(r.data.error), r.data.error);
-  r = await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "v-rec" });
-  check("badge: entered for a visit that ended, held for its time and back", r.status === 200 && r.data.recorded === true && !r.data.badge.holder, JSON.stringify(r.data));
+  r = await security.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "v-rec" });
+  check("badge: entered (by Security) for a visit that ended, held for its time and back", r.status === 200 && r.data.recorded === true && !r.data.badge.holder, JSON.stringify(r.data));
   const ritaLogged = await visitOf(rita.id);
   check("badge: the log shows it, marked entered later", ritaLogged.badges.join() === "V-REC" && ritaLogged.badgeRecordedLater === true);
   const recHistory = (await desk.get(`/api/badges/${vRec.id}`)).data;

@@ -41,6 +41,7 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
 
   const readVisitors = (req, res, next) => (access.canReadVisitors(req.ctx) ? next() : res.status(403).json({ error: "This account can't see visitors." }));
   const editVisitors = (req, res, next) => (access.canEditVisitors(req.ctx) ? next() : res.status(403).json({ error: "This account can't change visitors." }));
+  const correctVisits = (req, res, next) => (access.canCorrectVisits(req.ctx) ? next() : res.status(403).json({ error: "This account can't correct visits." }));
   const staffName = (req) => req.user?.displayName || req.user?.username || null;
   const fullName = (v) => `${v.firstName} ${v.lastName}`;
 
@@ -213,7 +214,7 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
    * Corrects when a visitor arrived or left: { checkedInAt, checkedOutAt (timestamps), reason }.
    * Each correction is kept with the visit, with its reason, and in the audit log.
    */
-  router.put("/api/visits/:id/times", editVisitors, (req, res) => {
+  router.put("/api/visits/:id/times", correctVisits, (req, res) => {
     const body = req.body || {};
     const { visit, changes, reason, timeZone } = visitors.correctTimes(positiveInt(req.params.id), { checkedInAt: body.checkedInAt, checkedOutAt: body.checkedOutAt, reason: body.reason, by: staffName(req), sites: req.ctx.sites });
     // In the site's own time, as the desk there sees it.

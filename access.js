@@ -481,6 +481,11 @@ function createAccess({ db, fields }) {
   const canEditVisitors = (ctx) => ctx.visitors === "edit";
   /** Has the Security role (among others, perhaps): validates clearances and sees the validation queue. */
   const isSecurity = (ctx) => (ctx.roles || []).some((r) => r.id === "security");
+  /**
+   * Corrects a visit in the visit log (when they arrived and left, the badge they had): those
+   * who change visitors, and Security, who otherwise only reads them.
+   */
+  const canCorrectVisits = (ctx) => canEditVisitors(ctx) || (isSecurity(ctx) && canReadVisitors(ctx));
   /** Reads the alarms and guard reports: Security, and roles given it (an alarm responder). */
   const canReadAlarms = (ctx) => Boolean(ctx.alarms);
   /** Sees clearance level names (Settings > Roles); everyone else sees badge template images. */
@@ -624,6 +629,7 @@ function createAccess({ db, fields }) {
     canReadBadges,
     canEditBadges,
     isSecurity,
+    canCorrectVisits,
     canReadAlarms,
     canSeeClearances,
     canManageBadges,

@@ -188,10 +188,12 @@ The design and decisions are in [PLAN.md](PLAN.md).
   with the visit they're on). **Add badge** enters one that wasn't recorded at the time: for a
   visit that has ended it is recorded as theirs from arrival to departure, shown as "entered
   later" and in the badge's history and the audit log, and refused if the badge was with
-  someone else then; for someone still here it is given to them now.
+  someone else then; for someone still here it is given to them now. Staff who check visitors
+  in and give badges out can, and so can Security.
 - **Correcting arrival and departure times**: when a visitor didn't check in or out as they
   should have, **Correct times** on a visit (in the Visit log, or a visitor's visits) changes
-  when they arrived and left, for staff who check visitors in. A reason is required. Each
+  when they arrived and left, for staff who check visitors in, and for Security (which otherwise
+  only reads visitors). A reason is required. Each
   correction is kept with the visit (who, when, the times before and after, and why: the
   "Changed" badge beside each corrected time shows the latest reason, and opens them all) and
   in the audit log, and the CSV export counts them. **Times changed only** in the Visit log

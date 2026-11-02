@@ -13,7 +13,7 @@ const CHECKOUT_LABELS = { kiosk: "at the kiosk", staff: "by staff", auto: "at en
  */
 function visitsTable(visits, { showVisitor = true, onChange = () => {} } = {}) {
   const allSites = multiSite();
-  const correcting = canEditVisitors();
+  const correcting = canCorrectVisits();
   // The badge each visitor had, for those who see badges; entered later by those who give them out.
   const seesBadges = canReadBadges();
   const entersBadges = correcting && canEditBadges();
@@ -100,7 +100,7 @@ async function correctVisitTimes(v, { look = false } = {}) {
     h("ul", { class: "plain-list small-text" }, history.map((c) => h("li", {},
       h("strong", { text: `${field[c.field]}: ` }), `${c.from ? fmtDateTime(c.from) : "not checked out"} to ${fmtDateTime(c.to)}`,
       h("div", { class: "muted", text: `${c.reason} (${c.by || "staff"}, ${fmtDateTime(c.at)})` }))))) : null;
-  if (look && !canEditVisitors()) {
+  if (look && !canCorrectVisits()) {
     await openDialog({ title: `Corrections to ${visitorName(v.visitor)}'s visit`, body: past || h("p", { class: "muted", text: "None." }) });
     return false;
   }
