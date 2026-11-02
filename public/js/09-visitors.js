@@ -312,17 +312,20 @@ async function openVisitor(id, onChange = () => {}) {
     visitsBlock);
   // Their visits not yet ended (one, unless they're at two sites at once).
   const here = visits.filter((v) => !v.checkedOutAt);
+  // Checking them in (or out) is the main button; Merge, Block and Delete wait under More.
   const actions = [];
-  if (isAdmin()) actions.push({ label: "Delete", kind: "danger", value: "delete" });
   if (editable) {
-    actions.push({ label: "Merge…", value: "merge" });
-    actions.push({ label: visitor.blocked ? "Unblock" : "Block", value: "block" });
+    actions.push({ label: "Merge…", value: "merge", more: true });
+    actions.push({ label: visitor.blocked ? "Unblock" : "Block", value: "block", more: true });
+  }
+  if (isAdmin()) actions.push({ label: "Delete", kind: "danger", value: "delete", more: true });
+  actions.push({ label: "Close", kind: editable ? "secondary" : "primary", value: null });
+  if (editable) {
     if (visitor.verified === false) actions.push({ label: "Mark checked", value: "verify" });
     actions.push({ label: "Edit", value: "edit" });
     // Here now: Check out instead of Check in.
-    actions.push(here.length ? { label: "Check out", value: "checkout" } : { label: "Check in", value: "checkin" });
+    actions.push(here.length ? { label: "Check out", kind: "primary", value: "checkout" } : { label: "Check in", kind: "primary", value: "checkin" });
   }
-  actions.push({ label: "Close", kind: "primary", value: null });
   const result = await openDialog({ title: visitorName(visitor), body, wide: true, actions, onOpen: (d) => { dlgRef = d; } });
   const again = () => openVisitor(id, onChange);
   try {

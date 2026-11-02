@@ -47,14 +47,14 @@ const SECTIONS = [
   { id: "tenants", label: "Tenants", pages: [
     { view: "companies", href: "#companies", label: "Companies", show: canReadDirectory },
     { view: "people", href: "#people", label: "People", show: canReadDirectory },
-    { view: "badges", sub: "tenants", href: "#badges/tenants", label: "Badges", show: canReadBadges }
+    { view: "badges", sub: "tenants", href: "#badges/tenants", label: "Tenant badges", show: canReadBadges }
   ] },
   { id: "visitors", label: "Visitors", pill: "nav-visitors", pages: [
     { view: "here", href: "#here", label: "In the building", pill: "nav-here", show: canReadVisitors },
     { view: "expected", href: "#expected", label: "Expected", pill: "nav-expected", title: "Expected today, not yet arrived", show: canReadVisitors },
     { view: "visitors", href: "#visitors", label: "Visitors", pill: "nav-review", title: "Registered at a kiosk, not yet checked", show: canReadVisitors },
     { view: "visits", href: "#visits", label: "Visit log", show: canReadVisitors },
-    { view: "badges", sub: "visitors", href: "#badges/visitors", label: "Badges", pill: "nav-badges", title: "Badges out past their time: visitor badges with visitors who have left, and temporary badges not back by the end of their day", show: canReadBadges }
+    { view: "badges", sub: "visitors", href: "#badges/visitors", label: "Visitor badges", pill: "nav-badges", title: "Badges out past their time: visitor badges with visitors who have left, and temporary badges not back by the end of their day", show: canReadBadges }
   ] },
   { id: "facilities", label: "Facilities", show: canSeeLeases, pages: [
     { view: "floors", href: "#floors", label: "Floor plans", show: canReadFacilities },
@@ -108,7 +108,32 @@ function renderSubnav() {
   }, p.label, p.pill ? h("span", { id: p.pill, class: "pill", hidden: true, title: p.title || null }) : null)));
   for (const a of $("nav").querySelectorAll("a")) a.classList.toggle("is-active", a.dataset.section === state.section);
   showCounts();
+  revealActive($("nav"));
+  revealActive($("subnav"));
 }
+
+/**
+ * On a narrow screen the bars scroll sideways: the current tab is brought into view, and an
+ * edge fades while more lies beyond it (styles.css).
+ */
+function revealActive(bar) {
+  const active = bar.querySelector(".is-active");
+  if (active && bar.scrollWidth > bar.clientWidth) {
+    const a = active.getBoundingClientRect();
+    const b = bar.getBoundingClientRect();
+    const left = bar.scrollLeft + (a.left - b.left) - (b.width - a.width) / 2;
+    bar.scrollTo({ left: Math.max(0, left), behavior: reducedMotion() ? "instant" : "smooth" });
+  }
+  markOverflow(bar);
+}
+
+function markOverflow(bar) {
+  const max = bar.scrollWidth - bar.clientWidth;
+  bar.classList.toggle("more-before", max > 2 && bar.scrollLeft > 2);
+  bar.classList.toggle("more-after", max > 2 && bar.scrollLeft < max - 2);
+}
+for (const id of ["nav", "subnav"]) $(id).addEventListener("scroll", () => markOverflow($(id)), { passive: true });
+window.addEventListener("resize", debounce(() => { markOverflow($("nav")); markOverflow($("subnav")); }, 100));
 
 // --- sites ---------------------------------------------------------------------------------------
 
@@ -282,11 +307,21 @@ window.addEventListener("hashchange", route);
 
 // --- counts in the navigation ----------------------------------------------------------------
 
-function setPill(id, n) {
+/** title: what the count is made of, for a section's count that adds several up. */
+function setPill(id, n, title = null) {
   const el = $(id);
   if (!el) return;
   el.textContent = String(n);
   el.hidden = !n;
+  if (title !== null) {
+    el.parentElement.title = n ? title : "";
+    el.setAttribute("aria-label", title);
+  }
+}
+
+/** "1 visitor to check, 4 badges overdue": the parts of a count that aren't 0. */
+function countParts(parts) {
+  return parts.filter(([n]) => n).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(", ");
 }
 
 /** The counts beside the sections and pages: who is in the building (at the chosen site), and what needs attention. */
@@ -304,8 +339,8 @@ function showCounts() {
   setPill("nav-alarms", mail.alarms || 0);
   setPill("nav-guard", mail.reports || 0);
   // On the sections, only what needs someone to act.
-  setPill("nav-visitors", (v?.review || 0) + late);
-  setPill("nav-security", queue + (mail.alarms || 0));
+  setPill("nav-visitors", (v?.review || 0) + late, countParts([[v?.review || 0, "visitor to check", "visitors to check"], [late, "badge overdue", "badges overdue"]]));
+  setPill("nav-security", queue + (mail.alarms || 0), countParts([[queue, "clearance to validate", "clearances to validate"], [mail.alarms || 0, "alarm not yet opened", "alarms not yet opened"]]));
 }
 
 async function refreshCounts() {

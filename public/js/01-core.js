@@ -186,6 +186,18 @@ function fmtDateTime(ms) {
   return `${d.toLocaleDateString([], opts)} ${time}`;
 }
 
+/** Just the time of day: "4:30 PM". */
+function fmtTime(ms) {
+  return ms ? new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+}
+
+/** A clock time kept as "18:00", shown as the rest of the app shows times: "6:00 PM". */
+function fmtClock(hhmm) {
+  const [hours, minutes] = String(hhmm || "").split(":").map(Number);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return hhmm || "";
+  return new Date(2000, 0, 1, hours, minutes).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 function fmtDate(ms) {
   if (!ms) return "";
   return new Date(ms).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
@@ -354,23 +366,54 @@ function openDialog({ title, body, actions = [{ label: "Close", value: null }], 
       dismissDialog(dlg, { instant });
       resolve(value);
     }
-    for (const action of actions) {
-      const btn = h("button", { type: "button", class: action.kind || "secondary", text: action.label });
-      btn.addEventListener("click", async () => {
-        if (!action.onClick) return finish(action.value ?? null);
-        error.hidden = true;
-        btn.disabled = true;
-        try {
-          const result = await action.onClick();
-          if (action.close !== false) finish(result === undefined ? action.value ?? true : result);
-        } catch (e) {
-          error.textContent = e.message;
-          error.hidden = false;
-          dlg.querySelector(".dialog-body").scrollTop = 0;
-        } finally {
-          btn.disabled = false;
-        }
+    async function run(action, btn) {
+      if (!action.onClick) return finish(action.value ?? null);
+      error.hidden = true;
+      btn.disabled = true;
+      try {
+        const result = await action.onClick();
+        if (action.close !== false) finish(result === undefined ? action.value ?? true : result);
+      } catch (e) {
+        error.textContent = e.message;
+        error.hidden = false;
+        dlg.querySelector(".dialog-body").scrollTop = 0;
+      } finally {
+        btn.disabled = false;
+      }
+      return null;
+    }
+    // Rarer and destructive actions ({ more: true }) wait in a More menu at the left, so the
+    // buttons in view are the likely ones.
+    const extra = actions.filter((a) => a.more);
+    if (extra.length) {
+      const menu = h("div", { class: "action-menu", role: "menu", hidden: true });
+      const toggle = h("button", { type: "button", class: "secondary", "aria-haspopup": "menu", "aria-expanded": "false", text: "More" });
+      const close = () => { menu.hidden = true; toggle.setAttribute("aria-expanded", "false"); };
+      toggle.addEventListener("click", () => {
+        if (!menu.hidden) return close();
+        menu.hidden = false;
+        toggle.setAttribute("aria-expanded", "true");
+        menu.querySelector("button")?.focus();
+        return null;
       });
+      for (const action of extra) {
+        const item = h("button", { type: "button", role: "menuitem", class: `site-option${action.kind === "danger" ? " is-danger" : ""}`, text: action.label });
+        item.addEventListener("click", () => { close(); run(action, item); });
+        menu.append(item);
+      }
+      menu.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        toggle.focus();
+      });
+      dlg.addEventListener("click", (e) => { if (!e.target.closest(".more-wrap")) close(); });
+      footer.append(h("div", { class: "more-wrap" }, toggle, menu));
+    }
+    for (const action of actions.filter((a) => !a.more)) {
+      const btn = h("button", { type: "button", class: action.kind || "secondary", text: action.label });
+      btn.addEventListener("click", () => run(action, btn));
       footer.append(btn);
     }
     dlg.addEventListener("cancel", (e) => { e.preventDefault(); finish(null); });
@@ -480,6 +523,62 @@ function formDialog({ title, fields, submitLabel = "Save", onSubmit, extraAction
 }
 
 // --- small shared renderers --------------------------------------------------------
+
+/** The shape of content still loading, in place of the word. */
+function skeletonLines() {
+  return h("div", { class: "skeleton", role: "status", "aria-label": "Loading" }, h("span"), h("span"), h("span"));
+}
+
+// --- tables as cards on a phone ----------------------------------------------------------------
+// A .phone-cards table shows each row as a card on a phone, each value beside its column's
+// heading (styles.css). The cells carry their heading, labelled whenever rows are added.
+function labelCells(table) {
+  const heads = [...(table.tHead?.rows[0]?.cells || [])].map((th) => th.textContent.trim());
+  for (const body of table.tBodies) {
+    for (const tr of body.rows) {
+      let col = 0;
+      for (const td of tr.cells) {
+        td.dataset.label = td.colSpan > 1 ? "" : heads[col] || "";
+        col += td.colSpan;
+      }
+    }
+  }
+}
+let labelling = false;
+new MutationObserver(() => {
+  if (labelling) return;
+  labelling = true;
+  requestAnimationFrame(() => {
+    labelling = false;
+    for (const table of document.querySelectorAll("table.phone-cards")) labelCells(table);
+  });
+}).observe(document.body, { childList: true, subtree: true });
+
+// --- filters on a phone ------------------------------------------------------------------------
+// A list's filters fold behind a Filters button on a phone (styles.css shows it there). The
+// button counts the filters that are on, so a filtered list never passes for the whole of it.
+function filterCount(set) {
+  let n = 0;
+  for (const el of set.querySelectorAll("select, input")) {
+    if (el.type === "checkbox") n += el.checked ? 1 : 0;
+    else if (el.tagName === "SELECT") n += el.selectedIndex > 0 ? 1 : 0;
+    else n += el.value ? 1 : 0;
+  }
+  return n;
+}
+/** Brings each Filters button's count up to date (lists call it as they load). */
+function showFilterCounts() {
+  for (const toggle of document.querySelectorAll(".filters-toggle")) {
+    const n = filterCount(document.getElementById(toggle.getAttribute("aria-controls")));
+    toggle.textContent = n ? `Filters (${n})` : "Filters";
+  }
+}
+for (const toggle of document.querySelectorAll(".filters-toggle")) {
+  const set = document.getElementById(toggle.getAttribute("aria-controls"));
+  toggle.addEventListener("click", () => toggle.setAttribute("aria-expanded", String(set.classList.toggle("is-open"))));
+  set.addEventListener("change", showFilterCounts);
+  set.addEventListener("input", showFilterCounts);
+}
 
 function emptyRow(colspan, message) {
   return h("tr", {}, h("td", { colspan, class: "empty", text: message }));

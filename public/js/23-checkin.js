@@ -386,7 +386,7 @@ function checkInWizard(start = {}) {
       const idName = `id-${Math.random().toString(36).slice(2, 8)}`;
       // An Other government ID: what it was, in a box shown only for that choice.
       const otherId = state.config.checkin?.otherId;
-      const otherText = h("input", { type: "text", maxlength: "80", value: w.visit?.idOther || "", placeholder: "Military ID, tribal ID, ...", "aria-label": "What ID was it?" });
+      const otherText = h("input", { type: "text", maxlength: "80", value: w.visit?.idOther || "", placeholder: "Military ID, tribal ID…", "aria-label": "What ID was it?" });
       const otherBox = h("label", { class: "id-other", hidden: w.visit?.idType !== otherId }, h("span", { class: "label", text: "What ID was it?" }), otherText);
       const types = (state.config.checkin?.idTypes || []).map((t) => {
         const input = h("input", { type: "radio", name: idName, value: t });

@@ -247,7 +247,7 @@ td > .badge:first-child, .line-actions .badge, .card-actions .badge { margin-lef
 .header-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 .user-chip { font-weight: 600; font-size: 0.88rem; color: var(--text-muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-main { max-width: 1280px; margin: 0 auto; padding: 18px max(16px, env(safe-area-inset-left)) 40px; }
+main { max-width: 1280px; margin: 0 auto; padding: 18px max(16px, env(safe-area-inset-left)) 40px; min-height: calc(100dvh - var(--chrome-h, 64px) - 48px); }
 .app-footer { text-align: center; color: var(--text-muted); font-size: 0.78rem; padding: 0 16px 20px; }
 
 @media (max-width: 900px) {
@@ -532,9 +532,6 @@ a.brand:hover { text-decoration: none; }
 /* Home */
 .page-title { margin: 0 0 6px; font-size: 1.3rem; }
 .dashboard-head { align-items: flex-end; }
-.site-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.site-chip { min-height: 32px; padding: 0 12px; border-radius: 999px; background: var(--secondary-bg); color: var(--secondary-text); font-size: 0.85rem; font-weight: 600; }
-.site-chip.is-current { background: var(--primary); color: var(--primary-fg); }
 .dashboard-edit-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 14px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
 /* Columns of cards (19-dashboard.js sets how many): each stacks its own, so a long card only
    moves the cards below it in its column. */
@@ -858,11 +855,11 @@ h3, .wizard-title, .dash-card-head h3 { letter-spacing: -0.006em; }
 
 /* --- response: feedback the moment something is pressed, not when it's let go --- */
 button, .pick-row, .dash-row, .nav a, .subnav a, .site-option, .nav-list a, .company-pick, .id-choice,
-.template-choice, .floor-office-row, .dash-stat, .chip, .site-chip, .entra-btn {
+.template-choice, .floor-office-row, .dash-stat, .chip, .entra-btn {
   transition: background-color 150ms var(--ease-out), border-color 150ms var(--ease-out), color 150ms var(--ease-out),
     box-shadow 150ms var(--ease-out), opacity 150ms var(--ease-out), transform var(--press) var(--ease-out);
 }
-button:not(:disabled):active, .nav a:active, .subnav a:active, .chip:active, .site-chip:active, .entra-btn:active { transform: scale(0.96); }
+button:not(:disabled):active, .nav a:active, .subnav a:active, .chip:active, .entra-btn:active { transform: scale(0.96); }
 .pick-row:active, a.dash-row:active, .dash-row.is-clickable:active, .nav-list a:active, .company-pick:active, .id-choice:active,
 .template-choice:active, .floor-office-row:active, .dash-stat:active, .site-option:active { transform: scale(0.985); }
 .table tr.clickable:active td { background: var(--surface-3); }
@@ -974,25 +971,93 @@ dialog.dialog.is-closing::backdrop { opacity: 0; }
 /* --- the light/dark switch cross-fades rather than flashing (13-app.js) --- */
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 280ms; animation-timing-function: var(--ease-out); }
 
+/* --- toolbars: the search first, then the filters, the actions together at the right --- */
+.toolbar-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-left: auto; justify-content: flex-end; }
+.list-toolbar .filter-set { display: contents; }
+.filters-toggle { display: none; }
+.list-options { align-items: center; }
+.list-options .check-row { min-height: 32px; }
+
+/* --- a dialog's rarer and destructive actions wait in a More menu, growing out of its button --- */
+.more-wrap { position: relative; margin-right: auto; }
+.action-menu {
+  position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 30; min-width: 200px;
+  display: flex; flex-direction: column; padding: 4px;
+  border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  -webkit-backdrop-filter: var(--material-blur); backdrop-filter: var(--material-blur);
+  transform-origin: bottom left;
+  transition: opacity 160ms var(--ease-out), transform var(--spring-time) var(--spring);
+}
+@starting-style {
+  .action-menu:not([hidden]) { opacity: 0; transform: translateY(4px) scale(0.95); }
+}
+.site-option.is-danger { color: var(--danger); }
+
+/* --- loading: the shape of what's coming, not a word --- */
+.skeleton { display: grid; gap: 9px; padding: 4px 0; }
+.skeleton span { display: block; height: 11px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-3) 25%, var(--surface-2) 50%, var(--surface-3) 75%); background-size: 200% 100%; animation: skeleton-sheen 1.4s ease-in-out infinite; }
+.skeleton span:nth-child(2) { width: 82%; }
+.skeleton span:nth-child(3) { width: 58%; }
+@keyframes skeleton-sheen { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+/* --- row actions show on the row being pointed at (always on touch screens and to the keyboard) --- */
+@media (hover: hover) and (pointer: fine) {
+  .table .row-action { opacity: 0; }
+  .table tr:hover .row-action, .table tr:focus-within .row-action, .table .row-action:focus-visible { opacity: 1; }
+}
+
+/* --- bars that scroll sideways: an edge fades where more lies beyond it --- */
+.nav.more-after, .subnav.more-after { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+.nav.more-before, .subnav.more-before { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent); }
+.nav.more-before.more-after, .subnav.more-before.more-after { -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
+
+@media (max-width: 640px) {
+  /* Filters fold behind their button, which counts the ones that are on. */
+  .filters-toggle { display: inline-flex; }
+  .list-toolbar .filter-set { display: none; flex: 1 1 100%; flex-wrap: wrap; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .list-toolbar .filter-set.is-open { display: flex; animation: view-in 160ms var(--ease-out); }
+  .list-toolbar .filter-set > select, .list-toolbar .filter-set > label.inline { flex: 1 1 100%; }
+  .list-toolbar .filter-set > label.inline input { flex: 1; }
+  .toolbar-actions { flex: 1 1 100%; justify-content: flex-start; margin-left: 0; }
+
+  /* Tables become a card per row, each value beside its column's heading. */
+  .table.phone-cards thead { display: none; }
+  .table.phone-cards, .table.phone-cards tbody, .table.phone-cards tr { display: block; width: 100%; }
+  .table.phone-cards tr { position: relative; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .table.phone-cards tbody tr:last-child { border-bottom: 0; }
+  .table.phone-cards td { display: block; position: relative; border: 0; padding: 3px 0 3px 7.25rem; white-space: normal; min-height: 0; }
+  .table.phone-cards td::before { content: attr(data-label); position: absolute; left: 0; top: 5px; width: 6.75rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+  .table.phone-cards td[data-label=""] { padding-left: 0; }
+  .table.phone-cards td[data-label=""]::before { content: none; }
+  .table.phone-cards td:empty { display: none; }
+  .table.phone-cards td.empty { padding: 14px 0; text-align: center; }
+  .table.phone-cards td.pick-cell { position: absolute; top: 8px; right: 10px; padding: 0; }
+  .table.phone-cards tr:has(> td.pick-cell) { padding-right: 52px; }
+  .table.phone-cards tr.time-changed { box-shadow: inset 3px 0 0 var(--warn); }
+  .table.phone-cards tr.time-changed > td:first-child { box-shadow: none; }
+}
+
 /* --- asked for less motion: fades only, nothing slides, scales or springs --- */
 @media (prefers-reduced-motion: reduce) {
   :root { --spring-time: 150ms; --spring: ease; }
-  button:not(:disabled):active, .nav a:active, .subnav a:active, .chip:active, .site-chip:active, .entra-btn:active,
+  button:not(:disabled):active, .nav a:active, .subnav a:active, .chip:active, .entra-btn:active,
   .pick-row:active, a.dash-row:active, .dash-row.is-clickable:active, .nav-list a:active, .company-pick:active, .id-choice:active,
   .template-choice:active, .floor-office-row:active, .dash-stat:active, .site-option:active { transform: none; }
   @starting-style {
     dialog.dialog[open] { transform: none; }
-    .site-menu:not([hidden]) { transform: none; }
+    .site-menu:not([hidden]), .action-menu:not([hidden]) { transform: none; }
     .toast[popover]:popover-open, .toast:not([hidden]) { transform: translateX(-50%); }
   }
   dialog.dialog.is-closing { transform: none; opacity: 0; }
   .toast.is-leaving { transform: translateX(-50%); }
   ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 1ms; }
+  .skeleton span { animation: none; }
 }
 
 /* --- asked for less transparency: solid surfaces, no blur --- */
 @media (prefers-reduced-transparency: reduce) {
-  .chrome, .site-menu { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .chrome, .site-menu, .action-menu { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
   .toast { background: var(--text); -webkit-backdrop-filter: none; backdrop-filter: none; }
   .toast.error { background: var(--danger); }
   dialog.dialog::backdrop { -webkit-backdrop-filter: none; backdrop-filter: none; }
@@ -1003,5 +1068,5 @@ dialog.dialog.is-closing::backdrop { opacity: 0; }
   :root, :root[data-theme] { --border: var(--border-strong); }
   .chrome { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
   .chrome::after { opacity: 1; background: var(--border-strong); }
-  .site-menu { background: var(--surface); border-color: var(--border-strong); }
+  .site-menu, .action-menu { background: var(--surface); border-color: var(--border-strong); }
 }

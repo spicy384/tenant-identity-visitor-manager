@@ -18,12 +18,14 @@ function visitsTable(visits, { showVisitor = true, onChange = () => {} } = {}) {
   const seesBadges = canReadBadges();
   const entersBadges = correcting && canEditBadges();
   const head = ["Arrived", "Left", ...(showVisitor ? ["Visitor"] : []), "Visiting", "Host", ...(seesBadges ? ["Badge"] : []), ...(allSites ? ["Site"] : []), ...(correcting ? [""] : [])];
-  return h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+  // When they left the day they came, the time is enough.
+  const leftAt = (v) => (new Date(v.checkedOutAt).toDateString() === new Date(v.checkedInAt).toDateString() ? fmtTime(v.checkedOutAt) : fmtDateTime(v.checkedOutAt));
+  return h("div", { class: "table-wrap" }, h("table", { class: "table compact phone-cards" },
     h("thead", {}, h("tr", {}, head.map((t) => h("th", { text: t })))),
     h("tbody", {}, visits.length ? visits.map((v) => h("tr", { class: v.timesCorrected ? "time-changed" : null },
       h("td", { class: "nowrap small-text" }, fmtDateTime(v.checkedInAt), v.timeChanged?.in ? changedMark(v, onChange) : null),
       h("td", { class: "small-text" }, v.checkedOutAt
-        ? [fmtDateTime(v.checkedOutAt), v.timeChanged?.out ? changedMark(v, onChange) : null, h("div", { class: "muted", text: CHECKOUT_LABELS[v.checkoutMethod] || "" })]
+        ? [h("span", { class: "nowrap" }, leftAt(v), v.timeChanged?.out ? changedMark(v, onChange) : null), h("div", { class: "muted", text: CHECKOUT_LABELS[v.checkoutMethod] || "" })]
         : h("span", { class: "badge ok", text: "In the building" })),
       showVisitor ? h("td", {}, h("a", { href: `#visitor/${v.visitorId}`, text: visitorName(v.visitor) }), v.visitor.organization ? h("div", { class: "muted small-text", text: v.visitor.organization }) : null) : null,
       h("td", { text: v.companyName || "" }, v.purpose ? h("div", { class: "muted small-text", text: v.purpose }) : null),
@@ -32,7 +34,7 @@ function visitsTable(visits, { showVisitor = true, onChange = () => {} } = {}) {
         ? [h("span", { class: "mono", text: v.badges.join(", ") }), v.badgeRecordedLater ? h("div", { class: "muted", text: "entered later" }) : null]
         : entersBadges ? h("button", { type: "button", class: "link-btn small-text nowrap", text: "Add badge", onclick: async () => { if (await recordVisitBadge(v)) onChange(); } }) : h("span", { class: "muted", text: "None" })) : null,
       allSites ? h("td", { class: "small-text", text: v.siteName }) : null,
-      correcting ? h("td", {}, h("button", { type: "button", class: "link-btn small-text nowrap", text: "Correct times", onclick: async () => { if (await correctVisitTimes(v)) onChange(); } })) : null)) : emptyRow(head.length, "No visits."))));
+      correcting ? h("td", {}, h("button", { type: "button", class: "link-btn small-text nowrap row-action", text: "Correct times", onclick: async () => { if (await correctVisitTimes(v)) onChange(); } })) : null)) : emptyRow(head.length, "No visits."))));
 }
 
 /**
@@ -153,6 +155,7 @@ function visitsQuery() {
 
 async function loadVisits() {
   const table = $("visits-table");
+  showFilterCounts();
   let data;
   try {
     data = await api(`/api/visits?${new URLSearchParams({ ...visitsQuery(), limit: String(VISITS_PAGE), offset: String(visitsView.offset) })}`);

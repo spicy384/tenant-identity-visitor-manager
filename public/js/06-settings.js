@@ -122,14 +122,14 @@ async function settingsSites(body) {
   const { sites, timeZones } = await api("/api/sites");
   const panel = h("div", { class: "panel" },
     h("div", { class: "panel-head" }, h("h3", { text: "Sites" }), h("button", { type: "button", class: "primary small", text: "Add site", onclick: () => editSite(null, timeZones) })),
-    h("p", { class: "muted", text: "Each building has its own name and logo on its kiosk, its own time zone, and the time its visitors are checked out automatically at the end of the day. Visitors and kiosks arrive in the next phase; the settings are kept from now." }),
+    h("p", { class: "muted", text: "Each building has its own name and logo on its kiosks, its own time zone, and the time its visitors are checked out automatically at the end of the day." }),
     h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
       h("thead", {}, h("tr", {}, ["", "Site", "Time zone", "End of day", "Companies", ""].map((t) => h("th", { text: t })))),
       h("tbody", {}, sites.map((s) => h("tr", { class: s.active ? "" : "inactive" },
         h("td", { class: "logo-cell" }, s.hasLogo ? h("img", { class: "site-logo-thumb", src: `/api/sites/${s.id}/logo?v=${s.logoUpdatedAt}`, alt: "" }) : null),
         h("td", {}, h("strong", { text: s.name }), s.kioskName && s.kioskName !== s.name ? h("div", { class: "muted small-text", text: `Kiosk: ${s.kioskName}` }) : null, s.active ? null : h("span", { class: "badge muted", text: "Inactive" })),
         h("td", { class: "small-text", text: s.timeZone }),
-        h("td", { class: "small-text", text: s.endOfDay || "Off" }),
+        h("td", { class: "small-text", text: s.endOfDay ? fmtClock(s.endOfDay) : "Off" }),
         h("td", { text: String(s.companies) }),
         h("td", {}, h("button", { type: "button", class: "link-btn", text: "Edit", onclick: () => editSite(s, timeZones) }))))))));
   body.append(panel);

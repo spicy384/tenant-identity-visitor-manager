@@ -110,11 +110,9 @@ async function openLease(id) {
       : h("p", { class: "muted", text: "No offices: a fixed rent only." }),
     h("p", { class: "muted small-text", text: `Added ${fmtDateTime(lease.createdAt)}${lease.createdBy ? ` by ${lease.createdBy}` : ""}${lease.updatedAt !== lease.createdAt ? `; changed ${fmtDateTime(lease.updatedAt)}${lease.updatedBy ? ` by ${lease.updatedBy}` : ""}` : ""}.` }));
   const actions = [];
-  if (canEditFacilities()) {
-    if (!lease.invoiced.length) actions.push({ label: "Delete", kind: "danger", value: "delete" });
-    actions.push({ label: "Edit", value: "edit" });
-  }
-  actions.push({ label: "Close", kind: "primary", value: null });
+  if (canEditFacilities() && !lease.invoiced.length) actions.push({ label: "Delete", kind: "danger", value: "delete", more: true });
+  actions.push({ label: "Close", kind: canEditFacilities() ? "secondary" : "primary", value: null });
+  if (canEditFacilities()) actions.push({ label: "Edit", kind: "primary", value: "edit" });
   const result = await openDialog({ title: `${lease.companyName}${lease.reference ? `: lease ${lease.reference}` : "'s lease"}`, body, wide: true, actions });
   try {
     if (result === "edit") {

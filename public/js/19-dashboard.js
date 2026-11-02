@@ -5,7 +5,8 @@
 
 const DASHBOARD_REFRESH_MS = 60 * 1000;
 const DASHBOARD_LIST_MAX = 8;
-const dashboard = { editing: false, draft: null, timer: null, tenantsQuery: "", cards: [], columns: 0 };
+// loaded: each module's last contents, shown while it reloads instead of a blank.
+const dashboard = { editing: false, draft: null, timer: null, tenantsQuery: "", cards: [], columns: 0, loaded: new Map() };
 // The narrowest a column of cards gets, and the space between columns (as in styles.css).
 const DASHBOARD_COLUMN_MIN = 320;
 const DASHBOARD_GAP = 16;
@@ -306,20 +307,18 @@ function greeting() {
   return `${part}, ${name}`;
 }
 
-/** Quick site switching on Home: a button per site they can see. */
-function renderSiteChips() {
-  const sites = activeSites();
-  const box = $("home-sites");
-  box.hidden = sites.length < 2;
-  const chip = (id, label) => h("button", { type: "button", class: `site-chip${String(id) === String(state.site) ? " is-current" : ""}`, "aria-pressed": String(String(id) === String(state.site)), onclick: () => { if (String(id) !== String(state.site)) setSite(id); } }, label);
-  box.replaceChildren(...sites.map((s) => chip(s.id, s.name)), chip("", allSitesLabel()));
-}
-
 /** One module's card; in edit mode with its controls instead of its contents. */
 function moduleCard(id, index, list) {
   const def = DASHBOARD_MODULES[id];
   const count = h("span", { class: "pill", hidden: true });
-  const body = h("div", { class: "dash-body" }, h("p", { class: "muted small-text", text: "Loading…" }));
+  // What it showed last while it reloads (the refresh every minute, a site switch); its shape the first time.
+  const kept = dashboard.editing ? null : dashboard.loaded.get(id);
+  const body = h("div", { class: "dash-body" }, kept ? kept.body : skeletonLines());
+  if (kept) {
+    count.textContent = String(kept.count ?? "");
+    count.hidden = !kept.count;
+    count.classList.toggle("attention", Boolean(kept.attention));
+  }
   const card = h("section", { class: "dash-card", dataset: { module: id } },
     h("div", { class: "dash-card-head" },
       h("h3", {}, h("a", { href: def.href, text: def.title }), " ", count),
@@ -331,7 +330,9 @@ function moduleCard(id, index, list) {
   if (dashboard.editing) {
     body.replaceChildren(h("p", { class: "muted small-text", text: def.description }));
   } else {
+    if (kept) card.classList.toggle("needs-attention", Boolean(kept.attention));
     def.load().then((r) => {
+      dashboard.loaded.set(id, r);
       body.replaceChildren(r.body);
       if (r.count !== null && r.count !== undefined) {
         count.textContent = String(r.count);
@@ -367,7 +368,6 @@ function addModuleCard() {
 
 function renderDashboard() {
   $("home-greeting").textContent = greeting();
-  renderSiteChips();
   $("home-customize").hidden = dashboard.editing;
   $("home-edit-bar").hidden = !dashboard.editing;
   const list = (dashboard.editing ? dashboard.draft : state.prefs.dashboard).filter((id) => DASHBOARD_MODULES[id]);

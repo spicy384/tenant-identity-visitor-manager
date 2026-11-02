@@ -238,10 +238,10 @@ async function openPerson(id, onChange = () => {}) {
     clearanceSection("person", person, () => dlgRef?.finish("refresh")),
     badgeSection("person", person.id));
   const actions = [];
-  if (isAdmin()) actions.push({ label: "Delete", kind: "danger", value: "delete" });
-  if (canManageFields("person")) actions.push({ label: "Add a field to this person", value: "field" });
-  if (canEditDirectory()) actions.push({ label: "Edit", value: "edit" });
-  actions.push({ label: "Close", kind: "primary", value: null });
+  if (canManageFields("person")) actions.push({ label: "Add a field to this person", value: "field", more: true });
+  if (isAdmin()) actions.push({ label: "Delete", kind: "danger", value: "delete", more: true });
+  actions.push({ label: "Close", kind: canEditDirectory() ? "secondary" : "primary", value: null });
+  if (canEditDirectory()) actions.push({ label: "Edit", kind: "primary", value: "edit" });
   const result = await openDialog({ title: personName(person), body, wide: true, actions, onOpen: (d) => { dlgRef = d; } });
   if (result === "refresh") {
     onChange();

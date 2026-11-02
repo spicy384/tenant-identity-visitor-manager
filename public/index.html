@@ -58,11 +58,14 @@
         <div class="split-list panel">
           <div class="toolbar tight">
             <input id="companies-search" type="search" placeholder="Search companies" />
-            <button type="button" id="companies-pick" class="secondary" data-editor title="Choose several companies to merge, make inactive or delete">Select</button>
-            <button type="button" id="companies-add" class="primary" data-editor>Add</button>
+          </div>
+          <div class="toolbar tight list-options">
+            <label class="check-row inline-check"><input type="checkbox" id="companies-inactive" /> Show inactive</label>
+            <span class="spacer"></span>
+            <button type="button" id="companies-pick" class="secondary small" data-editor title="Choose several companies to merge, make inactive or delete">Select</button>
+            <button type="button" id="companies-add" class="primary small" data-editor>Add</button>
           </div>
           <div id="companies-actions" class="bulk-bar" hidden></div>
-          <label class="check-row"><input type="checkbox" id="companies-inactive" /> Show inactive</label>
           <ul id="companies-list" class="nav-list"></ul>
           <p id="companies-count" class="muted small-text list-foot"></p>
         </div>
@@ -77,14 +80,15 @@
       <div class="toolbar">
         <input id="people-search" type="search" placeholder="Search name, company, title, email or phone" />
         <label class="check-row inline-check"><input type="checkbox" id="people-inactive" /> Show inactive</label>
-        <span class="spacer"></span>
-        <button type="button" id="people-import" class="secondary" data-editor>Import</button>
-        <button type="button" id="people-export" class="secondary" data-admin>Export CSV</button>
-        <button type="button" id="people-add" class="primary" data-editor>Add person</button>
+        <div class="toolbar-actions">
+          <button type="button" id="people-import" class="secondary" data-editor>Import</button>
+          <button type="button" id="people-export" class="secondary" data-admin>Export CSV</button>
+          <button type="button" id="people-add" class="primary" data-editor>Add person</button>
+        </div>
       </div>
       <div id="people-actions" class="bulk-bar" hidden></div>
       <div class="table-wrap">
-        <table class="table" id="people-table">
+        <table class="table phone-cards" id="people-table">
           <thead></thead>
           <tbody></tbody>
         </table>
@@ -109,7 +113,7 @@
         <p id="here-print-time"></p>
       </div>
       <div class="table-wrap">
-        <table class="table" id="here-table"><thead></thead><tbody></tbody></table>
+        <table class="table phone-cards" id="here-table"><thead></thead><tbody></tbody></table>
       </div>
       <p id="here-note" class="muted small-text no-print"></p>
     </section>
@@ -123,13 +127,14 @@
           <option value="review">To check</option>
           <option value="blocked">Blocked</option>
         </select>
-        <span class="spacer"></span>
-        <button type="button" id="visitors-import" class="secondary" data-visitor-editor>Import</button>
-        <button type="button" id="visitors-add" class="primary" data-visitor-editor>Add visitor</button>
+        <div class="toolbar-actions">
+          <button type="button" id="visitors-import" class="secondary" data-visitor-editor>Import</button>
+          <button type="button" id="visitors-add" class="primary" data-visitor-editor>Add visitor</button>
+        </div>
       </div>
       <div id="visitors-actions" class="bulk-bar" hidden></div>
       <div class="table-wrap">
-        <table class="table" id="visitors-table"><thead></thead><tbody></tbody></table>
+        <table class="table phone-cards" id="visitors-table"><thead></thead><tbody></tbody></table>
       </div>
       <div class="pager">
         <button type="button" id="visitors-prev" class="secondary small">Previous</button>
@@ -140,21 +145,25 @@
 
     <!-- The visit log -->
     <section id="view-visits" class="view" data-title="Visit log" hidden>
-      <div class="toolbar">
-        <select id="visits-status" aria-label="Status">
-          <option value="all">All visits</option>
-          <option value="open">Still in the building</option>
-          <option value="closed">Left</option>
-        </select>
-        <label class="inline">From <input id="visits-from" type="date" /></label>
-        <label class="inline">To <input id="visits-to" type="date" /></label>
+      <div class="toolbar list-toolbar">
         <input id="visits-search" type="search" placeholder="Search visitor, company or host" />
-        <label class="check-row inline-check"><input type="checkbox" id="visits-corrected" /> Times changed only</label>
-        <span class="spacer"></span>
-        <button type="button" id="visits-export" class="secondary" data-admin>Export CSV</button>
+        <button type="button" class="secondary filters-toggle" aria-expanded="false" aria-controls="visits-filters">Filters</button>
+        <div id="visits-filters" class="filter-set">
+          <select id="visits-status" aria-label="Status">
+            <option value="all">All visits</option>
+            <option value="open">Still in the building</option>
+            <option value="closed">Left</option>
+          </select>
+          <label class="inline">From <input id="visits-from" type="date" /></label>
+          <label class="inline">To <input id="visits-to" type="date" /></label>
+          <label class="check-row inline-check"><input type="checkbox" id="visits-corrected" /> Times changed only</label>
+        </div>
+        <div class="toolbar-actions">
+          <button type="button" id="visits-export" class="secondary" data-admin>Export CSV</button>
+        </div>
       </div>
       <div class="table-wrap">
-        <table class="table" id="visits-table"><thead></thead><tbody></tbody></table>
+        <table class="table compact phone-cards" id="visits-table"><thead></thead><tbody></tbody></table>
       </div>
       <div class="pager">
         <button type="button" id="visits-prev" class="secondary small">Previous</button>
@@ -178,8 +187,10 @@
 
     <!-- Badges -->
     <section id="view-badges" class="view" data-title="Badges" hidden>
-      <div class="toolbar">
+      <div class="toolbar list-toolbar">
         <input id="badges-search" type="search" placeholder="Search number, holder or company" />
+        <button type="button" class="secondary filters-toggle" aria-expanded="false" aria-controls="badges-filters">Filters</button>
+        <div id="badges-filters" class="filter-set">
         <select id="badges-type" aria-label="Type">
           <option value="">All types</option>
           <option value="people">Personnel and tenant</option>
@@ -199,15 +210,17 @@
           <option value="lost">Lost</option>
           <option value="retired">Retired</option>
         </select>
-        <span class="spacer"></span>
-        <button type="button" id="badges-lend" class="secondary" data-badge-lender>Assign Temporary Badge</button>
-        <button type="button" id="badges-import" class="secondary" data-badge-manager>Import</button>
-        <button type="button" id="badges-range" class="secondary" data-badge-manager>Add a range</button>
-        <button type="button" id="badges-add" class="primary" data-badge-manager>Add badge</button>
+        </div>
+        <div class="toolbar-actions">
+          <button type="button" id="badges-lend" class="secondary" data-badge-lender>Assign Temporary Badge</button>
+          <button type="button" id="badges-import" class="secondary" data-badge-manager>Import</button>
+          <button type="button" id="badges-range" class="secondary" data-badge-manager>Add a range</button>
+          <button type="button" id="badges-add" class="primary" data-badge-manager>Add badge</button>
+        </div>
       </div>
       <div id="badges-actions" class="bulk-bar" hidden></div>
       <div class="table-wrap">
-        <table class="table" id="badges-table"><thead></thead><tbody></tbody></table>
+        <table class="table phone-cards" id="badges-table"><thead></thead><tbody></tbody></table>
       </div>
       <div class="pager">
         <button type="button" id="badges-prev" class="secondary small">Previous</button>
@@ -219,14 +232,11 @@
     <!-- Home: each person's dashboard (19-dashboard.js) -->
     <section id="view-home" class="view" data-title="Home" hidden>
       <div class="toolbar dashboard-head">
-        <div>
-          <h2 id="home-greeting" class="page-title">Home</h2>
-          <div id="home-sites" class="site-chips" role="group" aria-label="Site"></div>
-        </div>
+        <h2 id="home-greeting" class="page-title">Home</h2>
         <span class="spacer"></span>
         <button type="button" id="home-lend" class="secondary" data-badge-lender>Assign Temporary Badge</button>
         <button type="button" id="home-checkin" class="primary" data-visitor-editor>Check in a visitor</button>
-        <button type="button" id="home-customize" class="secondary small">Customize</button>
+        <button type="button" id="home-customize" class="secondary">Customize</button>
       </div>
       <div id="home-edit-bar" class="dashboard-edit-bar" hidden>
         <span class="muted small-text">Add, remove and reorder your modules. Only modules your role can see are offered.</span>

@@ -258,6 +258,7 @@ async function lendBadgeDialog() {
 
 async function loadBadges() {
   const table = $("badges-table");
+  showFilterCounts();
   const head = ["Facility code", "Badge", "Type", "Clearance level", ...(multiSite() ? ["Valid at"] : []), "Expires", "Status", "Held by", "Since"];
   const picking = canManageBadges();
   const all = h("input", { type: "checkbox", "aria-label": "Choose every badge on this page" });
@@ -522,18 +523,14 @@ async function openBadge(id, onChange = () => {}) {
           h("td", { class: "small-text" }, a.returnedAt ? [fmtDateTime(a.returnedAt), a.returnedBy ? h("div", { class: "muted", text: a.returnedBy }) : null] : h("span", { class: "badge warn", text: "Still out" })),
           h("td", { class: "small-text" }, a.outcome === "lost" ? h("span", { class: "badge bad", text: "Lost" }) : "", a.temporary ? h("div", { class: "muted", text: `in place of ${a.replacesNumber || "their badge"}` }) : null, a.note ? h("div", { class: "muted", text: a.note }) : null))))))
       : h("p", { class: "muted", text: "Never given out." }));
+  // The likely next step is the main button; Lost and Delete wait under More.
   const actions = [];
-  if (canManageBadges() && !held.length) actions.push({ label: "Delete", kind: "danger", value: "delete" });
+  if (canEditBadges() && badge.holder) actions.push({ label: "Lost", value: "lost", more: true });
+  if (canManageBadges() && !held.length) actions.push({ label: "Delete", kind: "danger", value: "delete", more: true });
+  const next = canEditBadges() ? (badge.holder ? { label: "Take back", value: "back" } : badge.status === "active" ? { label: "Give out", value: "assign" } : null) : null;
+  actions.push({ label: "Close", kind: next ? "secondary" : "primary", value: null });
   if (canManageBadges()) actions.push({ label: "Edit", value: "edit" });
-  if (canEditBadges()) {
-    if (badge.holder) {
-      actions.push({ label: "Lost", value: "lost" });
-      actions.push({ label: "Take back", value: "back" });
-    } else if (badge.status === "active") {
-      actions.push({ label: "Give out", value: "assign" });
-    }
-  }
-  actions.push({ label: "Close", kind: "primary", value: null });
+  if (next) actions.push({ ...next, kind: "primary" });
   const result = await openDialog({ title: `Badge ${badge.label}`, body, wide: true, actions });
   const again = () => openBadge(id, onChange);
   try {
