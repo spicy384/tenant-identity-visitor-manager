@@ -134,6 +134,20 @@ check("merge: links are combined", ada.companies.map((c) => c.companyName).sort(
 check("merge: missing details are filled, existing ones kept", ada.phone === "555-0101" && ada.email === "ada@example.com");
 check("merge: the duplicate is gone", !visitors.get(dup.id));
 check("merge: not into itself", throwsStatus(() => visitors.merge(vA.id, vA.id), 400) === true);
+// A clearance moves to the other record only when Security merges.
+const mergeLevel = Number(db.raw.prepare("INSERT INTO clearance_levels (name, rank, created_at) VALUES ('Merge test', 99, ?)").run(Date.now()).lastInsertRowid);
+const clearedPair = () => {
+  const cleared = visitors.create({ firstName: "Clara", lastName: "Cleared" });
+  const plain = visitors.create({ firstName: "Pete", lastName: "Plain" });
+  db.raw.prepare("UPDATE visitors SET clearance_level_id = ?, clearance_validated_at = ?, clearance_validated_by = 'sec' WHERE id = ?").run(mergeLevel, Date.now(), cleared.id);
+  return [cleared, plain];
+};
+let [clearedA, plainA] = clearedPair();
+const keptBack = visitors.merge(clearedA.id, plainA.id);
+check("merge: a clearance isn't carried to the other record unless Security merges", keptBack.clearanceDropped === true && visitors.get(plainA.id).clearanceLevel === null);
+[clearedA, plainA] = clearedPair();
+const carried = visitors.merge(clearedA.id, plainA.id, { carryClearance: true });
+check("merge: Security's merge keeps it, with who validated it", carried.clearanceDropped === false && visitors.get(plainA.id).clearanceLevel === mergeLevel && visitors.get(plainA.id).clearanceValidatedBy === "sec");
 check("names: the lookup sees changes straight away", visitors.findByName("Ada Lovelace").join() === String(vA.id));
 
 // --- site limits and field access --------------------------------------------------------------

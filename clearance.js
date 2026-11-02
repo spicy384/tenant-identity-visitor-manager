@@ -304,9 +304,11 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     }
     if (typeof last4 === "string" && given) given.fill(0);
     const cleanNote = String(note ?? "").trim().slice(0, 500) || null;
-    // The digits go in their own box, never in a note that is kept.
-    if (digits && cleanNote && Buffer.from(cleanNote.replace(/\D/g, ""), "latin1").indexOf(digits) !== -1) {
-      digits.fill(0);
+    // The digits go in their own box, never in a note that is kept: not the ones given, not a
+    // whole SSN, and not digits beside the word SSN or social.
+    const ssnInNote = cleanNote && (/(?<!\d)\d{3}[- ]?\d{2}[- ]?\d{4}(?!\d)/.test(cleanNote) || /\b(ssn|social)\b\D{0,20}\d{4}/i.test(cleanNote));
+    if (cleanNote && (ssnInNote || (digits && Buffer.from(cleanNote.replace(/\D/g, ""), "latin1").indexOf(digits) !== -1))) {
+      if (digits) digits.fill(0);
       throw fail(400, "Leave the SSN digits out of the note: the note is kept, the digits are not.");
     }
     let requestId;

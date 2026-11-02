@@ -62,6 +62,8 @@ function inProcess() {
 
   check("request: the digits must be four digits", throwsStatus(() => clearance.requestValidation({ kind: "person", id: person.id, last4: "60a2" }), 400) === true);
   check("request: and an error never repeats them", throwsStatus(() => clearance.requestValidation({ kind: "person", id: person.id, last4: "12345" }), 400, /^(?!.*12345)/) === true);
+  check("request: nor a whole SSN, or digits beside the word, digits given or not", throwsStatus(() => clearance.requestValidation({ kind: "person", id: person.id, note: "SSN 123-45-6789" }), 400, /note/) === true
+    && throwsStatus(() => clearance.requestValidation({ kind: "person", id: person.id, note: "her social ends in 6042" }), 400, /note/) === true);
   check("request: the digits can't go in the note, which is kept", throwsStatus(() => clearance.requestValidation({ kind: "person", id: person.id, last4: DIGITS, note: `SSN ends 60-42` }), 400, /note/) === true);
   check("request: nothing is kept from a refused request", clearance.openCount() === 0);
 

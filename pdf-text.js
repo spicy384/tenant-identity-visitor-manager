@@ -157,7 +157,8 @@ class Lexer {
 /** Every object in the file by number: { value, stream (raw bytes, still encoded) }. */
 function readObjects(buf) {
   const objects = new Map();
-  const head = /(\d+)\s+(\d+)\s+obj\b/g;
+  // Bounded runs, and not inside a longer number: a long run of digits stays a linear scan.
+  const head = /(?<!\d)(\d{1,10})\s+(\d{1,5})\s+obj\b/g;
   const text = buf.toString("latin1");
   let m;
   while ((m = head.exec(text))) {
@@ -190,7 +191,13 @@ function skipWs(buf, pos) {
   return pos;
 }
 
-function decode(dict, data) {
+// A guard report's streams are small: one that would inflate past these is refused, so a
+// compressed bomb in an emailed PDF can't use up the server's memory.
+const MAX_STREAM_BYTES = 16 * 1024 * 1024;
+const MAX_DECODED_BYTES = 64 * 1024 * 1024;
+
+/** budget: { left } bytes the whole file may still decode to. */
+function decode(dict, data, budget = { left: MAX_DECODED_BYTES }) {
   let filters = dict.Filter;
   if (!filters) return data;
   if (!Array.isArray(filters)) filters = [filters];
@@ -198,11 +205,14 @@ function decode(dict, data) {
   for (const f of filters) {
     const name = f instanceof Name ? f.name : "";
     if (name === "FlateDecode" || name === "Fl") {
+      const maxOutputLength = Math.min(MAX_STREAM_BYTES, budget.left);
+      if (maxOutputLength <= 0) return null;
       try {
-        out = zlib.inflateSync(out);
+        out = zlib.inflateSync(out, { maxOutputLength });
       } catch {
-        try { out = zlib.inflateSync(out, { finishFlush: zlib.constants.Z_SYNC_FLUSH }); } catch { return null; }
+        try { out = zlib.inflateSync(out, { finishFlush: zlib.constants.Z_SYNC_FLUSH, maxOutputLength }); } catch { return null; }
       }
+      budget.left -= out.length;
     } else if (name === "ASCIIHexDecode" || name === "AHx") {
       out = Buffer.from(out.toString("latin1").replace(/>.*$/s, "").replace(/[^0-9a-f]/gi, ""), "hex");
     } else {
@@ -216,10 +226,11 @@ function decode(dict, data) {
 function openPdf(buf) {
   if (!Buffer.isBuffer(buf) || buf.toString("latin1", 0, 1024).indexOf("%PDF-") < 0) throw fail(400, "That file isn't a PDF.");
   const objects = readObjects(buf);
+  const budget = { left: MAX_DECODED_BYTES };
   // Objects kept inside object streams.
   for (const [, o] of [...objects]) {
     if (!o.stream || !(o.value.Type instanceof Name) || o.value.Type.name !== "ObjStm") continue;
-    const data = decode(o.value, o.stream);
+    const data = decode(o.value, o.stream, budget);
     if (!data) continue;
     const lex = new Lexer(data);
     const pairs = [];
@@ -235,7 +246,7 @@ function openPdf(buf) {
   };
   const streamOf = (v) => {
     const o = v instanceof Ref ? objects.get(v.num) : null;
-    return o?.stream ? decode(o.value, o.stream) : null;
+    return o?.stream ? decode(o.value, o.stream, budget) : null;
   };
   const trailerAt = buf.lastIndexOf("trailer");
   let root = null;

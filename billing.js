@@ -608,8 +608,11 @@ function createBilling({ db, leases, directory, now = Date.now }) {
 
   // --- exports for QuickBooks ----------------------------------------------------------------------------
 
+  // A cell starting = + - @ is prefixed with ' so a spreadsheet doesn't run it (a company
+  // named "=HYPERLINK(...)"); a plain amount such as -50.00 is left as it is for QuickBooks.
   const csvCell = (v) => {
-    const s = v === null || v === undefined ? "" : String(v);
+    let s = v === null || v === undefined ? "" : String(v);
+    if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const csv = (rows) => `${rows.map((r) => r.map(csvCell).join(",")).join("\r\n")}\r\n`;

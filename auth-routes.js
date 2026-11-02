@@ -77,14 +77,12 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
   const USERS_DOC = "users";
   const SESSIONS_DOC = "sessions";
 
-  // Optional: let a reverse proxy (Authelia, Authentik, oauth2-proxy) assert identity.
-  const trustProxyAuth = String(process.env.TRUST_PROXY_AUTH || "").toLowerCase() === "true";
-  const proxyUserHeader = String(process.env.PROXY_USER_HEADER || "remote-user").toLowerCase();
-
   // Set this whenever HTTPS terminates in front of the app (a reverse proxy counts).
   // Deliberately not tied to NODE_ENV: a flag that silently does nothing is worse
-  // than one that is simply off.
+  // than one that is simply off. A request that arrived over HTTPS (as the trusted proxy
+  // says) gets Secure cookies whatever it's set to.
   const cookieSecure = String(process.env.COOKIE_SECURE || "").toLowerCase() === "true";
+  const secureFor = (res) => cookieSecure || Boolean(res?.req?.secure);
 
   // Pending logins live in memory only: they are short-lived by design.
   const pendingLogins = new Map();
@@ -233,10 +231,10 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
   }
 
   function setSessionCookie(res, id) {
-    res.setHeader("Set-Cookie", sessionCookieValue(id));
+    res.setHeader("Set-Cookie", sessionCookieValue(id, res));
   }
 
-  function sessionCookieValue(id) {
+  function sessionCookieValue(id, res) {
     const attrs = [
       `${SESSION_COOKIE}=${id}`,
       "Path=/",
@@ -245,7 +243,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       `Max-Age=${Math.floor(ABSOLUTE_TIMEOUT_MS / 1000)}`
     ];
     // Secure requires HTTPS; setting it on plain HTTP would stop sign-in working at all.
-    if (cookieSecure) {
+    if (secureFor(res)) {
       attrs.push("Secure");
     }
     return attrs.join("; ");
@@ -340,9 +338,23 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
   // Challenges in flight, keyed by a random token (sign-in) or "reg:<user id>".
   const passkeyChallenges = new Map();
 
+  // At most this many at once, so a flood of sign-in starts can't grow it without end: the
+  // oldest goes first.
+  const MAX_CHALLENGES = 1000;
+
   function rememberChallenge(key, challenge) {
     for (const [k, v] of passkeyChallenges) if (Date.now() > v.expiresAt) passkeyChallenges.delete(k);
+    while (passkeyChallenges.size >= MAX_CHALLENGES) passkeyChallenges.delete(passkeyChallenges.keys().next().value);
     passkeyChallenges.set(key, { challenge, expiresAt: Date.now() + PASSKEY_CHALLENGE_TTL_MS });
+  }
+
+  /**
+   * Adding a way to sign in (a passkey, an authenticator) asks for the password again: a
+   * session left open on a shared desk isn't enough to give someone lasting access.
+   */
+  function passwordConfirmed(req) {
+    const user = findUserById(req.user.id);
+    return Boolean(user?.passwordHash) && auth.verifyPassword(String(req.body?.currentPassword || ""), user.passwordHash);
   }
 
   function takeChallenge(key) {
@@ -380,18 +392,8 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     return null;
   }
 
-  /** Resolves the caller, from a trusted proxy header if enabled, else the session cookie. */
+  /** Resolves the caller from the session cookie. */
   function resolveIdentity(req) {
-    if (trustProxyAuth) {
-      const name = req.headers[proxyUserHeader];
-      if (name) {
-        const user = findUser(name);
-        if (user) {
-          return { user, session: null, viaProxy: true };
-        }
-      }
-    }
-
     const cookies = parseCookies(req.headers.cookie);
     const session = getSession(cookies[SESSION_COOKIE]);
     if (!session) {
@@ -404,7 +406,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       return null;
     }
 
-    return { user, session, viaProxy: false };
+    return { user, session };
   }
 
   function requireAuth(req, res, next) {
@@ -419,20 +421,10 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     }
 
     // CSRF: cookie-authenticated state changes must echo the session token.
-    if (!SAFE_METHODS.has(req.method) && !identity.viaProxy) {
+    if (!SAFE_METHODS.has(req.method)) {
       const supplied = req.headers[CSRF_HEADER];
       if (!supplied || !auth.safeEqual(supplied, identity.session.csrfToken)) {
         return res.status(403).json({ error: "Invalid or missing CSRF token." });
-      }
-    }
-    // Behind an authentication proxy there is no token, but the proxy's own cookie still
-    // rides along on a cross-site request. The browser's Sec-Fetch-Site says where the
-    // request came from; a custom header (which forces a CORS preflight) is the fallback.
-    if (!SAFE_METHODS.has(req.method) && identity.viaProxy) {
-      const site = String(req.headers["sec-fetch-site"] || "").toLowerCase();
-      const sameSite = site === "same-origin" || site === "none";
-      if (!sameSite && !(site === "" && req.headers[CSRF_HEADER] !== undefined)) {
-        return res.status(403).json({ error: "Cross-site request refused." });
       }
     }
 
@@ -483,8 +475,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       branding: branding(),
       entra: entraSignIn(),
       user: publicUser(identity.user),
-      csrfToken: identity.session ? identity.session.csrfToken : null,
-      viaProxy: identity.viaProxy
+      csrfToken: identity.session ? identity.session.csrfToken : null
     });
   });
 
@@ -680,7 +671,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
 
   function entraStateCookie(res, value, maxAgeS) {
     const attrs = [`${ENTRA_STATE_COOKIE}=${value}`, "Path=/api/auth/entra", "HttpOnly", "SameSite=Lax", `Max-Age=${maxAgeS}`];
-    if (cookieSecure) attrs.push("Secure");
+    if (secureFor(res)) attrs.push("Secure");
     return attrs.join("; ");
   }
 
@@ -707,9 +698,10 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     const cfg = entra.config();
     const users = loadUsers();
     let user = users.find((u) => u.provider === "entra" && u.entraOid === identity.oid);
-    if (!user && identity.username) {
-      // Pre-added by an administrator under their UPN, and not yet linked to anyone.
-      user = users.find((u) => u.provider === "entra" && !u.entraOid && u.username.toLowerCase() === identity.username);
+    if (!user && identity.linkName && !identity.guest) {
+      // Pre-added by an administrator under their UPN, and not yet linked to anyone. Only a
+      // member of the tenant links, and by their UPN: the email claim can be set by its owner.
+      user = users.find((u) => u.provider === "entra" && !u.entraOid && u.username.toLowerCase() === identity.linkName);
     }
     const patch = { entraOid: identity.oid, displayName: identity.name || null, email: identity.email || null, lastLoginAt: Date.now() };
     // App roles in the sign-in replace the stored ones: every one that matches.
@@ -764,7 +756,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     if (result.created) log(req, "user.add", result.user.username, `roles ${rolesOf(result.user).join(", ")}, created at first Microsoft sign-in`, result.user.username);
     log(req, "auth.login", result.user.username, "Microsoft Entra ID", result.user.username);
     const session = createSession(result.user.id, req);
-    res.setHeader("Set-Cookie", [entraStateCookie(res, "", 0), sessionCookieValue(session.id)]);
+    res.setHeader("Set-Cookie", [entraStateCookie(res, "", 0), sessionCookieValue(session.id, res)]);
     return res.redirect(302, "/");
   });
 
@@ -785,6 +777,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
 
   /** Step 1 of adding a passkey: options the browser hands to the authenticator. */
   router.post("/api/auth/passkeys/register/options", requireAuth, requireLocal, async (req, res) => {
+    if (!passwordConfirmed(req)) return res.status(401).json({ error: "Your password is incorrect." });
     const ctx = passkeyContext(req);
     if (!ctx) return res.status(400).json({ error: "Could not work out this site's origin." });
     const user = findUserById(req.user.id);
@@ -952,7 +945,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       .filter(([, s]) => s.userId === req.user.id)
       .map(([id, s]) => publicSession(id, s, currentId))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
-    res.json({ sessions: mine, viaProxy: !req.session });
+    res.json({ sessions: mine });
   });
 
   /** Ends one of the caller's other sessions, by its key. */
@@ -1001,6 +994,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
 
   /** Begins TOTP enrolment; nothing is stored until the code is confirmed. */
   router.post("/api/auth/mfa/setup", requireAuth, requireLocal, async (req, res) => {
+    if (!passwordConfirmed(req)) return res.status(401).json({ error: "Your password is incorrect." });
     const secret = auth.generateTotpSecret();
     const uri = auth.buildOtpauthUri({ secret, account: req.user.username });
 
@@ -1265,8 +1259,6 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
     findUserById,
     publicUser,
     rolesOf,
-    trustProxyAuth,
-    proxyUserHeader,
     cookieSecure,
     SESSION_COOKIE,
     CSRF_HEADER

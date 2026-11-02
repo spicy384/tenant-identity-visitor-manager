@@ -366,13 +366,16 @@ function createVisitors({ db, fields }) {
   /**
    * Folds visitor `fromId` into `intoId`: visits move across, links the target lacks are
    * added, custom values the target lacks are copied, then `fromId` is deleted.
+   * carryClearance: only when Security merges does a clearance move to the other record;
+   * otherwise merging would hand someone a clearance Security never validated.
    */
-  function merge(fromId, intoId, { sites = null } = {}) {
+  function merge(fromId, intoId, { sites = null, carryClearance = false } = {}) {
     if (Number(fromId) === Number(intoId)) throw fail(400, "Choose a different visitor to merge into.");
     const from = get(fromId, { sites });
     const into = get(intoId, { sites });
     if (!from || !into) throw fail(404, "No such visitor.");
     let moved = 0;
+    let clearanceDropped = false;
     db.transaction(() => {
       moved = raw.prepare("UPDATE visits SET visitor_id = ? WHERE visitor_id = ?").run(intoId, fromId).changes;
       raw.prepare(`INSERT OR IGNORE INTO visitor_links (visitor_id, company_id, host_id, notes, created_at)
@@ -385,9 +388,10 @@ function createVisitors({ db, fields }) {
       raw.prepare("UPDATE visitors SET organization = ?, citizenship = ?, reserved_badge_id = ?, email = ?, phone = ?, notes = ?, last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?), blocked = max(blocked, ?), updated_at = ? WHERE id = ?")
         .run(fill(into.organization, from.organization), fill(into.citizenship, from.citizenship), fill(reserved.a, reserved.b), fill(into.email, from.email), fill(into.phone, from.phone),
           [into.notes, from.notes].filter(Boolean).join("\n\n") || null, intoId, from.blocked ? 1 : 0, Date.now(), intoId);
-      // A clearance only one of them has on record is kept.
-      // A clearance only one of them has on record is kept, with when it was validated.
-      if (!into.clearanceLevel && from.clearanceLevel) {
+      // A clearance only the merged-away record has is kept, with when it was validated, when
+      // Security merges; anyone else's merge leaves it behind.
+      if (!into.clearanceLevel && from.clearanceLevel && !carryClearance) clearanceDropped = true;
+      if (!into.clearanceLevel && from.clearanceLevel && carryClearance) {
         raw.prepare("UPDATE visitors SET clearance_level_id = ?, clearance_granted = ?, clearance_expires = ?, clearance_validated_at = ?, clearance_validated_by = ? WHERE id = ?")
           .run(from.clearanceLevel, from.clearanceGranted, from.clearanceExpires, from.clearanceValidatedAt, from.clearanceValidatedBy, intoId);
       }
@@ -400,7 +404,7 @@ function createVisitors({ db, fields }) {
       raw.prepare("DELETE FROM visitors WHERE id = ?").run(fromId);
     });
     nameCache = null;
-    return { from, into: get(intoId, { sites }), visitsMoved: moved };
+    return { from, into: get(intoId, { sites }), visitsMoved: moved, clearanceDropped };
   }
 
   // --- finding by name (the kiosk) ------------------------------------------------------

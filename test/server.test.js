@@ -166,12 +166,20 @@ async function main() {
   const headers = (await anon.get("/", { raw: true })).headers;
   check("kiosk: without KIOSK_PORT the kiosk lives at /kiosk/ on this port", (await anon.get("/kiosk/", { raw: true })).status === 200 && (await anon.get("/kiosk/api/config")).status === 401);
   check("headers: CSP self-only scripts, no framing", /script-src 'self'/.test(headers.get("content-security-policy")) && headers.get("x-frame-options") === "DENY");
+  const apiHeaders = (await anon.get("/api/auth/me", { raw: true })).headers;
+  check("headers: API answers aren't cached, and nothing names the framework", apiHeaders.get("cache-control") === "no-store" && !apiHeaders.has("x-powered-by") && !headers.has("x-powered-by"));
+  check("headers: no HSTS over plain HTTP", !headers.has("strict-transport-security"));
   r = await admin.post("/api/auth/setup", { username: "admin", password: adminPassword, siteName: "Harbor Point" });
   check("setup: first administrator created and signed in", r.status === 200 && r.data.user.role === "admin");
   r = await admin.get("/api/config");
   check("setup: the building's name becomes the first site's", r.data.siteCount === 1 && r.data.sites[0].name === "Harbor Point");
   const harbor = r.data.sites[0];
 
+  check("mfa: setting up an authenticator asks for the password", (await admin.post("/api/auth/mfa/setup", {})).status === 401
+    && (await admin.post("/api/auth/mfa/setup", { currentPassword: "not-the-password-123" })).status === 401
+    && (await admin.post("/api/auth/mfa/setup", { currentPassword: adminPassword })).status === 200);
+  check("passkeys: adding one asks for the password", (await admin.post("/api/auth/passkeys/register/options", {})).status === 401);
+  check("proxy: a Remote-User header signs no one in", (await anon.get("/api/companies", { headers: { "remote-user": "admin" } })).status === 401);
   check("csrf: a change without the token is refused", (await admin.post("/api/companies", { name: "No token" }, { headers: { "x-csrf-token": "" } })).status === 403);
 
   // --- one site: nothing to choose -----------------------------------------------------------

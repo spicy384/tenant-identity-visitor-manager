@@ -87,7 +87,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
   page authentication), including its WAL file, accounts, sessions, settings and logos.
   The key is kept outside the data directory.
 - **Sign-in** carried over from Equipment Checkout: local accounts with password, authenticator
-  code and passkeys, plus Microsoft Entra ID. App roles in Entra match role names (`Manager`,
+  code and passkeys (adding a passkey or an authenticator asks for the password again), plus
+  Microsoft Entra ID. App roles in Entra match role names (`Manager`,
   `FrontDesk`, ...); every one that matches is given. Once Microsoft sign-in is set up and
   ready, the sign-in page shows its button alone, with local accounts and passkeys folded away
   behind **Sign in with a local account**; a browser that last signed in with a local account
@@ -144,7 +145,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
   with check-out buttons, a desk check-in, and a print-friendly evacuation list. A visitor's
   own page offers **Check in**, or **Check out** while they're in the building.
 - **Visitors** lists everyone, with those who registered themselves at a kiosk marked "To
-  check": staff confirm them, correct them, or merge them into an existing visitor. A visitor
+  check": staff confirm them, correct them, or merge them into an existing visitor (a clearance
+  only the merged-away record had moves across only when Security merges). A visitor
   can be blocked: the kiosk then sends them to reception, and the desk needs a manager's say-so.
 - **Notes.** A visitor's dialog shows their notes (or None), with **Add notes** or **Edit
   notes** for those who may change visitors and the notes field (field access grid).
@@ -650,7 +652,7 @@ override the compose file's defaults.
 | `TLS_ENABLED` | `true` | HTTPS with a self-signed certificate the app makes in /data/tls |
 | `TLS_HOSTS` | | Extra names or IPs for that certificate, comma separated |
 | `TLS_CERT`, `TLS_KEY` | | Your own certificate and key files instead (mount them read-only) |
-| `COOKIE_SECURE` | `true` | Marks the session cookie Secure; false only for plain http:// |
+| `COOKIE_SECURE` | `true` | Marks the session cookie Secure; false only for plain http:// (a request that arrives over HTTPS through the proxy gets a Secure cookie either way) |
 | `TRUST_PROXY` | private networks | Which proxies may set X-Forwarded-For: `false`, a hop count, or addresses |
 | `TZ` | `UTC` | The server's time zone (each site has its own for visits) |
 | `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | | Microsoft Entra sign-in; or set it up in the app under Settings |

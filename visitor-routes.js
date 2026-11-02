@@ -144,9 +144,9 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
   });
 
   router.post("/api/visitors/:id/merge", editVisitors, (req, res) => {
-    const result = visitors.merge(positiveInt(req.params.id), positiveInt(req.body?.intoId), { sites: req.ctx.sites });
-    auditFrom(req, "visitor.merge", fullName(result.from), `into ${fullName(result.into)} (#${result.into.id}); ${result.visitsMoved} visits moved`);
-    res.json({ ok: true, intoId: result.into.id });
+    const result = visitors.merge(positiveInt(req.params.id), positiveInt(req.body?.intoId), { sites: req.ctx.sites, carryClearance: access.isSecurity(req.ctx) });
+    auditFrom(req, "visitor.merge", fullName(result.from), `into ${fullName(result.into)} (#${result.into.id}); ${result.visitsMoved} visits moved${result.clearanceDropped ? "; the clearance was not carried over (only Security does)" : ""}`);
+    res.json({ ok: true, intoId: result.into.id, clearanceDropped: result.clearanceDropped });
   });
 
   router.delete("/api/visitors/:id", admin, (req, res) => {

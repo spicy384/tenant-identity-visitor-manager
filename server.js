@@ -125,12 +125,19 @@ const CSP = [
 ].join("; ");
 function securityHeaders(req, res, next) {
   res.setHeader("Content-Security-Policy", CSP);
+  // Over HTTPS (as the trusted proxy says), browsers are told to keep to it.
+  if (req.secure) res.setHeader("Strict-Transport-Security", "max-age=31536000");
+  // API answers (codes, keys, the CSRF token) are never kept in a browser or proxy cache;
+  // a route serving an image sets its own.
+  if (req.path.startsWith("/api/") || req.path.startsWith("/kiosk/api/")) res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "same-origin");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
   next();
 }
+app.disable("x-powered-by");
+kioskApp.disable("x-powered-by");
 app.use(securityHeaders);
 kioskApp.use(securityHeaders);
 

@@ -55,8 +55,9 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
     return r.id;
   }
 
-  function cookieValue(token, maxAge = COOKIE_MAX_AGE_S) {
-    return [`${COOKIE}=${token}`, "Path=/kiosk", "HttpOnly", "SameSite=Strict", `Max-Age=${maxAge}`, cookieSecure ? "Secure" : null].filter(Boolean).join("; ");
+  // Secure when set so, or when the request came over HTTPS.
+  function cookieValue(token, req) {
+    return [`${COOKIE}=${token}`, "Path=/kiosk", "HttpOnly", "SameSite=Strict", `Max-Age=${COOKIE_MAX_AGE_S}`, cookieSecure || req?.secure ? "Secure" : null].filter(Boolean).join("; ");
   }
 
   function audit(req, action, target, detail = null) {
@@ -84,7 +85,7 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
       pairLimiter.recordFailure(key);
       return res.status(401).json({ error: "That code isn't right, or it has expired. Ask an administrator for a new one." });
     }
-    res.setHeader("Set-Cookie", cookieValue(result.token));
+    res.setHeader("Set-Cookie", cookieValue(result.token, req));
     db.audit({ username: `kiosk:${result.kiosk.name}`, ip: req.ip || null, action: "kiosk.pair", target: result.kiosk.name, detail: result.kiosk.siteName });
     res.json({ ok: true });
   });
@@ -102,7 +103,7 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
 
   router.get("/config", (req, res) => {
     // Keep the cookie fresh, so a kiosk in daily use never reaches the browser's limit.
-    res.setHeader("Set-Cookie", cookieValue(parseCookies(req.headers.cookie)[COOKIE]));
+    res.setHeader("Set-Cookie", cookieValue(parseCookies(req.headers.cookie)[COOKIE], req));
     res.json({
       kiosk: { name: req.kiosk.name },
       site: { name: req.site.kioskName || req.site.name, welcome: req.site.welcome, hasLogo: req.site.hasLogo, logoVersion: req.site.logoUpdatedAt },

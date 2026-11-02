@@ -50,7 +50,14 @@ async function mfaPanel() {
   }
   panel.append(h("p", { class: "muted", text: "Optional. Adds a 6-digit code from an app such as Microsoft Authenticator after your password." }),
     h("button", { type: "button", class: "secondary", text: "Set up", onclick: async () => {
-      const setup = await api("/api/auth/mfa/setup", { method: "POST", body: {} });
+      const setup = await formDialog({
+        title: "Set up an authenticator",
+        intro: h("p", { class: "muted full-row", text: "Enter your password to continue." }),
+        fields: [{ name: "currentPassword", label: "Your password", type: "password", required: true, autocomplete: "current-password" }],
+        submitLabel: "Continue",
+        onSubmit: (v) => api("/api/auth/mfa/setup", { method: "POST", body: v })
+      });
+      if (!setup) return;
       const codes = await formDialog({
         title: "Set up an authenticator",
         intro: h("div", { class: "stack center" },
@@ -83,10 +90,20 @@ async function passkeyPanel() {
   if (blocker) panel.append(h("p", { class: "muted", text: blocker }));
   else {
     panel.append(h("button", { type: "button", class: "secondary", text: "Add a passkey", onclick: async () => {
-      const name = await formDialog({ title: "Add a passkey", fields: [{ name: "name", label: "Name it", placeholder: "e.g. Front desk iPad", required: true }], submitLabel: "Continue", onSubmit: (v) => v.name });
-      if (!name) return;
+      // The password first; the options come back only when it's right.
+      let name = null;
+      const started = await formDialog({
+        title: "Add a passkey",
+        fields: [
+          { name: "name", label: "Name it", placeholder: "e.g. Front desk iPad", required: true },
+          { name: "currentPassword", label: "Your password", type: "password", required: true, autocomplete: "current-password" }
+        ],
+        submitLabel: "Continue",
+        onSubmit: async (v) => { name = v.name; return api("/api/auth/passkeys/register/options", { method: "POST", body: { currentPassword: v.currentPassword } }); }
+      });
+      if (!started) return;
       try {
-        const { options } = await api("/api/auth/passkeys/register/options", { method: "POST", body: {} });
+        const { options } = started;
         const cred = await navigator.credentials.create({ publicKey: webauthnOptionsFromJson(options, "create") });
         await api("/api/auth/passkeys/register/verify", { method: "POST", body: { name, response: webauthnCredentialToJson(cred) } });
         toast(`Passkey "${name}" added.`);

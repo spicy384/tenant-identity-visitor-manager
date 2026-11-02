@@ -23,6 +23,8 @@ const { parseCsv } = require("./csv");
 const IMPORT_TTL_MS = 15 * 60 * 1000;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_HELD = 4;
+// Files being read at once: each is buffered whole, so few at a time.
+const MAX_READING = 2;
 const MAX_ROWS = 20000;
 const SAMPLE_ROWS = 10;
 
@@ -139,7 +141,21 @@ function createImportRoutes({ access, importCompanies, importPeople, importVisit
     return table;
   }
 
-  router.post("/api/import/read", mayImport, express.raw({ type: () => true, limit: MAX_FILE_BYTES }), async (req, res) => {
+  // Room is checked before the file is read, not after: each may be large.
+  let reading = 0;
+  function roomToRead(req, res, next) {
+    for (const [token, h] of held) if (h.owner === ownerOf(req)) held.delete(token);
+    sweep();
+    if (reading >= MAX_READING || held.size + reading >= MAX_HELD) throw fail(503, "Other imports are being prepared; try again in a few minutes.");
+    reading += 1;
+    let released = false;
+    const release = () => { if (!released) { released = true; reading -= 1; } };
+    res.on("finish", release);
+    res.on("close", release);
+    next();
+  }
+
+  router.post("/api/import/read", mayImport, roomToRead, express.raw({ type: () => true, limit: MAX_FILE_BYTES }), async (req, res) => {
     const buffer = Buffer.isBuffer(req.body) ? req.body : null;
     if (!buffer || !buffer.length) throw fail(400, "Choose a file to import.");
     const fileName = String(req.query.name || "").slice(0, 200);

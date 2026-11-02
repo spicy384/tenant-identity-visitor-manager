@@ -52,6 +52,9 @@ check("pdf: and runs either side of a column edge aren't joined, however close",
   && !pdfLines(pages, { columns: [110] })[0].some((l) => /PM EST Clock-in/.test(l.items[0]?.text)));
 check("pdf: a ToUnicode range counts up", parseCMap(Buffer.from("1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfrange <41> <43> <0061> endbfrange")).map.get(0x43) === "c");
 check("pdf: not a PDF is refused", throwsStatus(() => pdfText(Buffer.from("hello")), 400));
+const digitsStart = Date.now();
+try { pdfText(Buffer.from(`%PDF-1.4\n${"7".repeat(200000)} obj\n`)); } catch { /* no pages: only the time matters */ }
+check("pdf: a long run of digits is read in linear time", Date.now() - digitsStart < 2000, `${Date.now() - digitsStart} ms`);
 check("pdf: an encrypted one says so", throwsStatus(() => pdfText(Buffer.from("%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R /Encrypt 2 0 R >>\n")), 400));
 check("pdf: several pages, in order", pdfText(longPdf).length >= 2);
 

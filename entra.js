@@ -22,6 +22,7 @@ const { generateCertificate, readPem, readPfx, certificateInfo, certificateDer, 
 const DEFAULT_AUTHORITY = "https://login.microsoftonline.com";
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FLOW_TTL_MS = 10 * 60 * 1000;
+const MAX_FLOWS = 1000;
 const JWKS_TTL_MS = 24 * 60 * 60 * 1000;
 const JWKS_REFRESH_MIN_MS = 5 * 60 * 1000;
 const CLOCK_SKEW_S = 300;
@@ -382,6 +383,8 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
     const c = config();
     if (!isReady(c)) throw fail(409, "Entra sign-in is not configured.");
     pruneFlows();
+    // At most this many sign-ins in progress, so a flood of starts can't grow it without end.
+    while (flows.size >= MAX_FLOWS) flows.delete(flows.keys().next().value);
     const state = b64url(crypto.randomBytes(24));
     const nonce = b64url(crypto.randomBytes(24));
     const verifier = b64url(crypto.randomBytes(32));
@@ -487,6 +490,10 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
       oid: claims.oid,
       tenantId: claims.tid,
       username: String(claims.preferred_username || claims.email || claims.upn || "").toLowerCase(),
+      // What a pre-added account is matched on: the sign-in name, never the email claim.
+      linkName: String(claims.preferred_username || claims.upn || "").toLowerCase(),
+      // A guest from another directory carries the identity provider it came from.
+      guest: Boolean(claims.idp) && !String(claims.idp).toLowerCase().includes(String(claims.tid || "").toLowerCase()),
       name: claims.name || null,
       email: claims.email || (String(claims.preferred_username || "").includes("@") ? claims.preferred_username : null),
       role: roleFromClaims(claims.roles, roles()),
