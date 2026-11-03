@@ -443,8 +443,7 @@ async function assignBadgeDialog(badge) {
       results.append(h("button", { type: "button", class: "pick-row", onclick: async () => {
         message.hidden = true;
         try {
-          await api(`/api/badges/${badge.id}/assign`, { method: "POST", body: { kind, holderId: x.id } });
-          dlg.finish(x);
+          if (await giveBadge(badge.id, { kind, holderId: x.id })) dlg.finish(x);
         } catch (error) {
           message.textContent = error.message;
           message.hidden = false;
@@ -466,6 +465,24 @@ async function assignBadgeDialog(badge) {
   });
   if (given) toast(`Badge ${badge.label} given to ${kind === "visitor" ? visitorName(given) : personName(given)}.`);
   return given;
+}
+
+/**
+ * Gives a badge. A tenant badge past what the company may hold is an extra one: asked first,
+ * then given and charged. Resolves to the server's answer, or null when the charge is declined.
+ */
+async function giveBadge(badgeId, body) {
+  try {
+    return await api(`/api/badges/${badgeId}/assign`, { method: "POST", body });
+  } catch (error) {
+    if (error.data?.code !== "badge_allotment") throw error;
+    const a = error.data.allotment;
+    const cost = a.price ? fmtMoney(a.price) : null;
+    const ok = await confirmDialog(`${a.companyName} holds all ${a.allowed} of the tenant badges its desks and earlier badges allow. This one is an extra badge${cost ? `: ${cost} is charged to ${a.companyName} on its next invoice` : ""}. It stays theirs, to hand to anyone at the company.`,
+      { title: "An extra tenant badge", confirmLabel: cost ? `Give it and charge ${cost}` : "Give it" });
+    if (!ok) return null;
+    return api(`/api/badges/${badgeId}/assign`, { method: "POST", body: { ...body, chargeExtra: true } });
+  }
 }
 
 async function takeBackBadge(badgeId, number, holderName, outcome = "returned") {
@@ -584,7 +601,7 @@ function badgeSection(kind, holderId) {
             const chosen = pick.chosen();
             if (!chosen) return;
             try {
-              await api(`/api/badges/${chosen.id}/assign`, { method: "POST", body: { kind, holderId } });
+              if (!(await giveBadge(chosen.id, { kind, holderId }))) return;
               toast(`Badge ${chosen.label} given.`);
               render();
             } catch (error) {

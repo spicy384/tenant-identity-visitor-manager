@@ -3,6 +3,8 @@
  * rates and fixed (part months, yearly increases), the price list and charges, a month's
  * invoices, adjusting and issuing them, payments, overdue and aging, voiding, the printable
  * invoice, CSV and IIF exports, and the QuickBooks Online connection against a fake QuickBooks.
+ * Also a lease's commencement date, tenant badge allotments from desks (extra badges charged),
+ * and certificates of insurance with their copies.
  */
 const { spawn } = require("child_process");
 const crypto = require("crypto");
@@ -309,6 +311,101 @@ async function main() {
     && (await manager.get(`/api/leases/${initechLease.id}/rent?period=2026-01`)).data.rent.amount === 1874.25);
   r = await manager.put(`/api/offices/${o204.id}`, { monthlyRent: null });
   check("rooms: back to by the square foot", r.data.office.monthlyRent === null && r.data.office.monthly === 1600 && r.data.office.rateSource === "site");
+
+  // --- a commencement date apart from the start ----------------------------------------------------------------------
+  const umbrella = await mk("Umbrella");
+  const rentOf = async (id, period) => (await manager.get(`/api/leases/${id}/rent?period=${period}`)).data.rent.amount;
+  r = await manager.post("/api/leases", { companyId: umbrella.id, rentMode: "fixed", monthlyRent: 2000, escalationPct: 10, startDate: "2024-01-01", commencementDate: "2024-04-01" });
+  const umbrellaLease = r.data.lease;
+  check("commencement: kept when it isn't the start", r.status === 200 && umbrellaLease.commencementDate === "2024-04-01" && umbrellaLease.startDate === "2024-01-01", JSON.stringify(r.data));
+  check("commencement: rent is billed from the start all the same", await rentOf(umbrellaLease.id, "2024-01") === 2000);
+  check("commencement: the yearly increase counts from it", await rentOf(umbrellaLease.id, "2025-02") === 2000 && await rentOf(umbrellaLease.id, "2025-04") === 2200);
+  r = await manager.put(`/api/leases/${umbrellaLease.id}`, { commencementDate: "2024-01-01" });
+  const moved = (await manager.put(`/api/leases/${umbrellaLease.id}`, { startDate: "2024-02-01" })).data.lease;
+  check("commencement: the same as the start, it follows the start", r.data.lease.commencementDate === "2024-01-01" && moved.commencementDate === "2024-02-01");
+  check("commencement: not after the end", (await manager.put(`/api/leases/${umbrellaLease.id}`, { endDate: "2024-12-31", commencementDate: "2025-01-15" })).status === 400);
+  check("leases: one without a commencement date commences on its start", (await manager.get(`/api/leases/${initechLease.id}`)).data.lease.commencementDate === "2024-01-01");
+
+  // --- tenant badge allotments ---------------------------------------------------------------------------------------
+  const hooli = await mk("Hooli");
+  const o301 = await office("301", 300);
+  const o302 = await office("302", 200);
+  const o303 = await office("303", 200);
+  r = await manager.put(`/api/offices/${o301.id}`, { desks: 4 });
+  check("desks: set on an office", r.data.office.desks === 4);
+  check("desks: whole numbers only", (await manager.put(`/api/offices/${o302.id}`, { desks: 2.5 })).status === 400);
+  await manager.put(`/api/offices/${o302.id}`, { desks: 3 });
+  await manager.put(`/api/offices/${o303.id}`, { desks: 4 });
+  const allotment = async () => (await desk.get(`/api/companies/${hooli.id}/badge-allotment`)).data.allotment;
+  let a = await allotment();
+  check("allotment: not counted while the company has no desks", a.counted === false && a.allowed === 0);
+  const hooliLease = (await manager.post("/api/leases", { companyId: hooli.id, officeIds: [o301.id, o302.id], startDate: "2026-01-01" })).data.lease;
+  a = await allotment();
+  check("allotment: a badge for each desk in its offices", a.counted && a.allowed === 7 && a.desks === 7 && a.held === 0, JSON.stringify(a));
+  check("allotment: the company's offices total their desks", (await manager.get(`/api/companies/${hooli.id}/facilities`)).data.totals.desks === 7);
+  const staff = [];
+  const stock = [];
+  for (let i = 0; i < 9; i += 1) {
+    staff.push((await admin.post("/api/people", { firstName: `Pat${i}`, lastName: "Hooli", companyId: hooli.id })).data.person);
+    stock.push((await admin.post("/api/badges", { number: `T-${100 + i}`, type: "tenant" })).data.badge);
+  }
+  const give = (i, holder, extra = {}) => desk.post(`/api/badges/${stock[i].id}/assign`, { kind: "person", holderId: staff[holder].id, ...extra });
+  let given = 0;
+  for (let i = 0; i < 7; i += 1) if ((await give(i, i)).status === 200) given += 1;
+  check("allotment: its seven badges given without a word", given === 7);
+  r = await give(7, 7);
+  check("allotment: the eighth is refused until the charge is agreed", r.status === 409 && r.data.code === "badge_allotment" && r.data.allotment.price === 20 && r.data.allotment.allowed === 7, JSON.stringify(r.data));
+  r = await give(7, 7, { chargeExtra: true });
+  const hooliCharges = async () => (await manager.get(`/api/charges?companyId=${hooli.id}`)).data.charges;
+  const charges = await hooliCharges();
+  check("allotment: agreed, the badge is given and charged $20", r.status === 200 && charges.length === 1 && charges[0].amount === 20 && /T-107/.test(charges[0].description), JSON.stringify(charges));
+  a = await allotment();
+  check("allotment: the paid badge is theirs to keep", a.allowed === 8 && a.paid === 1 && a.held === 8);
+  await desk.post(`/api/badges/${stock[0].id}/return`, { outcome: "returned" });
+  r = await give(0, 8);
+  check("allotment: a badge handed back goes to someone else at no charge", r.status === 200 && (await hooliCharges()).length === 1);
+  await manager.put(`/api/leases/${hooliLease.id}`, { officeIds: [o301.id] });
+  check("allotment: giving up an office keeps its badges", (await allotment()).allowed === 8);
+  await manager.post("/api/leases", { companyId: hooli.id, officeIds: [o302.id], startDate: "2026-02-01" });
+  check("allotment: the same office again adds nothing", (await allotment()).allowed === 8);
+  await manager.post("/api/leases", { companyId: hooli.id, officeIds: [o303.id], startDate: "2026-03-01" });
+  check("allotment: a different office adds its desks", (await allotment()).allowed === 12);
+  await manager.put(`/api/offices/${o303.id}`, { desks: 5 });
+  check("allotment: an office that gains a desk adds it", (await allotment()).allowed === 13);
+  await desk.post(`/api/badges/${stock[1].id}/return`, { outcome: "lost" });
+  a = await allotment();
+  check("allotment: a lost badge still counts", a.allowed === 12 && a.held === 7 && a.lost === 1, JSON.stringify(a));
+  check("allotment: front desk can't adjust it", (await desk.post(`/api/companies/${hooli.id}/badge-allotment`, { quantity: 2, note: "x" })).status === 403);
+  check("allotment: an adjustment says why", (await manager.post(`/api/companies/${hooli.id}/badge-allotment`, { quantity: 2 })).status === 400);
+  r = await manager.post(`/api/companies/${hooli.id}/badge-allotment`, { quantity: 2, note: "Paid for before allotments were counted" });
+  check("allotment: a manager adjusts it, and its ledger says so", r.status === 200 && r.data.allotment.allowed === 14 && r.data.allotment.entries[0].kind === "adjust" && r.data.allotment.entries[0].note.startsWith("Paid for"));
+  r = await finance.put("/api/finance/settings", { badgePrice: 25 });
+  check("allotment: Finance sets the price of an extra badge", r.status === 200 && (await finance.get("/api/finance/settings")).data.settings.badgePrice === 25, JSON.stringify(r.data).slice(0, 200));
+
+  // --- certificates of insurance -------------------------------------------------------------------------------------
+  const pdfUrl = `data:application/pdf;base64,${Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF").toString("base64")}`;
+  const inDays = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  check("insurance: front desk doesn't see certificates", (await desk.get("/api/insurance")).status === 403 && (await desk.get(`/api/companies/${hooli.id}/insurance`)).status === 403);
+  check("insurance: a viewer can't add one", (await viewer.post(`/api/companies/${hooli.id}/insurance`, { expiresOn: inDays(100) })).status === 403);
+  r = await manager.post(`/api/companies/${hooli.id}/insurance`, { insurer: "Harbor Mutual", effectiveDate: inDays(-200), expiresOn: inDays(200), coverage: "General liability $1M / $2M", file: { name: "C:\\scans\\coi.pdf", dataUrl: pdfUrl } });
+  const cert = r.data.certificate;
+  check("insurance: a manager adds a certificate with its copy", r.status === 200 && cert.status === "current" && cert.file?.name === "coi.pdf" && cert.file.type === "application/pdf", JSON.stringify(r.data));
+  r = await finance.raw(`/api/insurance/files/${cert.file.ref}`);
+  check("insurance: the copy comes back as it went in, and as nothing else", r.status === 200 && r.headers.get("content-type") === "application/pdf" && r.text.startsWith("%PDF-") && r.headers.get("x-content-type-options") === "nosniff");
+  check("insurance: a file that isn't what it says is refused", (await manager.post(`/api/companies/${hooli.id}/insurance`, { expiresOn: inDays(100), file: { name: "x.pdf", dataUrl: `data:application/pdf;base64,${Buffer.from("<html>hi</html>").toString("base64")}` } })).status === 400);
+  check("insurance: nor any type but PDF, PNG and JPEG", (await manager.post(`/api/companies/${hooli.id}/insurance`, { expiresOn: inDays(100), file: { name: "x.html", dataUrl: "data:text/html;base64,PGI+aGk8L2I+" } })).status === 400);
+  check("insurance: a certificate needs its expiration date", (await manager.post(`/api/companies/${hooli.id}/insurance`, { insurer: "Nobody" })).status === 400);
+  r = await finance.post(`/api/companies/${initech.id}/insurance`, { insurer: "Old Policy Co", expiresOn: inDays(-5) });
+  check("insurance: Finance adds them too; one past its date has expired", r.status === 200 && r.data.certificate.status === "expired");
+  r = await finance.post(`/api/companies/${initech.id}/insurance`, { insurer: "Renewal Co", expiresOn: inDays(10) });
+  check("insurance: one running out within 30 days is expiring", r.data.certificate.status === "expiring" && r.data.certificate.daysLeft === 10);
+  const attention = (await manager.get("/api/insurance/attention")).data.companies;
+  const coverOf = (name) => attention.find((c) => c.companyName === name)?.status;
+  check("insurance: Home lists tenants with an office whose cover needs seeing to", coverOf("Initech") === "expiring" && coverOf("Acme") === "none" && !coverOf("Hooli") && !coverOf("Umbrella"), JSON.stringify(attention.map((c) => [c.companyName, c.status])));
+  check("insurance: a company's cover is the certificate that runs latest", (await manager.get("/api/insurance?status=expiring")).data.companies.some((c) => c.companyName === "Initech" && c.certificates === 2));
+  r = await manager.put(`/api/insurance/${cert.id}`, { removeFile: true, notes: "Waiting on the original" });
+  check("insurance: its copy taken away, the file is gone", r.data.certificate.file === null && r.data.certificate.notes === "Waiting on the original" && (await finance.raw(`/api/insurance/files/${cert.file.ref}`)).status === 404);
+  check("insurance: deleted", (await manager.del(`/api/insurance/${cert.id}`)).status === 200 && (await manager.get(`/api/companies/${hooli.id}/insurance`)).data.certificates.length === 0);
 }
 
 main()

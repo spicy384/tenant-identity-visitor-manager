@@ -33,7 +33,7 @@ function positiveInt(value, fallback = null) {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-function createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, fields, admin, auditFrom, transaction = (fn) => fn() }) {
+function createBadgeRoutes({ access, badges, allotments, clearance, templates, events, visitors, directory, fields, admin, auditFrom, transaction = (fn) => fn() }) {
   const router = express.Router();
   const staffName = (req) => req.user?.displayName || req.user?.username || null;
 
@@ -275,15 +275,61 @@ function createBadgeRoutes({ access, badges, clearance, templates, events, visit
     const body = req.body || {};
     const holderId = positiveInt(body.holderId);
     if (!visibleHolder(req, body.kind, holderId)) throw fail(404, "No such person or visitor.");
-    const badge = badges.assign(positiveInt(req.params.id), { kind: body.kind, holderId, visitId: positiveInt(body.visitId), replacesBadgeId: positiveInt(body.replacesBadgeId) }, { by: staffName(req), sites: req.ctx.sites, levelNames: seesLevels(req) });
+    // A tenant badge past what the company may hold is an extra one, paid for: asked first, then charged.
+    const before = badges.get(positiveInt(req.params.id), { sites: req.ctx.sites });
+    const extra = before && allotments ? allotments.extraNeeded(before, body.kind, holderId) : null;
+    if (extra && body.chargeExtra !== true) {
+      return res.status(409).json({
+        error: `${extra.companyName} holds all ${extra.allowed} of the tenant badges it may have; another is an extra badge${extra.price ? `, charged $${extra.price.toFixed(2)}` : ""}.`,
+        code: "badge_allotment",
+        allotment: { companyId: extra.companyId, companyName: extra.companyName, allowed: extra.allowed, held: extra.held, price: extra.price }
+      });
+    }
+    let badge;
+    let paid = null;
+    transaction(() => {
+      badge = badges.assign(positiveInt(req.params.id), { kind: body.kind, holderId, visitId: positiveInt(body.visitId), replacesBadgeId: positiveInt(body.replacesBadgeId) }, { by: staffName(req), sites: req.ctx.sites, levelNames: seesLevels(req) });
+      if (extra) paid = allotments.recordPaid(extra.companyId, { badgeLabel: badge.label, holderName: badge.holder.name }, { by: staffName(req) });
+    });
+    if (paid) auditFrom(req, "badge.extra", extra.companyName, `badge ${badge.label} for ${badge.holder.name}; now ${paid.allotment.allowed} allowed${paid.charge ? `, charged $${paid.charge.amount.toFixed(2)}` : ""}`);
     auditFrom(req, "badge.assign", badge.label, `to ${badge.holder.name}${badge.holder.company ? ` (${badge.holder.company})` : ""}${badge.holder.temporary ? `; lent for the day${badge.holder.replacesNumber ? `, in place of ${badge.holder.replacesNumber}` : ""}, due back ${new Date(badge.holder.dueAt).toISOString()}` : ""}`);
     res.json({ ok: true, badge: badgeOut(req, badge) });
   });
 
   router.post("/api/badges/:id/return", editBadges, (req, res) => {
-    const { badge, from } = badges.takeBack(positiveInt(req.params.id), { outcome: req.body?.outcome || "returned", note: req.body?.note }, { by: staffName(req), sites: req.ctx.sites });
+    let badge;
+    let from;
+    transaction(() => {
+      ({ badge, from } = badges.takeBack(positiveInt(req.params.id), { outcome: req.body?.outcome || "returned", note: req.body?.note }, { by: staffName(req), sites: req.ctx.sites }));
+      // A lost tenant badge still counts against its company's allotment.
+      if (req.body?.outcome === "lost" && allotments) allotments.recordLost(badge, from, { by: staffName(req) });
+    });
     auditFrom(req, req.body?.outcome === "lost" ? "badge.lost" : "badge.return", badge.label, `from ${from.name}`);
     res.json({ ok: true, badge: badgeOut(req, badge) });
+  });
+
+  // --- tenant badge allotments (badge-allotments.js) -------------------------------------------------
+
+  const seesAllotments = need((ctx) => access.canReadBadges(ctx) || access.canReadFacilities(ctx) || access.canReadFinance(ctx), "This account can't see badge allotments.");
+  const adjustAllotments = need(access.canEditCharges, "Only those who change facilities or keep the books adjust badge allotments.");
+
+  function allotmentCompany(req) {
+    const company = directory.getCompany(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!company) throw fail(404, "No such company, or not at your sites.");
+    return company;
+  }
+
+  /** The tenant badges a company may hold, why, how many it holds now, and its ledger. */
+  router.get("/api/companies/:id/badge-allotment", seesAllotments, (req, res) => {
+    res.json({ allotment: allotments.summary(allotmentCompany(req).id, { entries: true }) });
+  });
+
+  /** Adds badges to (or takes them from) what a company may hold: { quantity, note }. */
+  router.post("/api/companies/:id/badge-allotment", adjustAllotments, (req, res) => {
+    const company = allotmentCompany(req);
+    const allotment = allotments.adjust(company.id, req.body || {}, { by: staffName(req) });
+    auditFrom(req, "badge.allotment", company.name, `${Number(req.body.quantity) > 0 ? "+" : ""}${Number(req.body.quantity)}: ${String(req.body.note).slice(0, 200)}; now ${allotment.allowed} allowed`);
+    res.json({ ok: true, allotment });
   });
 
   /** A person's or visitor's badges, and (for those who may assign) the ones they could be given. */

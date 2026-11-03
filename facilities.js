@@ -32,6 +32,7 @@ const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const MAX_RATE = 100000;
 const MAX_MONTHLY = 100000000;
 const MAX_SQFT = 10000000;
+const MAX_DESKS = 10000;
 const STATUSES = ["available", "occupied", "upcoming", "shared", "unavailable"];
 const COLOR_RE = /^#[0-9a-f]{6}$/i;
 // What a new database starts with: [name, color, assigned to companies].
@@ -78,6 +79,14 @@ function amountInput(value, label, max) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0 || n > max) throw fail(400, `The ${label} must be a number from 0 to ${max.toLocaleString("en-US")}.`);
   return Math.round(n * 10000) / 10000;
+}
+
+/** A whole number from 0 to `max`, or null when blank. */
+function countInput(value, label, max) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > max) throw fail(400, `The ${label} must be a whole number from 0 to ${max.toLocaleString("en-US")}.`);
+  return n;
 }
 
 /** { type, data } from a data: URL holding a PNG or JPEG; throws for anything else. */
@@ -489,6 +498,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       rate: r.rate ?? null,
       // A fixed amount a month instead of by the square foot (null: by the square foot).
       monthlyRent: r.monthly_rent ?? null,
+      // Each desk gives its company a tenant badge without charge (null: not counted).
+      desks: r.desks ?? null,
       unavailable: Boolean(r.unavailable),
       roomTypeId: r.room_type_id || null,
       roomType: r.room_type_id ? { id: r.room_type_id, name: r.type_name, color: r.type_color, assignable } : null,
@@ -563,6 +574,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     out.sqft = input.sqft !== undefined ? amountInput(input.sqft, "square footage", MAX_SQFT) : existing?.sqft ?? null;
     out.rate = input.rate !== undefined ? amountInput(input.rate, "rate", MAX_RATE) : existing?.rate ?? null;
     out.monthlyRent = input.monthlyRent !== undefined ? amountInput(input.monthlyRent, "monthly rent", MAX_MONTHLY) : existing?.monthlyRent ?? null;
+    out.desks = input.desks !== undefined ? countInput(input.desks, "number of desks", MAX_DESKS) : existing?.desks ?? null;
     out.unavailable = input.unavailable !== undefined ? input.unavailable === true : Boolean(existing?.unavailable);
     out.notes = input.notes !== undefined ? text(input.notes, 1000) : existing?.notes ?? null;
     // A new room is an office unless it says otherwise.
@@ -579,8 +591,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     const v = officeInput(input);
     if (raw.prepare("SELECT 1 FROM offices WHERE floor_id = ? AND name = ? COLLATE NOCASE").get(floor.id, v.name)) throw fail(409, `${floor.name} already has an office called ${v.name}.`);
     const t = now();
-    const id = raw.prepare("INSERT INTO offices (floor_id, name, sqft, rate, monthly_rent, unavailable, room_type_id, class_id, x, y, w, h, points, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(floor.id, v.name, v.sqft, v.rate, v.monthlyRent, v.unavailable ? 1 : 0, v.roomTypeId, v.classId, v.x, v.y, v.w, v.h, v.points, v.notes, t, t).lastInsertRowid;
+    const id = raw.prepare("INSERT INTO offices (floor_id, name, sqft, rate, monthly_rent, desks, unavailable, room_type_id, class_id, x, y, w, h, points, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(floor.id, v.name, v.sqft, v.rate, v.monthlyRent, v.desks, v.unavailable ? 1 : 0, v.roomTypeId, v.classId, v.x, v.y, v.w, v.h, v.points, v.notes, t, t).lastInsertRowid;
     return getOffice(Number(id));
   }
 
@@ -595,8 +607,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     if (v.roomTypeId !== existing.roomTypeId && v.roomTypeId && !mustRoomType(v.roomTypeId).assignable && (existing.current || existing.next)) {
       throw fail(409, `${existing.name} is assigned to ${(existing.current || existing.next).companyName}, and a ${mustRoomType(v.roomTypeId).name} isn't assigned to companies. End that assignment first.`);
     }
-    raw.prepare("UPDATE offices SET name = ?, sqft = ?, rate = ?, monthly_rent = ?, unavailable = ?, room_type_id = ?, class_id = ?, x = ?, y = ?, w = ?, h = ?, points = ?, notes = ?, updated_at = ? WHERE id = ?")
-      .run(v.name, v.sqft, v.rate, v.monthlyRent, v.unavailable ? 1 : 0, v.roomTypeId, v.classId, v.x, v.y, v.w, v.h, v.points, v.notes, now(), id);
+    raw.prepare("UPDATE offices SET name = ?, sqft = ?, rate = ?, monthly_rent = ?, desks = ?, unavailable = ?, room_type_id = ?, class_id = ?, x = ?, y = ?, w = ?, h = ?, points = ?, notes = ?, updated_at = ? WHERE id = ?")
+      .run(v.name, v.sqft, v.rate, v.monthlyRent, v.desks, v.unavailable ? 1 : 0, v.roomTypeId, v.classId, v.x, v.y, v.w, v.h, v.points, v.notes, now(), id);
     return getOffice(id);
   }
 
@@ -611,7 +623,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
   // --- several rooms at once ---------------------------------------------------------------------
 
   // What may be set on several rooms together (names, sizes and places stay one at a time).
-  const BULK_KEYS = ["roomTypeId", "classId", "rate", "monthlyRent", "unavailable", "notes"];
+  const BULK_KEYS = ["roomTypeId", "classId", "rate", "monthlyRent", "desks", "unavailable", "notes"];
 
   /** The ids of several rooms: distinct positive whole numbers, at most 500. */
   function roomIds(list) {
@@ -748,7 +760,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
         const { rate, source, monthly } = rentOf(full, full.siteId, companyId);
         rows.push({
           assignment: a, when, officeId: o.id, officeName: o.name, floorId: o.floorId, floorName: o.floorName, siteId: o.siteId, siteName: o.siteName,
-          sqft: o.sqft, rate, rateSource: source, monthly
+          sqft: o.sqft, desks: o.desks, rate, rateSource: source, monthly
         });
       }
     }
@@ -758,7 +770,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return {
       rate: companyRate(companyId),
       offices: rows,
-      totals: { offices: held.length, sqft: money(held.reduce((n, r) => n + (r.sqft || 0), 0)), monthly: money(held.reduce((n, r) => n + (r.monthly || 0), 0)) }
+      totals: { offices: held.length, sqft: money(held.reduce((n, r) => n + (r.sqft || 0), 0)), desks: held.reduce((n, r) => n + (r.desks || 0), 0), monthly: money(held.reduce((n, r) => n + (r.monthly || 0), 0)) }
     };
   }
 

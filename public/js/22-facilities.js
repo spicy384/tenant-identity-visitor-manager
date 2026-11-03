@@ -152,12 +152,14 @@ async function bulkEditRooms(list) {
   const type = h("select", { "aria-label": "Room type" }, options(kinds.types.map((t) => [String(t.id), `${t.name}${t.assignable ? "" : " (shared)"}`])));
   const classification = h("select", { "aria-label": "Classification" }, options([["", "Unclassified"], ...kinds.classes.map((c) => [String(c.id), `Classified: ${c.name}`])]));
   const rate = h("input", { type: "number", step: "0.01", min: "0", "aria-label": "Rate", placeholder: "The site's default" });
+  const desks = h("input", { type: "number", step: "1", min: "0", "aria-label": "Desks" });
   const unavailable = h("select", { "aria-label": "Unavailable" }, options([["no", "No: can be used"], ["yes", "Yes: unavailable"]]));
   const notes = h("input", { type: "text", "aria-label": "Notes" });
   const nodes = [
     row("roomTypeId", "Room type", type, () => Number(type.value)),
     row("classId", "Classification", classification, () => (classification.value ? Number(classification.value) : null)),
     row("rate", "Rate ($ per sq ft a month)", rate, () => (rate.value === "" ? null : Number(rate.value)), "(empty: the site's default)"),
+    row("desks", "Desks", desks, () => (desks.value === "" ? null : Number(desks.value)), "(in each room)"),
     row("unavailable", "Unavailable", unavailable, () => unavailable.value === "yes"),
     row("notes", "Notes", notes, () => notes.value.trim(), "(replaces each room's notes)")
   ];
@@ -1081,13 +1083,15 @@ async function editOffice(office, { floor = null, points = null } = {}) {
         hint: "Empty to use the site's default. A company's own rate wins over both." },
       { name: "monthlyRent", label: "Monthly rent ($)", type: "number", value: office?.monthlyRent ?? "", step: "0.01", min: "0", half: true,
         hint: "What the room costs a month, whatever its size. Company and site rates don't apply." },
+      { name: "desks", label: "Desks", type: "number", value: office?.desks ?? "", step: "1", min: "0", half: true,
+        hint: "Each desk gives the company that leases it a tenant badge without charge." },
       { name: "unavailable", label: "Unavailable (can't be assigned, e.g. under renovation)", type: "checkbox", value: Boolean(office?.unavailable) },
       { name: "notes", label: "Notes", type: "textarea", value: office?.notes ?? "", rows: 2 }
     ].filter(Boolean),
     submitLabel: office ? "Save" : "Add room",
     onSubmit: async (v) => {
       const body = { name: v.name, roomTypeId: v.roomTypeId ? Number(v.roomTypeId) : null, classId: v.classId ? Number(v.classId) : null,
-        sqft: v.sqft === "" ? null : Number(v.sqft), rate: v.rate === "" ? null : Number(v.rate), unavailable: v.unavailable, notes: v.notes,
+        sqft: v.sqft === "" ? null : Number(v.sqft), rate: v.rate === "" ? null : Number(v.rate), desks: v.desks === "" ? null : Number(v.desks), unavailable: v.unavailable, notes: v.notes,
         monthlyRent: v.pricing === "monthly" ? (v.monthlyRent === "" ? null : Number(v.monthlyRent)) : null };
       if (v.pricing === "monthly" && body.monthlyRent === null) throw new Error("Enter the monthly rent, or price the room by the square foot.");
       if (office) return (await api(`/api/offices/${office.id}`, { method: "PUT", body })).office;
@@ -1143,6 +1147,7 @@ async function openOffice(id, onChange = () => {}) {
       h("dt", { text: "Classification" }), h("dd", {}, colorTag(classificationText(office), office.classification?.color || facilitiesView.kinds?.unclassified.color || "#16a34a")),
       h("dt", { text: "Size" }), h("dd", {}, fmtSqft(office.sqft),
         office.measuredSqft && office.measuredSqft !== office.sqft ? h("span", { class: "muted small-text", text: ` (about ${fmtSqft(office.measuredSqft)} measured on the plan)` }) : null),
+      office.desks !== null ? [h("dt", { text: "Desks" }), h("dd", { text: String(office.desks) })] : null,
       h("dt", { text: "Rate" }), h("dd", { text: rateText }),
       office.rate !== null && office.monthlyRent === null && office.rateSource !== "office" ? [h("dt", { text: "Office's own rate" }), h("dd", { text: `${fmtRate(office.rate)} a month` })] : null,
       h("dt", { text: office.status === "occupied" ? "Monthly" : "Asking" }), h("dd", {}, h("strong", { text: office.monthly === null ? "—" : `${fmtMoney(office.monthly)} a month` })),
@@ -1533,6 +1538,7 @@ function companyOfficesPanel(company) {
         h("td", { text: multiSite() ? `${o.siteName}, ${o.floorName}` : o.floorName }),
         h("td", { text: `${fmtDay(o.assignment.startDate)} – ${o.assignment.endDate ? fmtDay(o.assignment.endDate) : "no end date"}` }),
         h("td", { class: "num", text: o.sqft === null ? "—" : Number(o.sqft).toLocaleString("en-US") }),
+        h("td", { class: "num", text: o.desks === null || o.desks === undefined ? "—" : String(o.desks) }),
         h("td", { class: "num", text: o.when === "ended" ? "" : fmtRate(o.rate) }),
         h("td", { class: "num", text: o.when === "ended" ? "" : fmtMoney(o.monthly) }));
       row.addEventListener("click", () => openOffice(o.officeId, refresh));
@@ -1547,11 +1553,12 @@ function companyOfficesPanel(company) {
           editor ? h("button", { type: "button", class: "secondary small", text: data.rate === null ? "Set a rate" : "Change rate", onclick: async () => { if (await setCompanyRate({ companyId: company.id, name: company.name, rate: data.rate })) refresh(); } }) : null,
           editor ? h("button", { type: "button", class: "primary small", text: "Assign offices", onclick: async () => { if (await assignOfficesToCompany(company, data.rate)) refresh(); } }) : null)),
       rows.length ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-        h("thead", {}, h("tr", {}, ["Office", "Floor", "Dates", "Sq ft", "Rate", "Monthly"].map((x) => h("th", { text: x })))),
+        h("thead", {}, h("tr", {}, ["Office", "Floor", "Dates", "Sq ft", "Desks", "Rate", "Monthly"].map((x) => h("th", { text: x })))),
         h("tbody", {}, rows),
         t.offices ? h("tfoot", {}, h("tr", {},
           h("td", { colspan: 3, text: `Now: ${t.offices} ${t.offices === 1 ? "office" : "offices"}` }),
           h("td", { class: "num", text: Number(t.sqft).toLocaleString("en-US") }),
+          h("td", { class: "num", text: t.desks ? String(t.desks) : "" }),
           h("td", {}),
           h("td", { class: "num" }, h("strong", { text: fmtMoney(t.monthly) })))) : null))
         : h("p", { class: "muted small-text", text: editor ? "No offices yet. Assign offices picks them from the floor plans or a list." : "No offices." }));

@@ -433,6 +433,7 @@ async function showFinanceSettings() {
   const remitTo = area(s.remitTo);
   const footer = area(s.footer);
   const termsDays = text(s.termsDays, { type: "number", min: 0, max: 365 });
+  const badgePrice = text(s.badgePrice, { type: "number", min: 0, max: 10000, step: "0.01" });
   const prefix = text(s.invoicePrefix);
   const nextNumber = text(s.nextNumber, { type: "number", min: 1 });
   const invoicePanel = h("div", { class: "panel" },
@@ -444,9 +445,10 @@ async function showFinanceSettings() {
       field("Remit payment to", remitTo, "Where tenants send payment: an address, or bank details."),
       field("Invoice numbers start with", prefix, null, true),
       field("Next invoice number", nextNumber, "Issued invoices are numbered in order from here.", true),
-      field("Footer", footer, "Printed at the bottom of every invoice.")),
+      field("Footer", footer, "Printed at the bottom of every invoice."),
+      field("Extra tenant badge ($)", badgePrice, "Charged for each tenant badge past the desks in a company's offices (and the badges it has paid for). 0 for no charge.", true)),
     h("div", { class: "btn-row" }, h("button", { type: "button", class: "primary", text: "Save", onclick: () => saveSettings({
-      issuerName: issuerName.value, issuerAddress: issuerAddress.value, remitTo: remitTo.value, footer: footer.value, termsDays: termsDays.value, invoicePrefix: prefix.value, nextNumber: nextNumber.value
+      issuerName: issuerName.value, issuerAddress: issuerAddress.value, remitTo: remitTo.value, footer: footer.value, termsDays: termsDays.value, invoicePrefix: prefix.value, nextNumber: nextNumber.value, badgePrice: badgePrice.value
     }) })));
 
   // QuickBooks names: accounts and items, for exports and the connection.

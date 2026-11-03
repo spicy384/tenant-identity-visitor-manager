@@ -266,6 +266,20 @@ const DASHBOARD_MODULES = {
       })), "No lease ends in the next 90 days.", { more: "#leases" }) };
     }
   },
+  insurance: {
+    title: "Insurance to renew",
+    description: "Tenants with an office whose certificate of insurance has expired, expires within 30 days, or isn't on file.",
+    href: "#insurance",
+    async load() {
+      const { companies } = await api("/api/insurance/attention");
+      return { count: companies.length, attention: companies.some((c) => c.status !== "expiring"), body: dashList(companies.map((c) => dashRow({
+        href: `#company/${c.companyId}`,
+        main: c.companyName,
+        sub: c.certificate ? [c.certificate.insurer, `expires ${dateText(c.certificate.expiresOn)}`].filter(Boolean).join(" · ") : null,
+        right: coverBadge(c.status, c.certificate)
+      })), "Every tenant's insurance is current.", { more: "#insurance" }) };
+    }
+  },
   overdueInvoices: {
     title: "Overdue invoices",
     description: "Issued invoices past their due date with a balance, oldest first.",

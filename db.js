@@ -579,6 +579,59 @@ CREATE TABLE IF NOT EXISTS company_rates (
   updated_at INTEGER NOT NULL
 );
 
+-- Files people upload (stored-files.js): a company's certificates of insurance so far. Kept in
+-- here, so they are encrypted and backed up with everything else. ref is random and is the
+-- file's address, which says nothing about what it is.
+CREATE TABLE IF NOT EXISTS stored_files (
+  id INTEGER PRIMARY KEY,
+  ref TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  data BLOB NOT NULL,
+  created_by TEXT,
+  created_at INTEGER NOT NULL
+);
+
+-- A company's certificates of insurance (insurance.js): the insurer, when the cover starts and
+-- runs out (expires_on: the earliest policy on the certificate, its last day), what it covers,
+-- and a copy of the certificate.
+CREATE TABLE IF NOT EXISTS insurance_certificates (
+  id INTEGER PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  insurer TEXT,
+  effective_date TEXT,
+  expires_on TEXT NOT NULL,
+  coverage TEXT,
+  notes TEXT,
+  file_id INTEGER REFERENCES stored_files(id) ON DELETE SET NULL,
+  created_by TEXT,
+  created_at INTEGER NOT NULL,
+  updated_by TEXT,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS insurance_certificates_company ON insurance_certificates(company_id, expires_on);
+
+-- The tenant badges a company may hold (badge-allotments.js), as a ledger that only grows
+-- unless a badge is lost: desks (an office's desks, once for each office the company has had,
+-- topped up if the office gains desks while it has it), paid (an extra badge, billed by
+-- charge_id), lost (a lost badge still counts, so it takes one away) and adjust (by hand, with a note).
+CREATE TABLE IF NOT EXISTS badge_allotments (
+  id INTEGER PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  quantity INTEGER NOT NULL,
+  office_id INTEGER REFERENCES offices(id) ON DELETE SET NULL,
+  office_name TEXT,
+  badge_label TEXT,
+  holder_name TEXT,
+  charge_id INTEGER REFERENCES charges(id) ON DELETE SET NULL,
+  note TEXT,
+  created_by TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS badge_allotments_company ON badge_allotments(company_id, kind, office_id);
+
 -- Security's mail (security-reports.js): the monitoring center's alarm notices and the guard
 -- company's daily activity reports, as read (data: JSON), each once (message_key: the email's
 -- Message-ID, else a hash of it), with who first read it.
@@ -694,7 +747,11 @@ const ADDED_COLUMNS = [
   ["visits", "id_other", "TEXT"],
   // A badge's expiry date (YYYY-MM-DD, optional): good through that day, then it can't be given out.
   ["badges", "expires_on", "TEXT"],
-  ["event_guests", "badge_id", "INTEGER REFERENCES badges(id) ON DELETE SET NULL"]
+  ["event_guests", "badge_id", "INTEGER REFERENCES badges(id) ON DELETE SET NULL"],
+  // How many desks an office has: each gives its company a tenant badge without charge.
+  ["offices", "desks", "INTEGER"],
+  // When a lease's term commences, when not its start (null: the same); its yearly increases count from it.
+  ["leases", "commencement_date", "TEXT"]
 ];
 
 /**

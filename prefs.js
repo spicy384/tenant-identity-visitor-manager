@@ -32,15 +32,16 @@ function createPrefs({ db, access }) {
     guardReports: (ctx) => access.canReadAlarms(ctx),
     occupancy: (ctx) => access.canReadFacilities(ctx),
     leasesEnding: (ctx) => access.canReadFacilities(ctx) || access.canReadFinance(ctx),
+    insurance: (ctx) => access.canReadFacilities(ctx) || access.canReadFinance(ctx),
     overdueInvoices: (ctx) => access.canReadFinance(ctx)
   };
   // What each role starts with, in order (only the modules it may see are kept).
   const DEFAULTS = {
     security: ["clearanceQueue", "alarms", "rechecks", "expiring", "badgesOut", "here"],
     responder: ["alarms", "guardReports"],
-    admin: ["here", "expected", "badgeNeeded", "rechecks", "badgesOut", "tenants", "occupancy", "overdueInvoices", "leasesEnding"],
-    finance: ["overdueInvoices", "leasesEnding", "occupancy", "tenants"],
-    other: ["badgeNeeded", "expected", "here", "review", "badgesOut", "tenants", "occupancy", "leasesEnding", "overdueInvoices"]
+    admin: ["here", "expected", "badgeNeeded", "rechecks", "badgesOut", "tenants", "occupancy", "overdueInvoices", "leasesEnding", "insurance"],
+    finance: ["overdueInvoices", "leasesEnding", "insurance", "occupancy", "tenants"],
+    other: ["badgeNeeded", "expected", "here", "review", "badgesOut", "tenants", "occupancy", "leasesEnding", "insurance", "overdueInvoices"]
   };
 
   const available = (ctx) => Object.keys(MODULES).filter((id) => MODULES[id](ctx));

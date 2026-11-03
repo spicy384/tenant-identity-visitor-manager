@@ -350,6 +350,22 @@
       <div class="table-wrap"><table class="table" id="leases-table"><thead></thead><tbody></tbody></table></div>
     </section>
 
+    <!-- Certificates of insurance (27-insurance.js) -->
+    <section id="view-insurance" class="view" data-title="Insurance" hidden>
+      <div class="toolbar">
+        <input type="search" id="insurance-search" placeholder="Search company or insurer" aria-label="Search insurance" />
+        <select id="insurance-status" aria-label="Which companies">
+          <option value="attention">Needs attention</option>
+          <option value="expiring">Expiring within 30 days</option>
+          <option value="expired">Expired</option>
+          <option value="none">None on file</option>
+          <option value="current">Current</option>
+          <option value="">All</option>
+        </select>
+      </div>
+      <div class="table-wrap"><table class="table phone-cards" id="insurance-table"><thead></thead><tbody></tbody></table></div>
+    </section>
+
     <section id="view-charges" class="view" data-title="Charges" hidden>
       <div class="toolbar">
         <input type="search" id="charges-search" placeholder="Search description, company or notes" aria-label="Search charges" />
@@ -536,6 +552,7 @@
   <script src="/js/24-leases.js"></script>
   <script src="/js/25-finance.js"></script>
   <script src="/js/26-security-mail.js"></script>
+  <script src="/js/27-insurance.js"></script>
   <script src="/js/13-app.js"></script>
 </body>
 </html>

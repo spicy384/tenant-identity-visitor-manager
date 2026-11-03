@@ -4,7 +4,7 @@
 //   #home  #companies  #company/3  #people  #person/7  #here  #visitors  #visitor/5  #visits
 //   #expected  #badges(/tenants|/visitors)  #badge/4  #clearance  #clearances  #alarms  #alarm/6
 //   #guard-reports  #guard-report/2  #floors(/3)  #offices  #rates
-//   #leases  #lease/2  #charges  #invoices  #invoice/9  #balances  #payments  #finance-settings
+//   #leases  #lease/2  #insurance  #charges  #invoices  #invoice/9  #balances  #payments  #finance-settings
 //   #settings  #settings/fields  #account
 
 const VIEWS = {
@@ -25,6 +25,7 @@ const VIEWS = {
   roomtypes: showRoomTypes,
   rates: showRates,
   leases: showLeases,
+  insurance: showInsurance,
   charges: showCharges,
   invoices: showInvoices,
   balances: showBalances,
@@ -62,6 +63,7 @@ const SECTIONS = [
     { view: "roomtypes", href: "#roomtypes", label: "Room types", show: canReadFacilities },
     { view: "rates", href: "#rates", label: "Rates", show: canReadFacilities },
     { view: "leases", href: "#leases", label: "Leases", show: canSeeLeases },
+    { view: "insurance", href: "#insurance", label: "Insurance", show: canSeeLeases },
     { view: "charges", href: "#charges", label: "Charges", show: canSeeLeases }
   ] },
   { id: "finance", label: "Finance", show: canReadFinance, pages: [
@@ -282,7 +284,7 @@ function route() {
   if (["alarms", "guard-reports"].includes(view) && !canReadAlarms()) view = "home";
   if (view === "clearances" && !seesSecurity()) view = "home";
   if (["floors", "offices", "roomtypes", "rates"].includes(view) && !canReadFacilities()) view = "home";
-  if (["leases", "charges"].includes(view) && !canSeeLeases()) view = "home";
+  if (["leases", "insurance", "charges"].includes(view) && !canSeeLeases()) view = "home";
   if (["invoices", "balances", "payments"].includes(view) && !canReadFinance()) view = "home";
   if (view === "finance-settings" && !canEditFinance()) view = "home";
   showView(view, sub);

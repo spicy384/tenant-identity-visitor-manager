@@ -27,6 +27,8 @@ const DEFAULT_SETTINGS = {
   invoicePrefix: "INV-",
   nextNumber: 1001,
   footer: "",
+  // What a tenant badge past a company's allotment costs (badge-allotments.js).
+  badgePrice: 20,
   qb: { arAccount: "Accounts Receivable", rentItem: "Rent", rentAccount: "Rental Income", chargeAccount: "Other Income", otherItem: "Other charges", depositAccount: "Undeposited Funds" }
 };
 
@@ -64,6 +66,7 @@ function createBilling({ db, leases, directory, now = Date.now }) {
     for (const k of ["issuerName", "invoicePrefix"]) if (input[k] !== undefined) out[k] = String(input[k] ?? "").trim().slice(0, 120);
     for (const k of ["issuerAddress", "remitTo", "footer"]) if (input[k] !== undefined) out[k] = String(input[k] ?? "").trim().slice(0, 1000);
     if (input.termsDays !== undefined) out.termsDays = numberInput(input.termsDays, "payment terms (days)", { max: 365 });
+    if (input.badgePrice !== undefined) out.badgePrice = Math.round(numberInput(input.badgePrice, "price of an extra tenant badge", { max: 10000 }) * 100) / 100;
     if (input.nextNumber !== undefined) {
       const n = numberInput(input.nextNumber, "next invoice number", { min: 1, max: 999999999 });
       if (!Number.isInteger(n)) throw fail(400, "The next invoice number is a whole number.");

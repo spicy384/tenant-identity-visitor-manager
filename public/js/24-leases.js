@@ -90,7 +90,8 @@ async function openLease(id) {
       fact("Company", lease.companyId ? h("a", { href: `#company/${lease.companyId}`, text: lease.companyName }) : lease.companyName),
       fact("Reference", lease.reference),
       fact("Term", `${dateText(lease.startDate)} to ${lease.endDate ? dateText(lease.endDate) : "no end date (month to month)"}`),
-      fact("Rent", `${lease.rentMode === "fixed" ? `${fmtMoney(lease.monthlyRent)} a month, fixed` : "From the rates: each office's size times its rate (or its fixed monthly rent)"}${lease.escalationPct ? `, up ${lease.escalationPct}% each year` : ""}`),
+      fact("Commences", lease.commencementSet ? dateText(lease.commencementDate) : null),
+      fact("Rent", `${lease.rentMode === "fixed" ? `${fmtMoney(lease.monthlyRent)} a month, fixed` : "From the rates: each office's size times its rate (or its fixed monthly rent)"}${lease.escalationPct ? `, up ${lease.escalationPct}% each year from ${lease.commencementSet ? "its commencement" : "its start"}` : ""}`),
       fact(lease.status === "upcoming" ? "Rent when it starts" : "Rent now", rentText(lease)),
       fact("Deposit", lease.deposit ? fmtMoney(lease.deposit) : null),
       fact("Space", lease.sqft ? fmtSqft(lease.sqft) : null),
@@ -190,12 +191,19 @@ async function editLease(lease) {
     fields: [
       { name: "companyId", label: "Company", type: "select", required: true, value: String(lease?.companyId || ""), half: true, options: [{ value: "", label: "Choose a company" }, ...companies.map((c) => ({ value: String(c.id), label: c.name }))] },
       { name: "reference", label: "Reference (optional)", value: lease?.reference || "", half: true, placeholder: "Your lease number" },
-      { name: "startDate", label: "Starts", type: "date", required: true, value: start, half: true, onChange: (input) => { start = input.value; reloadOffices(); } },
+      { name: "startDate", label: "Starts", type: "date", required: true, value: start, half: true, onChange: (input, inputs) => {
+        // A commencement that was the start (or empty) moves with it.
+        const commences = inputs.commencementDate;
+        if (commences && (!commences.value || commences.value === start)) commences.value = input.value;
+        start = input.value;
+        reloadOffices();
+      } },
       { name: "endDate", label: "Ends (its last day)", type: "date", value: end, half: true, hint: "Leave empty for month to month.", onChange: (input) => { end = input.value; reloadOffices(); } },
       { node: picker.node },
       { name: "rentMode", label: "Rent", type: "select", value: lease?.rentMode || "rates", half: true, options: [{ value: "rates", label: "From the rates (size × rate)" }, { value: "fixed", label: "A fixed amount a month" }], onChange: (input, inputs) => fixedOnly(inputs, input.value) },
       { name: "monthlyRent", label: "Monthly rent ($)", type: "number", value: lease?.monthlyRent ?? "", half: true, step: "0.01", min: 0 },
-      { name: "escalationPct", label: "Yearly increase (%)", type: "number", value: lease?.escalationPct ?? "", half: true, step: "0.01", min: 0, hint: "On each anniversary of the start, whichever way the rent is worked out." },
+      { name: "commencementDate", label: "Commences", type: "date", value: lease?.commencementDate || "", half: true, hint: "Usually the start. Rent is billed from the start; the yearly increase counts from here." },
+      { name: "escalationPct", label: "Yearly increase (%)", type: "number", value: lease?.escalationPct ?? "", half: true, step: "0.01", min: 0, hint: "On each anniversary of the commencement, whichever way the rent is worked out." },
       { name: "deposit", label: "Deposit ($, optional)", type: "number", value: lease?.deposit ?? "", half: true, step: "0.01", min: 0 },
       { name: "notes", label: "Notes", type: "textarea", rows: 2, value: lease?.notes || "" }
     ],
@@ -203,7 +211,7 @@ async function editLease(lease) {
     submitLabel: lease ? "Save" : "Add lease",
     onSubmit: async (v) => {
       const body = {
-        companyId: Number(v.companyId), reference: v.reference, startDate: v.startDate, endDate: v.endDate || null, officeIds: picker.value(),
+        companyId: Number(v.companyId), reference: v.reference, startDate: v.startDate, commencementDate: v.commencementDate || null, endDate: v.endDate || null, officeIds: picker.value(),
         rentMode: v.rentMode, monthlyRent: v.rentMode === "fixed" ? v.monthlyRent : null, escalationPct: v.escalationPct, deposit: v.deposit, notes: v.notes
       };
       return (lease ? await api(`/api/leases/${lease.id}`, { method: "PUT", body }) : await api("/api/leases", { method: "POST", body })).lease;

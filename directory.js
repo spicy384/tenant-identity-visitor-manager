@@ -322,8 +322,9 @@ function createDirectory({ db, fields }) {
       raw.prepare(`UPDATE visitor_events SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
       // Their offices (and office history) go to the company they're merged into; its own rate stays.
       raw.prepare(`UPDATE office_assignments SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
-      // So do their leases, charges and invoices (each keeps the name it was billed under).
-      for (const table of ["leases", "charges", "invoices"]) raw.prepare(`UPDATE ${table} SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
+      // So do their leases, charges and invoices (each keeps the name it was billed under), their
+      // certificates of insurance and the tenant badges they were allotted.
+      for (const table of ["leases", "charges", "invoices", "insurance_certificates", "badge_allotments"]) raw.prepare(`UPDATE ${table} SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
       // Fields added to a merged company alone come along, with their values.
       for (const id of ids) {
         const own = raw.prepare("SELECT id FROM field_definitions WHERE entity = 'company' AND record_id = ?").all(id).map((r) => r.id);
@@ -357,6 +358,8 @@ function createDirectory({ db, fields }) {
       raw.prepare("UPDATE clearance_requests SET status = 'canceled', resolved_at = ? WHERE holder_kind = 'person' AND status = 'open' AND holder_id IN (SELECT id FROM people WHERE company_id = ?)").run(Date.now(), id);
       peopleRemoved = raw.prepare("DELETE FROM people WHERE company_id = ?").run(id).changes;
       fields.forgetRecord("company", id);
+      // Its certificates go with it (ON DELETE CASCADE), and so do their copies.
+      raw.prepare("DELETE FROM stored_files WHERE id IN (SELECT file_id FROM insurance_certificates WHERE company_id = ?)").run(id);
       raw.prepare("DELETE FROM companies WHERE id = ?").run(id);
     });
     return { ...existing, peopleRemoved };

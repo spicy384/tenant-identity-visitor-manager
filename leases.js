@@ -7,8 +7,10 @@
  *
  * Rent comes from the rates (each office's square feet times the rate that applies, or the
  * office's own fixed monthly rent, as facilities.js works it out) or is a fixed monthly amount
- * for the lease; either goes up by escalation_pct on each anniversary of the start. A month the lease covers only part of is charged for the days
- * it covers. Money is in dollars, rounded to cents.
+ * for the lease; either goes up by escalation_pct on each anniversary of its commencement (the
+ * start, unless the lease commences on another day). Rent is billed from the start whatever the
+ * commencement. A month the lease covers only part of is charged for the days it covers. Money
+ * is in dollars, rounded to cents.
  */
 const { localParts } = require("./visit-clock");
 
@@ -142,9 +144,13 @@ function createLeases({ db, facilities, directory, now = Date.now }) {
     return "active";
   }
 
+  /** When a lease commences: its commencement date, else its start. */
+  const commencementOf = (r) => r.commencement_date || r.start_date;
+
   /**
    * The full monthly rent on `date` (before any part-month): the fixed amount, or its offices'
-   * rents from the rates; either up by the yearly increase for each anniversary passed.
+   * rents from the rates; either up by the yearly increase for each anniversary of its
+   * commencement passed (none before it commences).
    */
   function monthlyOn(r, offices, date) {
     let base;
@@ -156,7 +162,7 @@ function createLeases({ db, facilities, directory, now = Date.now }) {
       if (!parts.length || parts.some((m) => m === null)) return null;
       base = parts.reduce((a, b) => a + b, 0);
     }
-    const years = r.escalation_pct ? yearsBetween(r.start_date, date) : 0;
+    const years = r.escalation_pct ? yearsBetween(commencementOf(r), date) : 0;
     return money(base * (1 + (r.escalation_pct || 0) / 100) ** years);
   }
 
@@ -171,6 +177,9 @@ function createLeases({ db, facilities, directory, now = Date.now }) {
       companyId: r.company_id,
       companyName: r.live_name || r.company_name,
       startDate: r.start_date,
+      // Always a date: the start when it commences then.
+      commencementDate: commencementOf(r),
+      commencementSet: Boolean(r.commencement_date),
       endDate: r.end_date || null,
       status: statusOf(r, day),
       rentMode: r.rent_mode,
@@ -230,9 +239,17 @@ function createLeases({ db, facilities, directory, now = Date.now }) {
     }
     if (input.startDate !== undefined || !existing) out.startDate = dateInput(input.startDate, "start date");
     if (input.endDate !== undefined) out.endDate = dateInput(input.endDate, "end date", { optional: true });
+    if (input.commencementDate !== undefined) out.commencementDate = dateInput(input.commencementDate, "commencement date", { optional: true });
     const start = out.startDate ?? existing?.startDate;
     const end = out.endDate !== undefined ? out.endDate : existing?.endDate ?? null;
     if (end && end < start) throw fail(400, "The end date is before the start date.");
+    // Kept only when it differs from the start, so a lease that commences on its start follows it.
+    if (out.commencementDate !== undefined || out.startDate !== undefined) {
+      const given = out.commencementDate !== undefined ? out.commencementDate : existing?.commencementSet ? existing.commencementDate : null;
+      out.commencementDate = given && given !== start ? given : null;
+    }
+    const commences = out.commencementDate !== undefined ? out.commencementDate : existing?.commencementSet ? existing.commencementDate : null;
+    if (commences && end && commences > end) throw fail(400, "The commencement date is after the end date.");
     if (input.rentMode !== undefined || !existing) {
       const mode = input.rentMode || "rates";
       if (!RENT_MODES.includes(mode)) throw fail(400, "Rent comes from the rates, or is a fixed monthly amount.");
@@ -279,8 +296,8 @@ function createLeases({ db, facilities, directory, now = Date.now }) {
     let id;
     db.transaction(() => {
       const t = now();
-      id = raw.prepare(`INSERT INTO leases (reference, company_id, company_name, start_date, end_date, rent_mode, monthly_rent, deposit, escalation_pct, notes, created_by, created_at, updated_by, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.reference ?? null, v.company.id, v.company.name, v.startDate, v.endDate ?? null, v.rentMode,
+      id = raw.prepare(`INSERT INTO leases (reference, company_id, company_name, start_date, commencement_date, end_date, rent_mode, monthly_rent, deposit, escalation_pct, notes, created_by, created_at, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.reference ?? null, v.company.id, v.company.name, v.startDate, v.commencementDate ?? null, v.endDate ?? null, v.rentMode,
         v.monthlyRent ?? null, v.deposit ?? null, v.escalationPct ?? null, v.notes ?? null, by, t, by, t).lastInsertRowid;
       for (const officeId of officeIds) {
         const { assignment } = assignNamed(officeId, { companyId: v.company.id, startDate: v.startDate, endDate: v.endDate ?? null }, { scope, by });
@@ -309,8 +326,9 @@ function createLeases({ db, facilities, directory, now = Date.now }) {
     const mode = v.rentMode ?? existing.rentMode;
     if (officeIds && !officeIds.length && mode !== "fixed") throw fail(400, "A lease without offices needs a fixed rent.");
     db.transaction(() => {
-      raw.prepare(`UPDATE leases SET reference = ?, company_id = ?, company_name = ?, start_date = ?, end_date = ?, rent_mode = ?, monthly_rent = ?, deposit = ?, escalation_pct = ?, notes = ?, updated_by = ?, updated_at = ? WHERE id = ?`)
-        .run(v.reference !== undefined ? v.reference : existing.reference, next.companyId, next.companyName, next.startDate, next.endDate, mode,
+      raw.prepare(`UPDATE leases SET reference = ?, company_id = ?, company_name = ?, start_date = ?, commencement_date = ?, end_date = ?, rent_mode = ?, monthly_rent = ?, deposit = ?, escalation_pct = ?, notes = ?, updated_by = ?, updated_at = ? WHERE id = ?`)
+        .run(v.reference !== undefined ? v.reference : existing.reference, next.companyId, next.companyName, next.startDate,
+          v.commencementDate !== undefined ? v.commencementDate : existing.commencementSet ? existing.commencementDate : null, next.endDate, mode,
           v.monthlyRent !== undefined ? v.monthlyRent : existing.monthlyRent, v.deposit !== undefined ? v.deposit : existing.deposit,
           v.escalationPct !== undefined ? v.escalationPct : existing.escalationPct, v.notes !== undefined ? v.notes : existing.notes, by, now(), id);
       // Offices it no longer covers are taken off it; the rest follow its company and dates.

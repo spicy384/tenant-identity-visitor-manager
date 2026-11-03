@@ -13,7 +13,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
 
 - **Sections.** The header has Home, Tenants (companies, people, their badges), Visitors (in
   the building, expected, visitors, the visit log, visitor badges), Facilities (floor plans,
-  offices, rates, leases and charges: for roles given facilities access, and Finance), Finance
+  offices, rates, leases, insurance and charges: for roles given facilities access, and Finance), Finance
   (invoices, balances, payments, billing settings: for roles given finance access), Security (the clearance queue,
   re-checks and expiry, alarms and guard reports, all badges: for Security and administrators,
   alarms and guard reports for Security only) and Settings
@@ -22,7 +22,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Home** is each person's dashboard. **Customize** adds, removes and reorders modules: who
   is in the building, who is expected today, visitors whose check-in the desk must finish, visitors to
   check, badges out past their time, a quick list of tenants, offices by status with the space
-  let and the monthly rent (for those who see facilities), leases ending soon, overdue invoices
+  let and the monthly rent (for those who see facilities), leases ending soon, insurance to renew, overdue invoices
   (for those who see the books), and for Security the clearance
   queue, visitor re-checks, clearances expiring and recent validations (administrators get
   all but the queue). Only modules the role can see are offered, every role starts with a
@@ -409,11 +409,14 @@ Home.
   default (Facilities > Rates, and Change rate on a company's page). An office's monthly cost
   is its size times that rate; a free office shows what it would cost. A room can instead be
   priced at a **fixed amount a month** (Priced on its form), which then wins over every rate.
+- **Desks.** Each office can say how many desks it has. Each desk gives the company that leases
+  it a tenant badge without charge (see Tenant badge allotments below). Set it on the office's
+  form, or for several rooms at once.
 - **Rooms** lists every room at the chosen site with its floor, type, classification, size,
   status, company, rate and monthly cost, totals underneath; filter by type or status, or search.
 - **Several rooms at once.** Tick rooms on the Rooms page, or choose **Select rooms** on a
   floor plan and click them (or Choose all on this floor), then **Change** to set the room type,
-  classification, rate, unavailable or notes the same on all of them, or **Delete** them. If any
+  classification, rate, desks, unavailable or notes the same on all of them, or **Delete** them. If any
   room can't take the change (an assigned room can't become a shared type or unavailable, or
   be deleted), none does, and the message names it.
 - **On a company's page:** its offices now, upcoming and before, the rate it pays, and its
@@ -433,13 +436,38 @@ Home.
 - **Leases** (Facilities > Leases): a company's agreement for offices, from a start date to an
   end date (none: month to month), with a reference, a deposit and notes. Rent comes from the
   rates (each office's size times the rate that applies, or the office's own fixed monthly
-  rent) or is a fixed amount a month; either can go up by a percentage on each anniversary. Making a lease assigns its offices to the
+  rent) or is a fixed amount a month; either can go up by a percentage on each anniversary of
+  its **commencement**. A lease commences on its start unless you give another commencement
+  date; rent is billed from the start either way, and only the yearly increases count from the
+  commencement. A commencement left the same as the start moves with it. Making a lease assigns its offices to the
   company for its dates, and changing its dates or offices changes those assignments, so an
   office still has one company at a time. Offices assigned from Rooms or a company's page get
   a lease of their own (the ones assigned together share one); the assignments made before
   leases became leases the same way. Moving one office of several to other dates on Rooms gives
   it a lease of its own (not for a fixed rent: change that on the lease). A lease that has been
   invoiced can't be deleted, only ended; Home shows the leases ending within 90 days.
+- **Insurance** (Facilities > Insurance, and the Insurance panel on a company's page): each
+  company's certificates of insurance, with the insurer, what it covers, when the cover starts
+  and when it expires (the earliest policy on the certificate), and a copy (a PDF, or a PNG or
+  JPEG scan, up to 3 MB), kept in the encrypted database. A company's cover is its certificate
+  that runs latest: current, expiring (within 30 days), expired, or none on file. The page lists
+  every active company, needing attention first; **Insurance to renew** on Home lists tenants
+  with an office now whose cover has expired, expires within 30 days, or isn't on file. Seen by
+  those who see facilities or the books, kept by Managers and Finance. Merging companies moves
+  their certificates; deleting a company deletes them and their copies.
+- **Tenant badge allotments** (the Tenant badges panel on a company's page). Each desk in the
+  offices a company leases gives it a tenant badge without charge. Past those, each tenant badge
+  given to one of its people is an **extra badge**: whoever gives it is told so first, and on
+  their word the badge is given and a charge for it (the **Extra tenant badge** price in Billing
+  settings, $20 to start with) goes on the company's next invoice. What a company has received
+  or paid for it keeps: giving up an office takes nothing away, and a badge handed back can go to
+  anyone else at the company without a charge. Each office counts once for a company, so a
+  renewal adds nothing, but a different office adds its desks, and an office that gains desks
+  adds them. A lost badge still counts, so its replacement is an extra badge. Badges lent for
+  the day don't count, nor do building staff's personnel badges. A company isn't counted until
+  one of its offices has desks; until then its badges are given out as before. **Adjust** (Managers
+  and Finance) adds badges, such as ones paid for before allotments were counted, or takes some
+  away, with a reason; the panel's **History** lists every change.
 - **Charges** (Facilities > Charges): billable items and hours logged against a company: from
   the **price list** (say After-hours HVAC at $75 an hour, its rate filled in) or one-off. A
   charge can be changed or deleted until it is on an invoice.
@@ -465,8 +493,8 @@ Home.
   payments recorded here, and brings back payments made in QuickBooks against those invoices.
   The secret and tokens stay in the encrypted database. Intuit wants https:// for a real
   company, so set `APP_URL`.
-- Merging companies moves their leases, charges and invoices too; an issued invoice keeps the
-  name it was billed to.
+- Merging companies moves their leases, charges, invoices, certificates of insurance and badge
+  allotments too; an issued invoice keeps the name it was billed to.
 
 ## Expected visitors
 

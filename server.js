@@ -30,6 +30,10 @@ const { createFacilities } = require("./facilities");
 const { createFacilityRoutes } = require("./facility-routes");
 const { createLeases } = require("./leases");
 const { createBilling } = require("./billing");
+const { createAllotments } = require("./badge-allotments");
+const { createStoredFiles } = require("./stored-files");
+const { createInsurance } = require("./insurance");
+const { createInsuranceRoutes } = require("./insurance-routes");
 const { createQuickBooks } = require("./quickbooks");
 const { createFinanceRoutes } = require("./finance-routes");
 const { createClearanceRoutes } = require("./clearance-routes");
@@ -228,6 +232,9 @@ const directory = createDirectory({ db, fields });
 const facilities = createFacilities({ db, sites, directory });
 const leases = createLeases({ db, facilities, directory });
 const billing = createBilling({ db, leases, directory });
+const allotments = createAllotments({ db, billing, today: leases.today });
+const storedFiles = createStoredFiles({ db });
+const insurance = createInsurance({ db, files: storedFiles, today: leases.today });
 const quickbooks = createQuickBooks({ db, billing });
 const visitors = createVisitors({ db, fields });
 const kiosks = createKiosks({ db });
@@ -1587,7 +1594,8 @@ app.use(createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom,
 app.use(clearanceRoutes.router);
 app.use(createFacilityRoutes({ access, facilities, leases, directory, sites, auditFrom }));
 app.use(createFinanceRoutes({ access, leases, billing, quickbooks, directory, auditFrom, appUrl: APP_URL, branding }));
-app.use(createBadgeRoutes({ access, badges, clearance, templates, events, visitors, directory, fields, admin, auditFrom, transaction: (fn) => db.transaction(fn) }));
+app.use(createInsuranceRoutes({ access, insurance, directory, auditFrom }));
+app.use(createBadgeRoutes({ access, badges, allotments, clearance, templates, events, visitors, directory, fields, admin, auditFrom, transaction: (fn) => db.transaction(fn) }));
 app.use(createSecurityMailRoutes({ access, reports: securityReports, mailbox: securityMailbox, admin, auditFrom,
   // The app registration the mailbox is read with: its client ID for the setup steps, and whether it is set up.
   appInfo: () => { const c = entra.config(); return { clientId: c.clientId || null, ready: Boolean(c.tenantId && c.clientId && (c.clientSecret || entra.activeCertificate())) }; } }));
