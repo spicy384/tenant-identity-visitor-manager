@@ -446,7 +446,7 @@ async function showFinanceSettings() {
       field("Invoice numbers start with", prefix, null, true),
       field("Next invoice number", nextNumber, "Issued invoices are numbered in order from here.", true),
       field("Footer", footer, "Printed at the bottom of every invoice."),
-      field("Extra tenant badge ($)", badgePrice, "Charged for each tenant badge past the desks in a company's offices (and the badges it has paid for). 0 for no charge.", true)),
+      field("Extra tenant badge ($)", badgePrice, "Charged for each tenant badge past the desks in a company's offices (and the badges it has paid for). The same as Additional tenant badge on the price list. 0 for no charge.", true)),
     h("div", { class: "btn-row" }, h("button", { type: "button", class: "primary", text: "Save", onclick: () => saveSettings({
       issuerName: issuerName.value, issuerAddress: issuerAddress.value, remitTo: remitTo.value, footer: footer.value, termsDays: termsDays.value, invoicePrefix: prefix.value, nextNumber: nextNumber.value, badgePrice: badgePrice.value
     }) })));

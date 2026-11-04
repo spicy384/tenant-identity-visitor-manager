@@ -4,14 +4,16 @@
  * Each desk in an office a company leases gives it a badge; past those, each badge it is given
  * is an extra one, billed at the billing settings' badge price (a charge on its next invoice).
  * What it has received or paid for it keeps: giving up an office takes nothing away, and a
- * badge handed back can go to anyone else at the company at no charge. Each office counts once
+ * badge handed back can go to anyone else at the company at no charge. Badges can also be bought
+ * ahead: a charge for the built-in price list item adds as many as it is for (billing.js keeps
+ * those in step with the charge, and takes them away if it's deleted). Each office counts once
  * for a company, so renewing a lease adds nothing, but a different office adds its desks. A
  * lost badge still counts, so the badge that replaces it is paid for.
  *
  * Kept as a ledger (badge_allotments): desks, paid, lost and adjust (by hand, with a note).
  * Its sum is the badges the company may hold; the tenant badges its people hold now (not those
  * lent for the day) are the ones in use. A company with nothing in its ledger isn't counted yet
- * (no desks set on its offices): its badges are given out as before.
+ * (no desks set on its offices, none bought): its badges are given out as before.
  */
 const KINDS = ["desks", "paid", "lost", "adjust"];
 const MAX_ADJUST = 1000;
@@ -107,13 +109,17 @@ function createAllotments({ db, billing, today, now = Date.now }) {
     let charge = null;
     db.transaction(() => {
       if (cost > 0) {
+        // The charge adds the badge; this says which it was.
+        const item = billing.badgeItem();
         charge = billing.createCharge({
-          companyId, date: today(), description: `Additional tenant badge${badgeLabel ? ` ${badgeLabel}` : ""}${holderName ? ` (${holderName})` : ""}`,
-          quantity: 1, unit: "each", rate: cost, notes: "Beyond the badges its desks and earlier badges allow."
+          companyId, date: today(), itemId: item.id, description: `${item.name}${badgeLabel ? ` ${badgeLabel}` : ""}${holderName ? ` (${holderName})` : ""}`,
+          quantity: 1, rate: cost, notes: "Beyond the badges its desks and earlier badges allow."
         }, { by });
+        raw.prepare("UPDATE badge_allotments SET badge_label = ?, holder_name = ? WHERE kind = 'paid' AND charge_id = ?").run(badgeLabel, holderName, charge.id);
+      } else {
+        raw.prepare("INSERT INTO badge_allotments (company_id, kind, quantity, badge_label, holder_name, created_by, created_at) VALUES (?, 'paid', 1, ?, ?, ?, ?)")
+          .run(companyId, badgeLabel, holderName, by, now());
       }
-      raw.prepare("INSERT INTO badge_allotments (company_id, kind, quantity, badge_label, holder_name, charge_id, created_by, created_at) VALUES (?, 'paid', 1, ?, ?, ?, ?, ?)")
-        .run(companyId, badgeLabel, holderName, charge ? charge.id : null, by, now());
     });
     return { charge, allotment: summary(companyId) };
   }

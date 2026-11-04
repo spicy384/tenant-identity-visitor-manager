@@ -567,6 +567,55 @@ async function openBadge(id, onChange = () => {}) {
   if (location.hash.startsWith("#badge/")) history.back();
 }
 
+// --- a person's badge in the people tables ----------------------------------------------------------------
+
+/** The badges a person holds, each opening its dialog; with none of their own, a way to assign one. */
+function personBadgeCell(p, onChange) {
+  const held = p.heldBadges || [];
+  const stop = (e) => e.stopPropagation();
+  return h("div", { class: "nowrap" }, held.map((b) => h("div", {},
+      h("a", { href: `#badge/${b.id}`, class: "mono", text: b.label, onclick: stop }),
+      b.temporary ? h("span", { class: "muted small-text", text: " lent today" }) : null)),
+    canEditBadges() && p.active && !held.some((b) => !b.temporary)
+      ? h("button", { type: "button", class: "link-btn small-text", text: "Assign badge", onclick: async (e) => {
+        stop(e);
+        if (await assignBadgeToPerson(p)) onChange();
+      } })
+      : null);
+}
+
+/** Picks a badge for a person from those they may hold, and gives it. Resolves true when given. */
+async function assignBadgeToPerson(p) {
+  let data;
+  try {
+    data = await api(`/api/badge-holders/person/${p.id}`);
+  } catch (error) {
+    toast(error.message, "error");
+    return false;
+  }
+  if (!data.available.length) {
+    toast(`No badge is free that ${personName(p)} may hold.`, "error");
+    return false;
+  }
+  const pick = badgePicker(data.available, { suggested: data.suggested, filterable: data.available.length > 8 });
+  const given = await openDialog({
+    title: `Assign a badge to ${personName(p)}`,
+    wide: true,
+    body: h("div", { class: "badge-give" }, suggestedBadge(data.suggested), h("div", { class: "stack" }, pick.node)),
+    actions: [
+      { label: "Cancel", value: null },
+      { label: "Assign badge", kind: "primary", onClick: async () => {
+        const chosen = pick.chosen();
+        if (!chosen) throw new Error("Choose a badge.");
+        // Declining the charge for an extra badge leaves them without one.
+        return (await giveBadge(chosen.id, { kind: "person", holderId: p.id })) ? chosen : null;
+      } }
+    ]
+  });
+  if (given) toast(`Badge ${given.label} given to ${personName(p)}.`);
+  return Boolean(given);
+}
+
 // --- the badge section on a person's or visitor's dialog -----------------------------------------------
 
 /** Their badges now, a way to give them one they may hold, and the ones they had before. */

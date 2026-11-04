@@ -50,10 +50,11 @@ $("companies-add").addEventListener("click", async () => {
 });
 
 /** The people table's columns: what the person sees of a few useful fields. */
-function peopleColumns(withCompany = false) {
+function peopleColumns(withCompany = false, onBadge = () => {}) {
   const visible = new Set(state.schema.person.map((f) => f.key));
   const cols = [{ label: "Name", cell: (p) => h("strong", { text: personName(p) }) }];
   if (withCompany) cols.push({ label: "Company", cell: (p) => p.companyName || "" });
+  if (canReadBadges()) cols.push({ label: "Badge", cell: (p) => personBadgeCell(p, onBadge) });
   if (visible.has("jobTitle")) cols.push({ label: "Job title", cell: (p) => p.jobTitle || "" });
   if (visible.has("email")) cols.push({ label: "Email", cell: (p) => p.email || "" });
   if (visible.has("workPhone") || visible.has("mobile")) cols.push({ label: "Phone", cell: (p) => p.workPhone || p.mobile || "" });
@@ -66,8 +67,8 @@ function peopleColumns(withCompany = false) {
  * The people table. With `selection` ({ has(id), set(ids, on) }), each row and the header
  * get a tick box for choosing several (21-bulk.js).
  */
-function peopleTable(people, { withCompany = false, onOpen, selection = null, empty = "No people yet." } = {}) {
-  const cols = peopleColumns(withCompany);
+function peopleTable(people, { withCompany = false, onOpen, onBadge = () => {}, selection = null, empty = "No people yet." } = {}) {
+  const cols = peopleColumns(withCompany, onBadge);
   const tick = (checked, label, onToggle) => {
     const box = h("input", { type: "checkbox", "aria-label": label });
     box.checked = checked;
@@ -143,6 +144,7 @@ async function showCompanyDetail(id) {
     title.textContent = `People (${shown.length})`;
     const fresh = peopleTable(shown, {
       onOpen: (p) => openPerson(p.id, () => showCompanyDetail(id)),
+      onBadge: () => showCompanyDetail(id),
       empty: inactive && !showBox.checked ? `No active people. Tick Show inactive to see the ${inactive === 1 ? "one inactive person" : `${inactive} inactive people`}.` : "No people yet."
     });
     if (table) table.replaceWith(fresh);

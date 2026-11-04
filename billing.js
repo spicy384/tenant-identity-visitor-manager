@@ -27,7 +27,7 @@ const DEFAULT_SETTINGS = {
   invoicePrefix: "INV-",
   nextNumber: 1001,
   footer: "",
-  // What a tenant badge past a company's allotment costs (badge-allotments.js).
+  // What a tenant badge costs to start with; then it is the built-in price list item's rate.
   badgePrice: 20,
   qb: { arAccount: "Accounts Receivable", rentItem: "Rent", rentAccount: "Rental Income", chargeAccount: "Other Income", otherItem: "Other charges", depositAccount: "Undeposited Funds" }
 };
@@ -49,15 +49,34 @@ const addDays = (date, days) => {
 };
 const daysBetween = (a, b) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000);
 
+// The built-in price list item for tenant badges: a charge for it adds that many to the company's.
+const BADGE_ITEM_KIND = "tenant_badge";
+const BADGE_ITEM_NAME = "Additional tenant badge";
+const MAX_BADGES_AT_ONCE = 1000;
+
 function createBilling({ db, leases, directory, now = Date.now }) {
   const raw = db.raw;
   const today = () => leases.today();
+
+  const badgeItemRow = () => raw.prepare("SELECT * FROM charge_items WHERE kind = ?").get(BADGE_ITEM_KIND);
+
+  // The built-in item, once, at the price set so far (an item already of that name becomes it).
+  // Extra badges already charged are charges for it from then on.
+  if (!badgeItemRow()) {
+    db.transaction(() => {
+      const rate = db.readDoc("billing", {})?.badgePrice ?? DEFAULT_SETTINGS.badgePrice;
+      const same = raw.prepare("SELECT id FROM charge_items WHERE name = ?").get(BADGE_ITEM_NAME);
+      if (same) raw.prepare("UPDATE charge_items SET kind = ?, rate = ?, active = 1 WHERE id = ?").run(BADGE_ITEM_KIND, rate, same.id);
+      else raw.prepare("INSERT INTO charge_items (name, unit, rate, active, position, kind, created_at) VALUES (?, 'each', ?, 1, (SELECT coalesce(max(position), -1) + 1 FROM charge_items), ?, ?)").run(BADGE_ITEM_NAME, rate, BADGE_ITEM_KIND, now());
+      raw.prepare("UPDATE charges SET item_id = ? WHERE item_id IS NULL AND id IN (SELECT charge_id FROM badge_allotments WHERE kind = 'paid' AND charge_id IS NOT NULL)").run(badgeItemRow().id);
+    });
+  }
 
   // --- settings --------------------------------------------------------------------------------------
 
   function settings() {
     const s = db.readDoc("billing", {});
-    return { ...DEFAULT_SETTINGS, ...s, qb: { ...DEFAULT_SETTINGS.qb, ...(s.qb || {}) } };
+    return { ...DEFAULT_SETTINGS, ...s, badgePrice: badgeItemRow().rate, qb: { ...DEFAULT_SETTINGS.qb, ...(s.qb || {}) } };
   }
 
   function saveSettings(input = {}) {
@@ -66,7 +85,8 @@ function createBilling({ db, leases, directory, now = Date.now }) {
     for (const k of ["issuerName", "invoicePrefix"]) if (input[k] !== undefined) out[k] = String(input[k] ?? "").trim().slice(0, 120);
     for (const k of ["issuerAddress", "remitTo", "footer"]) if (input[k] !== undefined) out[k] = String(input[k] ?? "").trim().slice(0, 1000);
     if (input.termsDays !== undefined) out.termsDays = numberInput(input.termsDays, "payment terms (days)", { max: 365 });
-    if (input.badgePrice !== undefined) out.badgePrice = Math.round(numberInput(input.badgePrice, "price of an extra tenant badge", { max: 10000 }) * 100) / 100;
+    if (input.badgePrice !== undefined) raw.prepare("UPDATE charge_items SET rate = ? WHERE kind = ?").run(Math.round(numberInput(input.badgePrice, "price of an extra tenant badge", { max: 10000 }) * 100) / 100, BADGE_ITEM_KIND);
+    delete out.badgePrice;
     if (input.nextNumber !== undefined) {
       const n = numberInput(input.nextNumber, "next invoice number", { min: 1, max: 999999999 });
       if (!Number.isInteger(n)) throw fail(400, "The next invoice number is a whole number.");
@@ -89,7 +109,7 @@ function createBilling({ db, leases, directory, now = Date.now }) {
 
   // --- the price list ----------------------------------------------------------------------------------
 
-  const itemRow = (r) => r && { id: r.id, name: r.name, unit: r.unit, rate: r.rate, active: Boolean(r.active), position: r.position, used: r.used ?? undefined };
+  const itemRow = (r) => r && { id: r.id, name: r.name, unit: r.unit, rate: r.rate, active: Boolean(r.active), position: r.position, kind: r.kind || null, builtIn: Boolean(r.kind), used: r.used ?? undefined };
   const ITEM_SELECT = "SELECT i.*, (SELECT count(*) FROM charges c WHERE c.item_id = i.id) AS used FROM charge_items i";
 
   function items({ includeInactive = true } = {}) {
@@ -121,6 +141,7 @@ function createBilling({ db, leases, directory, now = Date.now }) {
     const existing = itemRow(raw.prepare(`${ITEM_SELECT} WHERE i.id = ?`).get(Number(id)));
     if (!existing) throw fail(404, "No such item.");
     const next = { ...existing, ...itemInput(input, existing) };
+    if (existing.builtIn && !next.active) throw fail(409, `${existing.name} is built in: it can't be turned off. Tenant badges charged for add to what the company may hold.`);
     raw.prepare("UPDATE charge_items SET name = ?, unit = ?, rate = ?, active = ? WHERE id = ?").run(next.name, next.unit, next.rate, next.active ? 1 : 0, existing.id);
     return itemRow(raw.prepare(`${ITEM_SELECT} WHERE i.id = ?`).get(existing.id));
   }
@@ -129,6 +150,7 @@ function createBilling({ db, leases, directory, now = Date.now }) {
   function removeItem(id) {
     const existing = itemRow(raw.prepare(`${ITEM_SELECT} WHERE i.id = ?`).get(Number(id)));
     if (!existing) throw fail(404, "No such item.");
+    if (existing.builtIn) throw fail(409, `${existing.name} is built in: it can't be removed.`);
     if (existing.used) throw fail(409, `${existing.name} has been charged ${existing.used} time${existing.used === 1 ? "" : "s"}; turn it off instead.`);
     raw.prepare("DELETE FROM charge_items WHERE id = ?").run(existing.id);
     return existing;
@@ -223,12 +245,35 @@ function createBilling({ db, leases, directory, now = Date.now }) {
     return out;
   }
 
+  /** A charge for tenant badges is for a whole number of them, for a company that wears them. */
+  function checkBadgeCharge(itemId, companyId, quantity) {
+    if (itemId !== badgeItemRow().id) return;
+    if (!Number.isInteger(Number(quantity)) || quantity > MAX_BADGES_AT_ONCE) throw fail(400, `Tenant badges are charged in whole numbers, up to ${MAX_BADGES_AT_ONCE} at once.`);
+    if (raw.prepare("SELECT building_staff FROM companies WHERE id = ?").get(companyId)?.building_staff) throw fail(400, "Building staff wear personnel badges, which aren't charged for.");
+  }
+
+  /** Keeps what a charge adds to its company's tenant badges in step with it: as many as it is for, or none if it's no longer for them. */
+  function syncBadges(chargeId, by = null) {
+    const c = raw.prepare("SELECT company_id, item_id, quantity FROM charges WHERE id = ?").get(chargeId);
+    if (c.item_id !== badgeItemRow().id) {
+      raw.prepare("DELETE FROM badge_allotments WHERE kind = 'paid' AND charge_id = ?").run(chargeId);
+      return;
+    }
+    const changed = raw.prepare("UPDATE badge_allotments SET company_id = ?, quantity = ? WHERE kind = 'paid' AND charge_id = ?").run(c.company_id, c.quantity, chargeId).changes;
+    if (!changed) raw.prepare("INSERT INTO badge_allotments (company_id, kind, quantity, charge_id, created_by, created_at) VALUES (?, 'paid', ?, ?, ?, ?)").run(c.company_id, c.quantity, chargeId, by, now());
+  }
+
   function createCharge(input = {}, { by = null } = {}) {
     const v = chargeInput(input);
+    checkBadgeCharge(v.itemId ?? null, v.company.id, v.quantity);
     const amount = money(v.quantity * v.rate);
     const t = now();
-    const id = raw.prepare(`INSERT INTO charges (company_id, company_name, date, item_id, description, quantity, unit, rate, amount, notes, created_by, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.company.id, v.company.name, v.date, v.itemId ?? null, v.description, v.quantity, v.unit ?? null, v.rate, amount, v.notes ?? null, by, t, t).lastInsertRowid;
+    let id;
+    db.transaction(() => {
+      id = raw.prepare(`INSERT INTO charges (company_id, company_name, date, item_id, description, quantity, unit, rate, amount, notes, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.company.id, v.company.name, v.date, v.itemId ?? null, v.description, v.quantity, v.unit ?? null, v.rate, amount, v.notes ?? null, by, t, t).lastInsertRowid;
+      syncBadges(id, by);
+    });
     return getCharge(id);
   }
 
@@ -238,8 +283,12 @@ function createBilling({ db, leases, directory, now = Date.now }) {
     if (existing.billed) throw fail(409, `This charge is on invoice ${existing.invoiceNumber || "(a draft)"}; take it off the invoice first.`);
     const v = chargeInput(input, existing);
     const next = { ...existing, ...v, companyId: v.company ? v.company.id : existing.companyId, companyName: v.company ? v.company.name : existing.companyName };
-    raw.prepare("UPDATE charges SET company_id = ?, company_name = ?, date = ?, item_id = ?, description = ?, quantity = ?, unit = ?, rate = ?, amount = ?, notes = ?, updated_at = ? WHERE id = ?")
-      .run(next.companyId, next.companyName, next.date, next.itemId ?? null, next.description, next.quantity, next.unit ?? null, next.rate, money(next.quantity * next.rate), next.notes ?? null, now(), existing.id);
+    checkBadgeCharge(next.itemId ?? null, next.companyId, next.quantity);
+    db.transaction(() => {
+      raw.prepare("UPDATE charges SET company_id = ?, company_name = ?, date = ?, item_id = ?, description = ?, quantity = ?, unit = ?, rate = ?, amount = ?, notes = ?, updated_at = ? WHERE id = ?")
+        .run(next.companyId, next.companyName, next.date, next.itemId ?? null, next.description, next.quantity, next.unit ?? null, next.rate, money(next.quantity * next.rate), next.notes ?? null, now(), existing.id);
+      syncBadges(existing.id, existing.createdBy);
+    });
     return getCharge(existing.id);
   }
 
@@ -247,7 +296,10 @@ function createBilling({ db, leases, directory, now = Date.now }) {
     const existing = getCharge(id);
     if (!existing) throw fail(404, "No such charge.");
     if (existing.billed) throw fail(409, `This charge is on invoice ${existing.invoiceNumber || "(a draft)"}; take it off the invoice first.`);
-    raw.prepare("DELETE FROM charges WHERE id = ?").run(existing.id);
+    db.transaction(() => {
+      raw.prepare("DELETE FROM badge_allotments WHERE kind = 'paid' AND charge_id = ?").run(existing.id);
+      raw.prepare("DELETE FROM charges WHERE id = ?").run(existing.id);
+    });
     return existing;
   }
 
@@ -693,7 +745,7 @@ function createBilling({ db, leases, directory, now = Date.now }) {
   }
 
   return {
-    settings, saveSettings,
+    settings, saveSettings, badgeItem: () => itemRow(badgeItemRow()),
     items, createItem, updateItem, removeItem,
     listCharges, getCharge, createCharge, updateCharge, removeCharge,
     listInvoices, getInvoice, generate, createInvoice, addLine, removeLine, updateInvoice, issue, voidInvoice, removeDraft, markSynced, invoiceByQbo,

@@ -338,6 +338,13 @@ function peopleOut(ctx, records) {
   return records.map((r) => access.project(ctx, "person", r, list));
 }
 
+/** People with the badges each holds now (heldBadges), for those who may see badges. */
+function withHeldBadges(ctx, people) {
+  if (!access.canReadBadges(ctx)) return people;
+  const held = badges.heldByPeople(people.map((p) => p.id));
+  return people.map((p) => ({ ...p, heldBadges: held.get(p.id) || [] }));
+}
+
 /** One record with its own one-record fields too, as a detail page or a save answers. */
 function recordOut(ctx, entity, record) {
   const out = access.project(ctx, entity, record, access.fieldsFor(ctx, entity, { recordId: record.id }));
@@ -471,7 +478,7 @@ app.get("/api/companies/:id", readDir, (req, res) => {
   res.json({
     company: { ...access.project(req.ctx, "company", record, list), peopleCount: record.people },
     fields: publicFields(list),
-    people: peopleOut(req.ctx, people.records)
+    people: withHeldBadges(req.ctx, peopleOut(req.ctx, people.records))
   });
 });
 
@@ -541,7 +548,7 @@ app.get("/api/people", readDir, (req, res) => {
     limit: Math.min(positiveInt(req.query.limit, 500), 5000),
     offset: Math.max(0, Number(str(req.query.offset)) || 0)
   });
-  res.json({ people: peopleOut(req.ctx, records), total });
+  res.json({ people: withHeldBadges(req.ctx, peopleOut(req.ctx, records)), total });
 });
 
 app.get("/api/people/:id", readDir, (req, res) => {
@@ -1593,7 +1600,7 @@ app.use(createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin,
 // level list the badge routes answer included.
 app.use(clearanceRoutes.router);
 app.use(createFacilityRoutes({ access, facilities, leases, directory, sites, auditFrom }));
-app.use(createFinanceRoutes({ access, leases, billing, quickbooks, directory, auditFrom, appUrl: APP_URL, branding }));
+app.use(createFinanceRoutes({ access, leases, billing, allotments, quickbooks, directory, auditFrom, appUrl: APP_URL, branding }));
 app.use(createInsuranceRoutes({ access, insurance, directory, auditFrom }));
 app.use(createBadgeRoutes({ access, badges, allotments, clearance, templates, events, visitors, directory, fields, admin, auditFrom, transaction: (fn) => db.transaction(fn) }));
 app.use(createSecurityMailRoutes({ access, reports: securityReports, mailbox: securityMailbox, admin, auditFrom,

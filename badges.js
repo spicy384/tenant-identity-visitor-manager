@@ -181,6 +181,19 @@ function createBadges({ db, clearance, now = Date.now }) {
       WHERE a.holder_kind = ? AND a.holder_id = ? ORDER BY a.returned_at IS NOT NULL, a.assigned_at DESC LIMIT ?`).all(kind, holderId, limit).map(assignmentRow);
   }
 
+  /** The badges each of these people holds now: Map(personId -> [{ id, label, temporary }]), theirs before any lent for the day. */
+  function heldByPeople(ids) {
+    const out = new Map();
+    if (!ids.length) return out;
+    const rows = raw.prepare(`SELECT a.holder_id, a.temporary, b.id, b.number, b.facility_code FROM badge_assignments a JOIN badges b ON b.id = a.badge_id
+      WHERE a.holder_kind = 'person' AND a.returned_at IS NULL AND a.holder_id IN (${inList(ids)}) ORDER BY a.temporary, a.assigned_at`).all(...ids);
+    for (const r of rows) {
+      if (!out.has(r.holder_id)) out.set(r.holder_id, []);
+      out.get(r.holder_id).push({ id: r.id, label: badgeLabel(r.facility_code, r.number), temporary: Boolean(r.temporary) });
+    }
+    return out;
+  }
+
   function openForHolder(kind, holderId) {
     return raw.prepare("SELECT b.number, b.facility_code FROM badge_assignments a JOIN badges b ON b.id = a.badge_id WHERE a.holder_kind = ? AND a.holder_id = ? AND a.returned_at IS NULL").all(kind, holderId).map((r) => badgeLabel(r.facility_code, r.number));
   }
@@ -548,7 +561,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     return [...out.values()];
   }
 
-  return { list, get, history, forHolder, openForHolder, create, createRange, update, remove, holder, refusal, availableFor, assign, recordForVisit, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
+  return { list, get, history, forHolder, openForHolder, heldByPeople, create, createRange, update, remove, holder, refusal, availableFor, assign, recordForVisit, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
 }
 
 module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES, FACILITY_CODE_RE, badgeLabel, RECORDED_NOTE };

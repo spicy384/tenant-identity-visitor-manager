@@ -275,19 +275,28 @@ async function loadCharges() {
   }));
 }
 
+/** A price list item's price: "$75.00 per hour", or "$20.00 each". */
+const itemPrice = (i) => `${fmtMoney(i.rate)} ${i.unit === "each" ? "each" : `per ${i.unit}`}`;
+
 /** The charge form: company, date, what (from the price list or one-off), quantity, rate, notes. */
 async function editCharge(charge) {
   const [companies, { items }] = await Promise.all([financeCompanies(), api("/api/charge-items")]);
   const itemOf = (id) => items.find((i) => String(i.id) === String(id));
   let opened = false;
+  const forBadges = (id) => itemOf(id)?.kind === "tenant_badge";
+  const badgeNote = h("p", { class: "message", hidden: true, text: "This adds the quantity to the tenant badges the company may hold, as soon as it's logged. Deleting the charge takes them away again." });
   const result = await formDialog({
     title: charge ? "Edit charge" : "Log a charge",
     fields: [
       { name: "companyId", label: "Company", type: "select", required: true, value: String(charge?.companyId || $("charges-company").value || ""), options: [{ value: "", label: "Choose a company" }, ...companies.map((c) => ({ value: String(c.id), label: c.name }))] },
       { name: "date", label: "Date", type: "date", required: true, value: charge?.date || localToday(), half: true },
       { name: "itemId", label: "What", type: "select", value: charge ? String(charge.itemId || "") : "", half: true,
-        options: [{ value: "", label: "Something else (one-off)" }, ...items.map((i) => ({ value: String(i.id), label: `${i.name} (${fmtMoney(i.rate)} per ${i.unit})` }))],
+        options: [{ value: "", label: "Something else (one-off)" }, ...items.map((i) => ({ value: String(i.id), label: `${i.name} (${itemPrice(i)})` }))],
         onChange: (input, inputs) => {
+          // Tenant badges come in whole numbers.
+          badgeNote.hidden = !forBadges(input.value);
+          inputs.quantity.step = forBadges(input.value) ? "1" : "any";
+          inputs.quantity.min = forBadges(input.value) ? "1" : "0.01";
           // Called once as the form opens: an edited charge keeps its own description and rate.
           if (!opened) { opened = true; return; }
           const item = itemOf(input.value);
@@ -297,6 +306,7 @@ async function editCharge(charge) {
             inputs.unit.value = item.unit;
           }
         } },
+      { node: badgeNote },
       { name: "description", label: "Description", required: true, value: charge?.description || "" },
       { name: "quantity", label: "Quantity or hours", type: "number", required: true, value: charge?.quantity ?? 1, half: true, step: "any", min: 0.01 },
       { name: "unit", label: "Unit", value: charge?.unit || "", half: true, placeholder: "hour, each…" },
@@ -310,11 +320,12 @@ async function editCharge(charge) {
     submitLabel: charge ? "Save" : "Log charge",
     onSubmit: async (v) => {
       const body = { companyId: Number(v.companyId), date: v.date, itemId: v.itemId ? Number(v.itemId) : null, description: v.description, quantity: v.quantity, unit: v.unit, rate: v.rate, notes: v.notes };
-      return (charge ? await api(`/api/charges/${charge.id}`, { method: "PUT", body }) : await api("/api/charges", { method: "POST", body })).charge;
+      const saved = charge ? await api(`/api/charges/${charge.id}`, { method: "PUT", body }) : await api("/api/charges", { method: "POST", body });
+      return { ...saved.charge, allotment: saved.allotment };
     }
   });
-  if (result === "deleted") toast("Charge deleted.");
-  else if (result) toast(charge ? "Charge saved." : `Logged ${fmtMoney(result.amount)} for ${result.companyName}.`);
+  if (result === "deleted") toast(forBadges(charge.itemId) ? "Charge deleted, and its tenant badges taken away." : "Charge deleted.");
+  else if (result) toast(`${charge ? "Charge saved." : `Logged ${fmtMoney(result.amount)} for ${result.companyName}.`}${result.allotment ? ` ${result.companyName} may now hold ${result.allotment.allowed} tenant badges.` : ""}`);
   return result;
 }
 
@@ -336,16 +347,17 @@ async function priceList() {
       items.length ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
         h("thead", {}, h("tr", {}, ["Item", "Rate", "", ""].map((t) => h("th", { text: t })))),
         h("tbody", {}, items.map((i) => h("tr", { class: i.active ? "" : "inactive" },
-          h("td", {}, h("strong", { text: i.name }), i.active ? null : h("span", { class: "badge muted", text: "Off" })),
-          h("td", { text: `${fmtMoney(i.rate)} per ${i.unit}` }),
+          h("td", {}, h("strong", { text: i.name }), i.active ? null : h("span", { class: "badge muted", text: "Off" }),
+            i.builtIn ? h("div", { class: "muted small-text", text: "Built in: a charge for it adds that many tenant badges to the company." }) : null),
+          h("td", { text: itemPrice(i) }),
           h("td", { class: "muted small-text", text: i.used ? `Charged ${i.used} time${i.used === 1 ? "" : "s"}` : "" }),
           h("td", {}, may ? h("div", { class: "btn-row" },
             h("button", { type: "button", class: "link-btn", text: "Edit", onclick: async () => { if (await editItem(i)) render(); } }),
-            h("button", { type: "button", class: "link-btn", text: i.active ? "Turn off" : "Turn on", onclick: async () => {
+            i.builtIn ? null : h("button", { type: "button", class: "link-btn", text: i.active ? "Turn off" : "Turn on", onclick: async () => {
               await api(`/api/charge-items/${i.id}`, { method: "PUT", body: { active: !i.active } });
               render();
             } }),
-            i.used ? null : h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: async () => {
+            i.used || i.builtIn ? null : h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: async () => {
               try {
                 await api(`/api/charge-items/${i.id}`, { method: "DELETE" });
                 render();

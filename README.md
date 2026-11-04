@@ -229,6 +229,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   number (giving a visitor their badge at check-in, reserving one), the code can be left out
   while the number is unique, given in its own box, or written in (101-12345); when the number
   is under several codes, the app names them and asks for the code.
+- **In the people tables** (a company's page, and Tenants > People), a **Badge** column shows
+  the badge each person holds, for those who see badges, with any lent for the day marked. **Assign badge**
+  there picks one for someone with no badge of their own, asking first when it would be an extra one.
 - **Who may hold what.** Personnel badges go to people of companies marked **Building
   staff**, tenant badges to everyone else's people, visitor badges to visitors. A badge with
   a clearance level goes only to someone whose clearance covers it. A badge can be given to
@@ -471,8 +474,14 @@ Home.
   anyone else at the company without a charge. Each office counts once for a company, so a
   renewal adds nothing, but a different office adds its desks, and an office that gains desks
   adds them. A lost badge still counts, so its replacement is an extra badge. Badges lent for
-  the day don't count, nor do building staff's personnel badges. A company isn't counted until
-  one of its offices has desks; until then its badges are given out as before. **Adjust** (Managers
+  the day don't count, nor do building staff's personnel badges. **Buying badges ahead:** log a
+  charge for **Additional tenant badge**, built into the price list, and its quantity is added to
+  what the company may hold as soon as it's logged, so those badges are given out without being
+  asked. Changing the charge changes the number; moving it to another company moves them; deleting it takes
+  them away, and if the company holds more than that the panel shows how many it is over. Voiding
+  an invoice doesn't: the charge stands. The item's rate is the Extra tenant badge price, and it
+  can't be turned off or removed. A company isn't counted until
+  one of its offices has desks or it has bought badges; until then its badges are given out as before. **Adjust** (Managers
   and Finance) adds badges, such as ones paid for before allotments were counted, or takes some
   away, with a reason; the panel's **History** lists every change.
 - **Charges** (Facilities > Charges): billable items and hours logged against a company: from

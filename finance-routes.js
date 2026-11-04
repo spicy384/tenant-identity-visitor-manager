@@ -31,7 +31,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const dollars = (n) => `${n < 0 ? "-" : ""}$${Math.abs(Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const longDate = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }) : "");
 
-function createFinanceRoutes({ access, leases, billing, quickbooks, directory, auditFrom, appUrl = "", branding = () => ({}) }) {
+function createFinanceRoutes({ access, leases, billing, allotments, quickbooks, directory, auditFrom, appUrl = "", branding = () => ({}) }) {
   const router = express.Router();
   const staffName = (req) => req.user?.displayName || req.user?.username || null;
   const need = (test, message) => (req, res, next) => (test(req.ctx) ? next() : res.status(403).json({ error: message }));
@@ -147,25 +147,39 @@ function createFinanceRoutes({ access, leases, billing, quickbooks, directory, a
     return charge;
   }
 
+  /** After a charge for tenant badges changed: the audit log says so, and the answer what the company may now hold. */
+  function badgesAfter(req, charge, was = null) {
+    const item = billing.badgeItem().id;
+    const isBadges = charge.itemId === item;
+    if (!isBadges && was?.itemId !== item) return null;
+    const allotment = allotments.summary(charge.companyId);
+    const before = was?.itemId === item ? was.quantity : 0;
+    const after = isBadges ? charge.quantity : 0;
+    if (before !== after || (was && was.companyId !== charge.companyId)) auditFrom(req, "badge.allotment", charge.companyName, `${before} to ${after} badges by this charge; now ${allotment.allowed} allowed`);
+    return allotment;
+  }
+
   router.post("/api/charges", editCharges, (req, res) => {
     companyParam(req, req.body?.companyId);
     const charge = billing.createCharge(req.body || {}, { by: staffName(req) });
     auditFrom(req, "charge.add", charge.companyName, `${charge.date}: ${charge.description}, ${charge.quantity} × $${charge.rate} = $${charge.amount}`);
-    res.json({ ok: true, charge });
+    res.json({ ok: true, charge, allotment: badgesAfter(req, charge) });
   });
 
   router.put("/api/charges/:id", editCharges, (req, res) => {
     visibleCharge(req, idOf(req));
     if (req.body?.companyId !== undefined) companyParam(req, req.body.companyId);
+    const was = billing.getCharge(idOf(req));
     const charge = billing.updateCharge(idOf(req), req.body || {});
     auditFrom(req, "charge.update", charge.companyName, `${charge.date}: ${charge.description}, ${charge.quantity} × $${charge.rate} = $${charge.amount}`);
-    res.json({ ok: true, charge });
+    res.json({ ok: true, charge, allotment: badgesAfter(req, charge, was) });
   });
 
   router.delete("/api/charges/:id", editCharges, (req, res) => {
     visibleCharge(req, idOf(req));
     const charge = billing.removeCharge(idOf(req));
     auditFrom(req, "charge.remove", charge.companyName, `${charge.date}: ${charge.description}, $${charge.amount}`);
+    if (charge.itemId === billing.badgeItem().id && charge.companyId) auditFrom(req, "badge.allotment", charge.companyName, `${charge.quantity} taken away with this charge; now ${allotments.summary(charge.companyId).allowed} allowed`);
     res.json({ ok: true });
   });
 

@@ -773,7 +773,9 @@ const ADDED_COLUMNS = [
   // When a lease's term commences, when not its start (null: the same); its yearly increases count from it.
   ["leases", "commencement_date", "TEXT"],
   // The site a visitor was added for at the desk: staff there can find them, whoever they're visiting.
-  ["visitors", "added_site_id", "INTEGER REFERENCES sites(id) ON DELETE SET NULL"]
+  ["visitors", "added_site_id", "INTEGER REFERENCES sites(id) ON DELETE SET NULL"],
+  // A price list item the app itself acts on: tenant_badge adds badges to the company charged.
+  ["charge_items", "kind", "TEXT"]
 ];
 
 /**

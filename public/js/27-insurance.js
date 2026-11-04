@@ -158,7 +158,7 @@ async function editCertificate(company, cert) {
 
 const ALLOTMENT_WORDS = {
   desks: (e) => (e.note ? e.note : `${e.officeName || "An office"}: ${e.quantity} ${e.quantity === 1 ? "desk" : "desks"}`),
-  paid: (e) => `Extra badge${e.badgeLabel ? ` ${e.badgeLabel}` : ""}${e.holderName ? ` for ${e.holderName}` : ""}${e.chargeId ? ", charged" : ""}`,
+  paid: (e) => (e.badgeLabel ? `Extra badge ${e.badgeLabel}${e.holderName ? ` for ${e.holderName}` : ""}` : `Bought ${e.quantity === 1 ? "an extra badge" : `${e.quantity} extra badges`}`) + (e.chargeId ? ", charged" : ""),
   lost: (e) => `Badge${e.badgeLabel ? ` ${e.badgeLabel}` : ""} lost${e.holderName ? ` by ${e.holderName}` : ""}`,
   adjust: (e) => e.note || "Adjusted"
 };
@@ -176,7 +176,7 @@ function companyBadgeAllotmentPanel(company) {
     const adjust = canEditCharges() ? h("button", { type: "button", class: "secondary small", text: "Adjust", onclick: async () => { if (await adjustAllotment(a)) refresh(); } }) : null;
     const head = h("div", { class: "panel-head" }, h("h3", { text: "Tenant badges" }), adjust ? h("div", { class: "btn-row" }, adjust) : null);
     if (!a.counted) {
-      panel.replaceChildren(head, h("p", { class: "muted small-text", text: "Not counted yet. Set the desks on its offices (Facilities > Rooms) and each desk gives it a tenant badge; past those, each badge is charged. Until then its badges are given out without a charge." }));
+      panel.replaceChildren(head, h("p", { class: "muted small-text", text: "Not counted yet. Set the desks on its offices (Facilities > Rooms) and each desk gives it a tenant badge; past those, each badge is charged. Log a charge for Additional tenant badge to add ones it buys. Until then its badges are given out without a charge." }));
       return;
     }
     const standing = a.over ? h("span", { class: "badge bad", text: `${a.over} over` }) : h("span", { class: `badge ${a.free ? "ok" : "warn"}`, text: a.free ? `${a.free} free to give` : "None free" });

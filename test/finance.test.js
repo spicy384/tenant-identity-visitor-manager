@@ -382,6 +382,53 @@ async function main() {
   r = await finance.put("/api/finance/settings", { badgePrice: 25 });
   check("allotment: Finance sets the price of an extra badge", r.status === 200 && (await finance.get("/api/finance/settings")).data.settings.badgePrice === 25, JSON.stringify(r.data).slice(0, 200));
 
+  // --- the badge each person holds, in the people tables --------------------------------------------------------------
+  const heldOf = (list, person) => list.find((p) => p.id === person.id).heldBadges;
+  let peopleNow = (await desk.get(`/api/companies/${hooli.id}`)).data.people;
+  check("people: a company's list has the badge each holds", heldOf(peopleNow, staff[8]).map((x) => x.label).join() === "T-100" && heldOf(peopleNow, staff[0]).length === 0, JSON.stringify(peopleNow[0]).slice(0, 300));
+  check("people: and the people page", heldOf((await desk.get(`/api/people?companyId=${hooli.id}`)).data.people, staff[8])[0].id === stock[0].id);
+  check("people: not for those who don't see badges", (await finance.get(`/api/companies/${hooli.id}`)).data.people.every((p) => p.heldBadges === undefined) && (await finance.get(`/api/people?companyId=${hooli.id}`)).data.people.every((p) => p.heldBadges === undefined));
+  check("people: a viewer who sees badges sees them", heldOf((await viewer.get(`/api/companies/${hooli.id}`)).data.people, staff[8]).length === 1);
+  const lentOne = (await admin.post("/api/badges", { number: "TMP-9", type: "tenant", temporary: true })).data.badge;
+  await desk.post(`/api/badges/${lentOne.id}/assign`, { kind: "person", holderId: staff[8].id, replacesBadgeId: stock[0].id });
+  peopleNow = (await desk.get(`/api/companies/${hooli.id}`)).data.people;
+  check("people: theirs first, one lent for the day marked", heldOf(peopleNow, staff[8]).map((x) => `${x.label}:${x.temporary}`).join() === "T-100:false,TMP-9:true", JSON.stringify(heldOf(peopleNow, staff[8])));
+  await desk.post(`/api/badges/${lentOne.id}/return`, { outcome: "returned" });
+
+  // --- buying tenant badges with a charge ------------------------------------------------------------------------------
+  const badgeItem = (await manager.get("/api/charge-items")).data.items.find((i) => i.builtIn);
+  check("buying: built into the price list, at the badge price", badgeItem?.kind === "tenant_badge" && badgeItem.name === "Additional tenant badge" && badgeItem.rate === 25 && badgeItem.unit === "each", JSON.stringify(badgeItem));
+  check("buying: it can't be removed or turned off", (await manager.del(`/api/charge-items/${badgeItem.id}`)).status === 409 && (await manager.put(`/api/charge-items/${badgeItem.id}`, { active: false })).status === 409);
+  check("buying: its rate is the badge price, either way", (await finance.put(`/api/charge-items/${badgeItem.id}`, { rate: 30 })).data.item?.rate === 30 && (await finance.get("/api/finance/settings")).data.settings.badgePrice === 30);
+  await finance.put("/api/finance/settings", { badgePrice: 20 });
+  check("buying: and the other way", (await manager.get("/api/charge-items")).data.items.find((i) => i.builtIn).rate === 20);
+  const heldBefore = (await allotment()).allowed;
+  r = await manager.post("/api/charges", { companyId: hooli.id, date: "2026-10-05", itemId: badgeItem.id, quantity: 3 });
+  const bought = r.data.charge;
+  a = await allotment();
+  check("buying: the charge adds that many, at the rate", r.status === 200 && bought.amount === 60 && bought.description === "Additional tenant badge" && a.allowed === heldBefore + 3 && r.data.allotment.allowed === a.allowed, JSON.stringify(r.data).slice(0, 300));
+  const boughtEntry = (await desk.get(`/api/companies/${hooli.id}/badge-allotment`)).data.allotment.entries.find((e) => e.chargeId === bought.id);
+  check("buying: its ledger says so", boughtEntry?.kind === "paid" && boughtEntry.quantity === 3 && boughtEntry.createdBy === "manny", JSON.stringify(boughtEntry));
+  check("buying: and the audit log", (await admin.get("/api/audit?action=badge.allotment")).data.entries.some((e) => e.target === "Hooli" && /0 to 3 badges/.test(e.detail)));
+  check("buying: whole badges only", (await manager.post("/api/charges", { companyId: hooli.id, date: "2026-10-05", itemId: badgeItem.id, quantity: 1.5 })).status === 400);
+  const staffCo = (await admin.post("/api/companies", { name: "Building Crew", buildingStaff: true, sites: [{ siteId: harbor.id }] })).data.company;
+  check("buying: not for building staff", (await manager.post("/api/charges", { companyId: staffCo.id, date: "2026-10-05", itemId: badgeItem.id, quantity: 1 })).status === 400);
+  r = await manager.put(`/api/charges/${bought.id}`, { quantity: 2 });
+  check("buying: a changed quantity changes the number", r.data.charge.amount === 40 && (await allotment()).allowed === heldBefore + 2);
+  const newCo = await mk("Newco");
+  r = await manager.put(`/api/charges/${bought.id}`, { companyId: newCo.id });
+  const newCoAllotment = (await desk.get(`/api/companies/${newCo.id}/badge-allotment`)).data.allotment;
+  check("buying: moved to another company, they go with it, and it's counted from then on", (await allotment()).allowed === heldBefore && newCoAllotment.allowed === 2 && newCoAllotment.counted === true, JSON.stringify(newCoAllotment).slice(0, 200));
+  r = await manager.put(`/api/charges/${bought.id}`, { companyId: hooli.id, itemId: null, description: "Something else" });
+  check("buying: no longer for badges, they're taken away", r.status === 200 && (await allotment()).allowed === heldBefore && !(await desk.get(`/api/companies/${hooli.id}/badge-allotment`)).data.allotment.entries.some((e) => e.chargeId === bought.id));
+  r = await manager.put(`/api/charges/${bought.id}`, { itemId: badgeItem.id, quantity: 4 });
+  check("buying: for badges again, they're back", r.status === 200 && (await allotment()).allowed === heldBefore + 4);
+  check("buying: deleted, they're gone", (await manager.del(`/api/charges/${bought.id}`)).status === 200 && (await allotment()).allowed === heldBefore);
+  const extraCharge = (await hooliCharges()).find((c) => /T-107/.test(c.description));
+  check("buying: an extra badge given at the desk is a charge for the same item, its badge named in the ledger", extraCharge.itemId === badgeItem.id
+    && (await desk.get(`/api/companies/${hooli.id}/badge-allotment`)).data.allotment.entries.some((e) => e.chargeId === extraCharge.id && e.quantity === 1 && e.badgeLabel === "T-107"));
+  check("buying: other price list charges add none", (await manager.post("/api/charges", { companyId: hooli.id, date: "2026-10-05", itemId: hvac.id, quantity: 2 })).data.allotment === null && (await allotment()).allowed === heldBefore);
+
   // --- certificates of insurance -------------------------------------------------------------------------------------
   const pdfUrl = `data:application/pdf;base64,${Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF").toString("base64")}`;
   const inDays = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
