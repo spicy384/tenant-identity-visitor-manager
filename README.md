@@ -474,8 +474,9 @@ Home.
   anyone else at the company without a charge. Each office counts once for a company, so a
   renewal adds nothing, but a different office adds its desks, and an office that gains desks
   adds them. A lost badge still counts, so its replacement is an extra badge. Badges lent for
-  the day don't count, nor do building staff's personnel badges. **Buying badges ahead:** log a
-  charge for **Additional tenant badge**, built into the price list, and its quantity is added to
+  the day don't count, nor do building staff's personnel badges. **Buying badges ahead:** **Add badges**
+  on the panel (Managers and Finance) asks how many and charges for them, or log a
+  charge for **Additional tenant badge**, built into the price list, which is the same thing: its quantity is added to
   what the company may hold as soon as it's logged, so those badges are given out without being
   asked. Changing the charge changes the number; moving it to another company moves them; deleting it takes
   them away, and if the company holds more than that the panel shows how many it is over. Voiding

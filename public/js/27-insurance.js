@@ -174,9 +174,10 @@ function companyBadgeAllotmentPanel(company) {
       return;
     }
     const adjust = canEditCharges() ? h("button", { type: "button", class: "secondary small", text: "Adjust", onclick: async () => { if (await adjustAllotment(a)) refresh(); } }) : null;
-    const head = h("div", { class: "panel-head" }, h("h3", { text: "Tenant badges" }), adjust ? h("div", { class: "btn-row" }, adjust) : null);
+    const add = canEditCharges() ? h("button", { type: "button", class: "primary small", text: "Add badges", onclick: async () => { if (await addBadges(a)) refresh(); } }) : null;
+    const head = h("div", { class: "panel-head" }, h("h3", { text: "Tenant badges" }), adjust ? h("div", { class: "btn-row" }, adjust, add) : null);
     if (!a.counted) {
-      panel.replaceChildren(head, h("p", { class: "muted small-text", text: "Not counted yet. Set the desks on its offices (Facilities > Rooms) and each desk gives it a tenant badge; past those, each badge is charged. Log a charge for Additional tenant badge to add ones it buys. Until then its badges are given out without a charge." }));
+      panel.replaceChildren(head, h("p", { class: "muted small-text", text: "Not counted yet. Set the desks on its offices (Facilities > Rooms) and each desk gives it a tenant badge; past those, each badge is charged. Add badges charges it for ones it buys. Until then its badges are given out without a charge." }));
       return;
     }
     const standing = a.over ? h("span", { class: "badge bad", text: `${a.over} over` }) : h("span", { class: `badge ${a.free ? "ok" : "warn"}`, text: a.free ? `${a.free} free to give` : "None free" });
@@ -197,6 +198,48 @@ function companyBadgeAllotmentPanel(company) {
       ledger);
   }).catch((error) => panel.replaceChildren(h("h3", { text: "Tenant badges" }), h("p", { class: "message error", text: error.message })));
   return panel;
+}
+
+/** Adds badges a company buys: a charge for the built-in item, for its next invoice. Resolves to the charge. */
+async function addBadges(a) {
+  let item;
+  try {
+    item = (await api("/api/charge-items")).items.find((i) => i.kind === "tenant_badge");
+  } catch (error) {
+    toast(error.message, "error");
+    return null;
+  }
+  const total = h("p", { class: "full-row", role: "status" });
+  const showTotal = (inputs) => {
+    const n = Number(inputs.quantity.value);
+    const whole = Number.isInteger(n) && n > 0;
+    total.textContent = whole ? `${fmtMoney(n * Number(inputs.rate.value || 0))} on ${a.companyName}'s next invoice. It may then hold ${a.allowed + n} tenant badges.` : "";
+  };
+  let listening = false;
+  const saved = await formDialog({
+    title: `Add badges for ${a.companyName}`,
+    intro: h("p", { class: "muted", text: `${a.companyName} may hold ${a.allowed} tenant ${a.allowed === 1 ? "badge" : "badges"} and holds ${a.held}. These are added as soon as you save, and stay theirs to hand to anyone at the company.` }),
+    fields: [
+      { name: "quantity", label: "How many", type: "number", required: true, value: 1, step: "1", min: "1", max: "1000", half: true, autofocus: true, onChange: (input, inputs) => {
+        if (!listening) {
+          listening = true;
+          for (const el of [inputs.quantity, inputs.rate]) el.addEventListener("input", () => showTotal(inputs));
+        }
+        showTotal(inputs);
+      } },
+      { name: "rate", label: "Price each ($)", type: "number", required: true, value: item.rate, step: "0.01", min: "0", half: true },
+      { name: "date", label: "Date of the charge", type: "date", required: true, value: localToday(), half: true },
+      { node: total },
+      { name: "notes", label: "Notes (optional)", type: "textarea", rows: 2, hint: "Shown on the invoice with the charge." }
+    ],
+    submitLabel: "Add and charge",
+    onSubmit: async (v) => {
+      const r = await api("/api/charges", { method: "POST", body: { companyId: a.companyId, itemId: item.id, date: v.date, quantity: v.quantity, rate: v.rate, notes: v.notes } });
+      return { ...r.charge, allotment: r.allotment };
+    }
+  });
+  if (saved) toast(`Charged ${fmtMoney(saved.amount)}. ${a.companyName} may now hold ${saved.allotment.allowed} tenant badges.`);
+  return saved;
 }
 
 /** Adds badges to (or takes them from) what a company may hold, saying why. */
