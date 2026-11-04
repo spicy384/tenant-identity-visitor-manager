@@ -493,6 +493,14 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     res.json({ ok: true, badge: badgeOut(req, badges.get(badge.id)), recorded: true });
   });
 
+  /** A visitor badge kept for a visitor ahead of time must be one their clearance covers now. */
+  function refuseUncovered(req, badgeId, visitorId) {
+    const badge = badgeId ? badges.get(badgeId, { sites: req.ctx.sites }) : null;
+    const h = badge && badge.type === "visitor" ? badges.holder("visitor", visitorId) : null;
+    const why = h ? badges.clearanceRefusal(badge, h, { levelNames: seesLevels(req) }) : null;
+    if (why) throw fail(409, why);
+  }
+
   /** Reserves a visitor badge for a regular visitor ({ badgeId }, or null to release it). */
   router.put("/api/visitors/:id/reserved-badge", giveVisitorBadges, editVisitors, (req, res) => {
     const id = positiveInt(req.params.id);
@@ -501,6 +509,7 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const badgeId = req.body?.badgeId === null ? null : positiveInt(req.body?.badgeId);
     if (badgeId === null && req.body?.badgeId !== null) throw fail(400, "Choose the badge.");
     if (badgeId && !badges.get(badgeId, { sites: req.ctx.sites })) throw fail(404, "There's no such badge at your sites.");
+    refuseUncovered(req, badgeId, id);
     const after = visitors.setReservedBadge(id, badgeId, { sites: req.ctx.sites });
     auditFrom(req, "visitor.reserved_badge", `${after.firstName} ${after.lastName}`, after.reservedBadge ? `badge ${after.reservedBadge.label}` : `released ${before.reservedBadge?.label || ""}`.trim());
     res.json({ ok: true, reservedBadge: after.reservedBadge });
@@ -643,6 +652,7 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const badgeId = req.body?.badgeId === null ? null : positiveInt(req.body?.badgeId);
     if (badgeId === null && req.body?.badgeId !== null) throw fail(400, "Choose the badge.");
     if (badgeId && !badges.get(badgeId, { sites: req.ctx.sites })) throw fail(404, "There's no such badge at your sites.");
+    refuseUncovered(req, badgeId, visitorId);
     const event = events.setGuestBadge(positiveInt(req.params.id), visitorId, badgeId, { sites: req.ctx.sites });
     const guest = event.guests.find((g) => g.visitorId === visitorId);
     auditFrom(req, "event.guest_badge", event.title, `${guest.firstName} ${guest.lastName}: ${guest.badge ? `badge ${guest.badge.label}` : "no badge picked"}`);

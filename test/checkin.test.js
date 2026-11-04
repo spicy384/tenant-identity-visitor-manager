@@ -380,6 +380,39 @@ async function main() {
   check("contact: arriving at its site, it adds them and can still find them", r.status === 200 && (await harborDesk.get(`/api/visitors/${nia.id}`)).status === 200, JSON.stringify(r.data));
   r = await harborDesk.post("/api/checkins", { visitorId: nia.id, siteId: site.id, hostId: riverRita.id, purpose: "Conference room", idType: "Passport" });
   check("contact: and checks them in with that contact", r.status === 200 && r.data.visit.hostName === "Rita Riverton", JSON.stringify(r.data));
+  // --- a clearance decides what can be kept for a visitor ahead of time, too --------------------------
+  const levelIds = Object.fromEntries((await security.get("/api/config")).data.clearanceLevels.map((l) => [l.name, l.id]));
+  const levelBadge = async (number, level) => (await security.post("/api/badges", { number, type: "visitor", clearanceLevelId: level ? levelIds[level] : null })).data.badge;
+  const ofUncleared = await levelBadge("CL-U", null);
+  const ofSecret = await levelBadge("CL-S", "Secret");
+  const ofTs = await levelBadge("CL-TS", "TS");
+  const ofSci = await levelBadge("CL-SCI", "TS//SCI");
+  const ofFsp = await levelBadge("CL-FSP", "TS//SCI FSP");
+  const cleo = await guest("Cleo");
+  await security.post("/api/clearance/validate", { kind: "visitor", id: cleo.id, levelId: levelIds.TS });
+  const offered = (list) => list.map((b) => b.number).filter((n) => n.startsWith("CL-")).sort().join();
+  const atSite = (await desk.get(`/api/badge-holders/visitor/${cleo.id}?site=${site.id}`)).data.available;
+  check("clearance: TS is offered TS and below, on the list Pick badge shows", offered(atSite) === "CL-S,CL-TS,CL-U", offered(atSite));
+  const clearedEvent = (await desk.post("/api/events", { siteId: site.id, title: "Cleared review", date: new Date().toISOString().slice(0, 10), companyId: acme.id, hostId: host.id })).data.event;
+  await desk.post(`/api/events/${clearedEvent.id}/guests`, { visitorId: cleo.id });
+  const pickFor = (visitor, badge) => desk.put(`/api/events/${clearedEvent.id}/guests/${visitor.id}/badge`, { badgeId: badge.id });
+  r = await pickFor(cleo, ofFsp);
+  check("clearance: a higher badge can't be picked ahead for a guest, nor its level named to the desk", r.status === 409 && /doesn't cover badge CL-FSP/.test(r.data.error) && !/TS\/\/SCI/.test(r.data.error), JSON.stringify(r.data));
+  r = await desk.put(`/api/visitors/${cleo.id}/reserved-badge`, { badgeId: ofSci.id });
+  check("clearance: nor reserved", r.status === 409 && /doesn't cover badge CL-SCI/.test(r.data.error), JSON.stringify(r.data));
+  check("clearance: their own level can be picked", (await pickFor(cleo, ofTs)).status === 200);
+  check("clearance: and a lower one reserved", (await desk.put(`/api/visitors/${cleo.id}/reserved-badge`, { badgeId: ofSecret.id })).status === 200);
+  await desk.put(`/api/visitors/${cleo.id}/reserved-badge`, { badgeId: null });
+  const nora = await guest("Nora");
+  await desk.post(`/api/events/${clearedEvent.id}/guests`, { visitorId: nora.id });
+  r = await pickFor(nora, ofSecret);
+  check("clearance: with none validated, only uncleared ones", r.status === 409 && (await pickFor(nora, ofUncleared)).status === 200, JSON.stringify(r.data));
+  await security.post("/api/clearance/validate", { kind: "visitor", id: cleo.id, levelId: levelIds.Secret });
+  const cleoVisit = (await desk.post("/api/checkins", { visitorId: cleo.id, siteId: site.id, hostId: host.id, purpose: "Review", idType: "Passport" })).data.visit;
+  r = (await desk.get(`/api/visits/${cleoVisit.id}/badge-plan`)).data;
+  check("clearance: one kept before a lower validation can't be handed over, and check-in says why", r.assigned?.number === "CL-TS" && /doesn't cover badge CL-TS/.test(r.assigned.problem || "") && offered(r.available) === "CL-S,CL-U", JSON.stringify(r).slice(0, 300));
+  check("clearance: nor issued by number", (await desk.post(`/api/visits/${cleoVisit.id}/badge`, { number: "CL-TS" })).status === 409);
+
   check("contact: but not at a site that isn't its own", (await harborDesk.post("/api/checkins", { visitorId: nia.id, siteId: other.id, hostId: riverRita.id, purpose: "Conference room", idType: "Passport" })).status === 403);
 }
 

@@ -235,7 +235,10 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Who may hold what.** Personnel badges go to people of companies marked **Building
   staff**, tenant badges to everyone else's people, visitor badges to visitors. A badge with
   a clearance level goes only to someone whose clearance covers it. A badge can be given to
-  anyone, whatever site they work at. The app refuses anything else, whoever asks. Staff
+  anyone, whatever site they work at. The app refuses anything else, whoever asks, and that
+  includes a badge reserved for a visitor or picked ahead for an expected guest: Pick badge offers
+  only the ones that guest's clearance covers. A badge kept for someone whose clearance later
+  no longer covers it can't be handed over; check-in says so and asks for another. Staff
   limited to some sites see the badges valid at any of their sites.
 - **Clearance levels** are an ordered list under Settings > Badges and clearances: Secret <
   TS < TS//SCI < TS//SCI CI < TS//SCI FSP to start with; a higher level covers every level

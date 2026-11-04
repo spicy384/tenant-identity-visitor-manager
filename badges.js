@@ -357,6 +357,16 @@ function createBadges({ db, clearance, now = Date.now }) {
     return null;
   }
 
+  /** Why `h`'s clearance doesn't cover `badge`, or null when it does. Without `levelNames` the reason never names the level. */
+  function clearanceRefusal(badge, h, { levelNames = true } = {}) {
+    if (!badge.clearanceLevelId) return null;
+    const needed = clearance.level(badge.clearanceLevelId);
+    if (clearance.covers(clearance.effectiveLevel(h), needed)) return null;
+    const why = clearance.notCounting(h);
+    const level = levelNames ? ` (${needed.name})` : "";
+    return why ? `${h.name}'s clearance ${why}, so it doesn't cover badge ${badge.label}${level}.` : `${h.name}'s clearance doesn't cover badge ${badge.label}${level}.`;
+  }
+
   /**
    * Why `h` can't hold `badge`, or null when they can. Without `levelNames` (staff who don't see
    * clearance levels) the reason never names the level.
@@ -372,15 +382,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (h.blocked) return `${h.name} is blocked.`;
     if (badge.temporary && h.kind !== "person") return `Badge ${badge.label} is temporary, for people who forgot their own; visitors get visitor badges.`;
     if (isLoan(badge, h) && h.temporaryOut.length) return `${h.name} already has badge ${badgeLabel(h.temporaryOut[0].facility_code, h.temporaryOut[0].number)} for the day; take it back first.`;
-    if (badge.clearanceLevelId) {
-      const needed = clearance.level(badge.clearanceLevelId);
-      if (!clearance.covers(clearance.effectiveLevel(h), needed)) {
-        const why = clearance.notCounting(h);
-        const level = levelNames ? ` (${needed.name})` : "";
-        return why ? `${h.name}'s clearance ${why}, so it doesn't cover badge ${badge.label}${level}.` : `${h.name}'s clearance doesn't cover badge ${badge.label}${level}.`;
-      }
-    }
-    return null;
+    return clearanceRefusal(badge, h, { levelNames });
   }
 
   /**
@@ -561,7 +563,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     return [...out.values()];
   }
 
-  return { list, get, history, forHolder, openForHolder, heldByPeople, create, createRange, update, remove, holder, refusal, availableFor, assign, recordForVisit, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
+  return { list, get, history, forHolder, openForHolder, heldByPeople, create, createRange, update, remove, holder, refusal, clearanceRefusal, availableFor, assign, recordForVisit, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
 }
 
 module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES, FACILITY_CODE_RE, badgeLabel, RECORDED_NOTE };

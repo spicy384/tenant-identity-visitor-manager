@@ -137,8 +137,15 @@ function removeGuestButton(e, g, after) {
 function guestBadgeCell(e, g) {
   const may = canGiveBadges() && canEditVisitors() && g.status === "expected";
   const pickBadge = async () => {
-    const free = { type: "visitor", state: "available", site: String(e.siteId) };
-    const { total } = await api(`/api/badges?${new URLSearchParams({ ...free, limit: "1" })}`).catch(() => ({ total: 0 }));
+    // Only the free badges here that this guest may hold: their clearance decides.
+    let free;
+    try {
+      free = (await api(`/api/badge-holders/visitor/${g.visitorId}?${new URLSearchParams({ site: String(e.siteId) })}`)).available;
+    } catch (error) {
+      toast(error.message, "error");
+      return;
+    }
+    const total = free.length;
     const search = h("input", { type: "search", placeholder: "Type the badge number", autocomplete: "off", inputmode: "numeric", "aria-label": "Badge number" });
     const results = h("div", { class: "choices-list short" });
     let dialog = null;
@@ -150,18 +157,16 @@ function guestBadgeCell(e, g) {
         dialog?.showError(error.message);
       }
     };
-    const run = debounce(async () => {
-      const q = search.value.trim();
+    const run = debounce(() => {
+      const q = search.value.trim().toLowerCase();
       if (!q) return results.replaceChildren();
-      const { badges } = await api(`/api/badges?${new URLSearchParams({ ...free, q, limit: "10" })}`).catch(() => ({ badges: [] }));
-      if (search.value.trim() !== q) return null; // typed on meanwhile: a newer search is coming
-      // An exact number first, then the rest as the server sorts them.
-      const exact = (b) => b.label === q || b.number === q;
-      badges.sort((a, b) => exact(b) - exact(a));
+      // An exact number first, then the rest in order.
+      const exact = (b) => b.label.toLowerCase() === q || b.number.toLowerCase() === q;
+      const badges = free.filter((b) => b.label.toLowerCase().includes(q)).sort((a, b) => exact(b) - exact(a)).slice(0, 10);
       results.replaceChildren(...(badges.length
         ? badges.map((b) => h("button", { type: "button", class: "pick-row", onclick: () => choose(b) },
           h("strong", { class: "mono", text: b.label }), " ", h("span", { class: "muted small-text", text: badgeLevelText(b) })))
-        : [h("p", { class: "muted small-text", text: "No free visitor badge here with that number." })]));
+        : [h("p", { class: "muted small-text", text: `No free visitor badge here with that number that ${g.firstName} may hold.` })]));
       return null;
     }, 200);
     search.addEventListener("input", run);
@@ -176,7 +181,7 @@ function guestBadgeCell(e, g) {
       body: h("div", { class: "stack" },
         h("p", { class: "muted", text: "Check-in tells the front desk to hand them this badge when they arrive." }),
         h("label", {}, h("span", { text: "Visitor badge" }), search,
-          h("span", { class: "hint", text: total ? `${total} free${multiSite() ? ` at ${e.siteName}` : ""}${g.badge ? `; now ${g.badge.label}` : ""}.` : `No visitor badge is free${multiSite() ? ` at ${e.siteName}` : ""}.` })),
+          h("span", { class: "hint", text: total ? `${total} free that ${g.firstName} may hold${multiSite() ? ` at ${e.siteName}` : ""}${g.badge ? `; now ${g.badge.label}` : ""}.` : `No visitor badge is free${multiSite() ? ` at ${e.siteName}` : ""} that ${g.firstName} may hold.` })),
         results),
       actions: [{ label: "Cancel", value: null }],
       onOpen: (dlg) => { dialog = dlg; setTimeout(() => search.focus(), 50); }
