@@ -87,7 +87,7 @@ const inLdn = visitors.checkIn({ visitorId: vB.id, siteId: ldn.id, companyId: ld
 check("check-in: links the visitor to the company with the host as usual host", visitors.get(vA.id).companies[0].hostName === "Hana Host");
 check("check-in: notes the last visit", visitors.get(vA.id).lastVisitAt === Date.parse("2026-10-13T14:00:00Z"));
 check("check-in: the host must be in that company", throwsStatus(() => visitors.checkIn({ visitorId: vB.id, siteId: ny.id, companyId: nyCo.id, hostId: other.id }), 400) === true);
-check("check-in: the company must be at that site", throwsStatus(() => visitors.checkIn({ visitorId: vB.id, siteId: ny.id, companyId: ldnCo.id }), 400) === true);
+check("check-in: a company elsewhere doesn't count as at that site (what the kiosk offers)", visitors.companyHere(ldnCo.id, ny.id) === null);
 const again = visitors.checkIn({ visitorId: vA.id, siteId: ny.id, companyId: nyCo.id });
 check("check-in: someone already in gets their open visit back", again.already && again.visit.id === inNy.id);
 check("visits: names are copied onto the visit", inNy.companyName === "Empire Co" && inNy.hostName === "Hana Host");

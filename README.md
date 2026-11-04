@@ -153,10 +153,11 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Checking in at the desk** (Check in a visitor, on Home and In the building; Check in
   beside an expected guest) walks through one step per page:
   1. **Find** them in the visitor list, or add them: name, company, type, citizenship, the
-     point of contact they're visiting, picked by typing their name (their tenant comes with
-     them, and the site too when it can only be one). A service technician's point of
-     contact can be anyone in the directory. Changing the site keeps the point of contact
-     when their company is there.
+     point of contact they're visiting, picked by typing their name (their company comes with
+     them, and the site too when none is chosen and it can only be one). The point of contact
+     can be anyone in the directory, at any site, even for an account limited to some sites, so
+     a tenant can use a room at another site. Someone not assigned to the visit's site gets a
+     warning, but can still be used. Changing the site keeps the point of contact.
   2. **Confirm** their details, the point of contact's (job title, phones, email, as the
      role's field access shows them) and the purpose of the visit.
   3. **ID**: which ID they showed (driver's license, passport, CAC, state ID or another

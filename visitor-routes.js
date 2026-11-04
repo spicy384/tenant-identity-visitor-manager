@@ -36,7 +36,7 @@ function parseTime(value, name) {
   throw fail(400, `"${name}" must be a date (YYYY-MM-DD).`);
 }
 
-function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom, publicFields, kioskAddress = () => null, kioskPort = null, badges = null, events = null, clearance = null }) {
+function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin, auditFrom, publicFields, kioskAddress = () => null, kioskPort = null, badges = null, events = null, clearance = null }) {
   const router = express.Router();
 
   const readVisitors = (req, res, next) => (access.canReadVisitors(req.ctx) ? next() : res.status(403).json({ error: "This account can't see visitors." }));
@@ -266,6 +266,29 @@ function createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom
     const missing = [!visitor.organization ? "company" : null, !visitor.citizenship ? "citizenship" : null].filter(Boolean);
     return missing.length ? `Fill in ${fullName(visitor)}'s ${missing.join(" and ")} first.` : null;
   }
+
+  /**
+   * Finding a point of contact at the desk: anyone active in the directory, at every site, even
+   * for an account limited to some, as a tenant may use a room at another site. Someone must be
+   * searched for by name, and each shows only what the role's field access lets it see, and
+   * the sites they're assigned to, for the desk's warning when the visit is at another.
+   */
+  const contactOut = (req, record, list) => ({ ...access.project(req.ctx, "person", record, list), assignedSiteIds: visitors.sitesOfContact(record) });
+  const findContacts = (req, res, next) => (access.canEditVisitors(req.ctx) && access.canReadDirectory(req.ctx) ? next() : res.status(403).json({ error: "This account can't choose a point of contact." }));
+
+  router.get("/api/contacts", findContacts, (req, res) => {
+    const q = String(str(req.query.q) || "").trim();
+    if (q.length < 2) return res.json({ people: [] });
+    const { records } = directory.listPeople({ q, search: access.searchable(req.ctx, "person"), limit: 25 });
+    const list = access.fieldsFor(req.ctx, "person");
+    return res.json({ people: records.map((r) => contactOut(req, r, list)) });
+  });
+
+  router.get("/api/contacts/:id", findContacts, (req, res) => {
+    const record = directory.getPerson(positiveInt(req.params.id));
+    if (!record || !record.active) throw fail(404, "No such person.");
+    res.json({ person: contactOut(req, record, access.fieldsFor(req.ctx, "person")) });
+  });
 
   /** The point of contact (anyone in the directory) and their company, from the body or the visit. */
   function contactFrom(body, visit = null) {

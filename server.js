@@ -1588,7 +1588,7 @@ function kioskAddress(req) {
   return `${proto}://${hostname}:${KIOSK_PORT}/kiosk/`;
 }
 
-app.use(createVisitorRoutes({ access, visitors, kiosks, clock, admin, auditFrom, publicFields, kioskAddress, kioskPort: KIOSK_PORT, badges, events, clearance }));
+app.use(createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin, auditFrom, publicFields, kioskAddress, kioskPort: KIOSK_PORT, badges, events, clearance }));
 // The clearance routes first: they mark everything under /api/clearance no-store, the
 // level list the badge routes answer included.
 app.use(clearanceRoutes.router);

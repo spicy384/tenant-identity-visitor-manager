@@ -258,14 +258,13 @@ check("events: listed by day", events.list({ from: day }).map((e) => e.title).jo
 // A tenant using another site's room: the event may be there, and on its date the company
 // counts as at that site for checking in.
 const roamer = visitors.create({ firstName: "Rory", lastName: "Roamer" });
-check("events: before one, a company from elsewhere can't be visited at the other site", throwsStatus(() => visitors.checkIn({ visitorId: roamer.id, siteId: other.id, companyId: acme.id }), 400) === true);
+check("events: before one, a company from elsewhere isn't at the other site", visitors.companyHere(acme.id, other.id) === null);
 const borrowed = events.create({ siteId: other.id, title: "Board meeting", date: day, companyId: acme.id, hostId: plain.id }, { by: "desk" });
 check("events: a company may hold one at another site", borrowed.siteId === other.id && borrowed.companyName === "Acme Corp" && borrowed.hostName === "Pat Plain");
 check("events: that day its guests check in there", visitors.checkIn({ visitorId: roamer.id, siteId: other.id, companyId: acme.id, hostId: plain.id }).visit.siteId === other.id);
 const nextDay = new Date(Date.parse(`${day}T12:00:00Z`) + 86400000).toISOString().slice(0, 10);
 events.update(borrowed.id, { date: nextDay });
-const latecomer = visitors.create({ firstName: "Lee", lastName: "Latecomer" });
-check("events: on another day, not", throwsStatus(() => visitors.checkIn({ visitorId: latecomer.id, siteId: other.id, companyId: acme.id }), 400) === true);
+check("events: on another day, not", visitors.companyHere(acme.id, other.id) === null);
 events.remove(borrowed.id);
 const merged = visitors.create({ firstName: "Gus", lastName: "Guest", phone: "555" });
 const late = events.create({ siteId: site.id, title: "Later", date: "2099-02-02" });

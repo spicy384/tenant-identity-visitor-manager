@@ -7,8 +7,8 @@
  * correctly after a company or person is removed.
  *
  * Site limits: an account limited to some sites sees a visitor when they are linked to a
- * company it can see or have visited one of its sites, sees only those links, and only
- * the visits at its sites.
+ * company it can see, have visited one of its sites or were added for one, sees only those
+ * links, and only the visits at its sites.
  */
 const { normalizeValue } = require("./fields");
 const { matchNames } = require("./names");
@@ -82,8 +82,9 @@ function createVisitors({ db, fields }) {
     if (!ids.length) return { sql: "0", params: [] };
     return {
       sql: `(EXISTS (SELECT 1 FROM visitor_links l JOIN company_sites cs ON cs.company_id = l.company_id WHERE l.visitor_id = v.id AND cs.site_id IN (${inList(ids)}))
-        OR EXISTS (SELECT 1 FROM visits x WHERE x.visitor_id = v.id AND x.site_id IN (${inList(ids)})))`,
-      params: [...ids, ...ids]
+        OR EXISTS (SELECT 1 FROM visits x WHERE x.visitor_id = v.id AND x.site_id IN (${inList(ids)}))
+        OR v.added_site_id IN (${inList(ids)}))`,
+      params: [...ids, ...ids, ...ids]
     };
   }
 
@@ -290,22 +291,27 @@ function createVisitors({ db, fields }) {
   }
 
   /**
-   * Adds a visitor. `links`: [{ companyId, hostId }]; an account limited to some sites
-   * must link at least one company it can see, or it couldn't find the visitor again.
+   * Adds a visitor. `links`: [{ companyId, hostId }]. `siteId`: the site they're arriving at,
+   * from the desk; their point of contact can then be at any company. Without it, an account
+   * limited to some sites must link at least one company it can see, or it couldn't find the
+   * visitor again.
    */
   function create(input, { custom = new Map(), editable = [], sites = null, source = "staff", verified = true } = {}) {
     const v = clean(input, null);
     const links = Array.isArray(input.links) ? input.links : [];
-    if (sites && !links.length) throw fail(400, "Link the visitor to a company at one of your sites.");
+    const addedSite = input.siteId ? Number(input.siteId) : null;
+    if (addedSite && !raw.prepare("SELECT 1 FROM sites WHERE id = ?").get(addedSite)) throw fail(400, "No such site.");
+    if (addedSite && sites && !sites.has(addedSite)) throw fail(403, "This account can't add visitors at that site.");
+    if (sites && !links.length && !addedSite) throw fail(400, "Link the visitor to a company at one of your sites.");
     const values = customValues(custom, { creating: true, editable });
     const now = Date.now();
     let id;
     db.transaction(() => {
-      id = raw.prepare(`INSERT INTO visitors (first_name, last_name, organization, visitor_type, citizenship, email, phone, notes, clearance_level_id, clearance_granted, clearance_expires, verified, blocked, source, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      id = raw.prepare(`INSERT INTO visitors (first_name, last_name, organization, visitor_type, citizenship, email, phone, notes, clearance_level_id, clearance_granted, clearance_expires, verified, blocked, source, added_site_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(v.firstName, v.lastName, v.organization ?? null, v.visitorType || "Guest", v.citizenship ?? null, v.email ?? null, v.phone ?? null, v.notes ?? null, v.clearanceLevel ?? null, v.clearanceGranted ?? null, v.clearanceExpires ?? null,
-          (v.verified ?? verified) ? 1 : 0, v.blocked ? 1 : 0, source, now, now).lastInsertRowid;
-      for (const link of links) setLink(id, link, { sites });
+          (v.verified ?? verified) ? 1 : 0, v.blocked ? 1 : 0, source, addedSite, now, now).lastInsertRowid;
+      for (const link of links) setLink(id, link, { sites: addedSite ? null : sites });
       fields.writeValues(id, values);
     });
     nameCache = null;
@@ -385,6 +391,7 @@ function createVisitors({ db, fields }) {
       const fill = (a, b) => a ?? b ?? null;
       const reserved = raw.prepare("SELECT (SELECT reserved_badge_id FROM visitors WHERE id = ?) AS a, (SELECT reserved_badge_id FROM visitors WHERE id = ?) AS b").get(intoId, fromId);
       raw.prepare("UPDATE visitors SET reserved_badge_id = NULL WHERE id = ?").run(fromId);
+      raw.prepare("UPDATE visitors SET added_site_id = coalesce(added_site_id, (SELECT added_site_id FROM visitors WHERE id = ?)) WHERE id = ?").run(fromId, intoId);
       raw.prepare("UPDATE visitors SET organization = ?, citizenship = ?, reserved_badge_id = ?, email = ?, phone = ?, notes = ?, last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?), blocked = max(blocked, ?), updated_at = ? WHERE id = ?")
         .run(fill(into.organization, from.organization), fill(into.citizenship, from.citizenship), fill(reserved.a, reserved.b), fill(into.email, from.email), fill(into.phone, from.phone),
           [into.notes, from.notes].filter(Boolean).join("\n\n") || null, intoId, from.blocked ? 1 : 0, Date.now(), intoId);
@@ -528,9 +535,21 @@ function createVisitors({ db, fields }) {
   }
 
   /**
-   * Checks a visitor in at `siteId` to see `companyId` (and `hostId`, optional). The
-   * company must be at that site (or have an event there today) and the host in that company. A visitor already in the
-   * building at that site gets their open visit back rather than a second one.
+   * The open sites a directory person is assigned to, as a point of contact: those of their
+   * company (or, for the day, where it has a visitor event), and only their own site if they have one.
+   */
+  function sitesOfContact({ companyId, siteId = null }) {
+    return raw.prepare("SELECT id FROM sites WHERE active = 1").all().map((s) => s.id)
+      .filter((id) => (!siteId || siteId === id) && companyHere(companyId, id));
+  }
+
+  const activeCompany = (id) => raw.prepare("SELECT * FROM companies WHERE id = ? AND active = 1").get(Number(id)) || null;
+
+  /**
+   * Checks a visitor in at `siteId` to see `companyId` (and `hostId`, optional). The company
+   * must be active, wherever it is (a tenant may use a room at another site; the kiosk checks
+   * for itself that a company is at its site), and the host in that company. A visitor already
+   * in the building at that site gets their open visit back rather than a second one.
    * Links the visitor to the company, with the host as their usual one when given.
    */
   function checkIn({ visitorId, siteId, companyId, hostId = null, purpose = null, by = null, kioskId = null, idType = null, idOther = null, now = Date.now() }) {
@@ -538,8 +557,8 @@ function createVisitors({ db, fields }) {
     if (!visitor) throw fail(404, "No such visitor.");
     const site = raw.prepare("SELECT * FROM sites WHERE id = ?").get(siteId);
     if (!site || !site.active) throw fail(400, "That site isn't open.");
-    const company = companyHere(companyId, siteId, now);
-    if (!company) throw fail(400, "That company isn't at this site, and has no visitor event here today.");
+    const company = activeCompany(companyId);
+    if (!company) throw fail(400, "Choose an active company.");
     let host = null;
     if (hostId !== null && hostId !== undefined && hostId !== "") {
       host = raw.prepare("SELECT * FROM people WHERE id = ? AND company_id = ? AND active = 1").get(Number(hostId), company.id);
@@ -598,8 +617,8 @@ function createVisitors({ db, fields }) {
   function updateVisit(visitId, { companyId, hostId, purpose } = {}, { sites = null } = {}) {
     const visit = getVisit(visitId, { sites });
     if (!visit || visit.checkedOutAt) throw fail(404, "No such visit in the building.");
-    const company = companyHere(companyId ?? visit.companyId, visit.siteId);
-    if (!company) throw fail(400, "That company isn't at this site, and has no visitor event here today.");
+    const company = activeCompany(companyId ?? visit.companyId);
+    if (!company) throw fail(400, "Choose an active company.");
     const host = raw.prepare("SELECT * FROM people WHERE id = ? AND company_id = ? AND active = 1").get(Number(hostId ?? visit.hostId), company.id);
     if (!host) throw fail(400, "Choose the point of contact, someone at that company.");
     raw.prepare("UPDATE visits SET company_id = ?, company_name = ?, host_id = ?, host_name = ?, purpose = ? WHERE id = ?")
@@ -727,7 +746,7 @@ function createVisitors({ db, fields }) {
   return {
     correctTimes,
     timeChanges,
-    verifyId, setStage, updateVisit, setReservedBadge, companyOfPerson, companyHere,
+    verifyId, setStage, updateVisit, setReservedBadge, companyOfPerson, companyHere, sitesOfContact,
     list,
     get,
     findMatch,

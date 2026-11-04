@@ -751,7 +751,9 @@ const ADDED_COLUMNS = [
   // How many desks an office has: each gives its company a tenant badge without charge.
   ["offices", "desks", "INTEGER"],
   // When a lease's term commences, when not its start (null: the same); its yearly increases count from it.
-  ["leases", "commencement_date", "TEXT"]
+  ["leases", "commencement_date", "TEXT"],
+  // The site a visitor was added for at the desk: staff there can find them, whoever they're visiting.
+  ["visitors", "added_site_id", "INTEGER REFERENCES sites(id) ON DELETE SET NULL"]
 ];
 
 /**

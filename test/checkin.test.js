@@ -349,6 +349,37 @@ async function main() {
   const vPage = (await security.post("/api/badges", { number: "V-PAGE", type: "visitor" })).data.badge;
   await desk.post(`/api/badges/${vPage.id}/assign`, { kind: "visitor", holderId: ola.id });
   check("badge: given from their page, it goes with the visit they're on", (await visitOf(ola.id)).badges.includes("V-PAGE"));
+
+  // --- a point of contact from anywhere in the directory ------------------------------------------
+  const riverCo = (await admin.post("/api/companies", { name: "River Partners", sites: [{ siteId: other.id }] })).data.company;
+  const riverRita = (await admin.post("/api/people", { firstName: "Rita", lastName: "Riverton", companyId: riverCo.id, canHost: false })).data.person;
+  const guest = async (firstName, extra = {}) => (await desk.post("/api/visitors", { firstName, lastName: "Crossing", organization: "Guest Co", citizenship: "US", ...extra })).data.visitor;
+  r = await desk.post("/api/checkins", { visitorId: (await guest("Gail")).id, siteId: site.id, hostId: riverRita.id, purpose: "Conference room", idType: "Passport" });
+  check("contact: a guest's can be someone at another site who doesn't host, the visit staying here", r.status === 200 && r.data.visit.siteName === "Harbor Point" && r.data.visit.companyName === "River Partners" && r.data.visit.hostName === "Rita Riverton", JSON.stringify(r.data));
+  const moving = (await desk.post("/api/checkins", { visitorId: (await guest("Mo")).id, siteId: site.id, hostId: host.id, purpose: "Meeting", idType: "Passport" })).data.visit;
+  r = await desk.post(`/api/visits/${moving.id}/verify-id`, { idType: "Passport", hostId: riverRita.id, companyId: riverCo.id });
+  check("contact: changed to someone at another site, once the visit is open", r.status === 200 && r.data.visit.hostName === "Rita Riverton" && r.data.visit.companyName === "River Partners", JSON.stringify(r.data));
+  check("contact: not a visitor, or anyone who isn't in the directory", (await desk.post("/api/checkins", { visitorId: (await guest("Vi")).id, siteId: site.id, hostId: 999999, purpose: "Meeting", idType: "Passport" })).status === 400);
+  await admin.post("/api/users", { username: "harbordesk", password: pw.desk, role: "frontdesk", sites: [site.id] });
+  const harborDesk = await as("harbordesk", pw.desk);
+  check("contact: a desk limited to its site can't browse the other site's people", !(await harborDesk.get("/api/people?q=Riverton")).data.people.length);
+  r = await harborDesk.get("/api/contacts?q=Riverton");
+  check("contact: but finds them as a point of contact, by name", r.status === 200 && r.data.people.map((p) => p.id).join() === String(riverRita.id) && r.data.people[0].companyName === "River Partners", JSON.stringify(r.data));
+  check("contact: and opens them", (await harborDesk.get(`/api/contacts/${riverRita.id}`)).data.person?.id === riverRita.id);
+  check("contact: which says the sites they're assigned to, for the desk's warning", r.data.people[0].assignedSiteIds.join() === String(other.id));
+  const atRiverOnly = (await admin.post("/api/people", { firstName: "Paula", lastName: "Pinned", companyId: (await admin.post("/api/companies", { name: "Two Sites", sites: [{ siteId: site.id }, { siteId: other.id }] })).data.company.id, siteId: other.id })).data.person;
+  check("contact: someone with a site of their own is assigned only there", (await harborDesk.get(`/api/contacts?q=Pinned`)).data.people[0].assignedSiteIds.join() === String(other.id), JSON.stringify(atRiverOnly));
+  check("contact: a name is needed to search", (await harborDesk.get("/api/contacts")).data.people.length === 0);
+  check("contact: not for those who can't check anyone in", (await viewer.get("/api/contacts?q=Riverton")).status === 403);
+  const newGuest = { firstName: "Nia", lastName: "Newcomer", organization: "Guest Co", citizenship: "US", links: [{ companyId: riverCo.id, hostId: riverRita.id }] };
+  check("contact: a limited desk can't link another site's company without saying where they're arriving", (await harborDesk.post("/api/visitors", newGuest)).status === 403);
+  check("contact: nor at a site that isn't its own", (await harborDesk.post("/api/visitors", { ...newGuest, siteId: other.id })).status === 403);
+  r = await harborDesk.post("/api/visitors", { ...newGuest, siteId: site.id });
+  const nia = r.data.visitor;
+  check("contact: arriving at its site, it adds them and can still find them", r.status === 200 && (await harborDesk.get(`/api/visitors/${nia.id}`)).status === 200, JSON.stringify(r.data));
+  r = await harborDesk.post("/api/checkins", { visitorId: nia.id, siteId: site.id, hostId: riverRita.id, purpose: "Conference room", idType: "Passport" });
+  check("contact: and checks them in with that contact", r.status === 200 && r.data.visit.hostName === "Rita Riverton", JSON.stringify(r.data));
+  check("contact: but not at a site that isn't its own", (await harborDesk.post("/api/checkins", { visitorId: nia.id, siteId: other.id, hostId: riverRita.id, purpose: "Conference room", idType: "Passport" })).status === 403);
 }
 
 main()
