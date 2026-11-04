@@ -285,6 +285,7 @@ async function main() {
   check("times: not the same as on record", (await times(tiaVisit.id, { checkedInAt: tiaVisit.checkedInAt, reason: "No change at all" })).status === 400);
   r = await times(tiaVisit.id, { checkedInAt: inAt, reason: "Signed in at the kiosk late" });
   check("times: arrival corrected, still in the building", r.status === 200 && r.data.visit.checkedInAt === inAt && !r.data.visit.checkedOutAt && r.data.visit.timesCorrected === 1 && r.data.timeChanges[0].reason === "Signed in at the kiosk late", JSON.stringify(r.data));
+  check("times: the visitor's last visit follows the corrected arrival", (await desk.get(`/api/visitors/${tia.id}`)).data.visitor.lastVisitAt === inAt);
   r = await times(tiaVisit.id, { checkedOutAt: leftAt, reason: "Left without checking out; host says 2 hours ago" });
   check("times: a check-out time on an open visit checks them out then", r.status === 200 && r.data.visit.checkedOutAt === leftAt && r.data.visit.checkoutMethod === "staff" && r.data.visit.checkedOutBy === "desk");
   check("times: and they're no longer in the building", !(await desk.get("/api/visits?status=open")).data.visits.some((v) => v.id === tiaVisit.id));

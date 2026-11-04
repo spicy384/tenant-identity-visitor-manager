@@ -37,7 +37,7 @@ async function loadHere() {
     h("td", { text: v.hostName || "" }),
     allSites ? h("td", { text: v.siteName }) : null,
     h("td", { class: "nowrap" }, new Date(v.checkedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), h("span", { class: "muted small-text no-print", text: ` · ${sinceText(v.checkedInAt)}` })),
-    h("td", { class: "no-print" }, canEditVisitors() ? h("button", { type: "button", class: "secondary small", text: "Check out", onclick: async (e) => {
+    h("td", { class: "no-print" }, h("div", { class: "btn-row" }, canCorrectVisits() ? h("button", { type: "button", class: "link-btn small-text nowrap", text: "Correct time", onclick: async () => { if (await correctVisitTimes(v)) loadHere(); } }) : null, canEditVisitors() ? h("button", { type: "button", class: "secondary small", text: "Check out", onclick: async (e) => {
       e.target.disabled = true;
       try {
         await api(`/api/visits/${v.id}/checkout`, { method: "POST", body: {} });
@@ -48,7 +48,7 @@ async function loadHere() {
         toast(error.message, "error");
         e.target.disabled = false;
       }
-    } }) : null)));
+    } }) : null))));
   clear(table.tBodies[0]).append(...(rows.length ? rows : [emptyRow(head.length, "Nobody is checked in right now.")]));
   $("here-print-title").textContent = `In the building: ${hereSiteName()} (${data.visits.length} ${data.visits.length === 1 ? "visitor" : "visitors"})`;
   $("here-print-time").textContent = `As of ${new Date().toLocaleString()}`;

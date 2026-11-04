@@ -248,16 +248,16 @@ async function main() {
   // --- rates -------------------------------------------------------------------------------------------
   check("rates: front desk can't set them", (await desk.put(`/api/facilities/site-rates/${harbor.id}`, { rate: 3 })).status === 403);
   check("rates: nor can read-only roles", (await lee.put(`/api/facilities/site-rates/${harbor.id}`, { rate: 3 })).status === 403);
-  check("rates: a site's default", (await manager.put(`/api/facilities/site-rates/${harbor.id}`, { rate: 3 })).data.rate === 3);
+  check("rates: a site's, for every classification at once", Object.values((await manager.put(`/api/facilities/site-rates/${harbor.id}`, { rate: 3 })).data.rates).join() === "3,3,3");
   r = (await manager.get(`/api/offices/${o101.id}`)).data.office;
   check("rates: an office without its own uses the site's", r.effectiveRate === 3 && r.rateSource === "site" && r.monthly === 3600);
   r = (await manager.put(`/api/offices/${o101.id}`, { rate: 2.5 })).data.office;
   check("rates: an office's own wins over the site's", r.effectiveRate === 2.5 && r.rateSource === "office" && r.monthly === 3000);
   check("rates: a negative one is refused", (await manager.put(`/api/offices/${o101.id}`, { rate: -1 })).status === 400);
-  check("rates: a company's", (await manager.put(`/api/facilities/company-rates/${acme.id}`, { rate: 2 })).data.rate === 2);
+  check("rates: a company's", (await manager.put(`/api/facilities/company-rates/${acme.id}`, { rate: 2 })).data.rates[0] === 2);
   check("rates: not for a company at sites the account can't see", (await harborManager.put(`/api/facilities/company-rates/${initech.id}`, { rate: 2 })).status === 404);
   r = (await lee.get("/api/facilities/rates")).data;
-  check("rates: listed", r.sites.find((s) => s.siteId === harbor.id).rate === 3 && r.companies.some((c) => c.companyId === acme.id && c.rate === 2));
+  check("rates: listed", r.classes[0].name === "Unclassified" && r.sites.find((s) => s.siteId === harbor.id).rates[0] === 3 && r.companies.some((c) => c.companyId === acme.id && c.rates[0] === 2));
 
   // --- assigning --------------------------------------------------------------------------------------
   check("assign: front desk can't", (await desk.post(`/api/offices/${o101.id}/assignments`, { companyId: acme.id, startDate: "2020-01-01" })).status === 403);
@@ -302,7 +302,7 @@ async function main() {
   // --- what a company has ----------------------------------------------------------------------------
   r = (await lee.get(`/api/companies/${acme.id}/facilities`)).data;
   check("company: its offices now and later", r.offices.length === 2 && r.offices[0].when === "current" && r.offices[0].officeName === "101" && r.offices[1].when === "upcoming");
-  check("company: with its rate and what it pays now", r.rate === 2 && r.totals.offices === 1 && r.totals.sqft === 1200 && r.totals.monthly === 2400);
+  check("company: with its rates and what it pays now", r.rates[0] === 2 && r.totals.offices === 1 && r.totals.sqft === 1200 && r.totals.monthly === 2400);
   r = (await manager.get(`/api/facilities/summary?siteId=${harbor.id}`)).data.summary;
   check("summary: offices by status", r.offices === 3 && r.occupied === 1 && r.upcoming === 1 && r.unavailable === 1 && r.available === 0);
   check("summary: square feet and rent", r.sqft.total === 2500 && r.sqft.occupied === 1200 && r.sqft.available === 800 && r.monthly === 2400 && r.asking === 2400);
@@ -326,6 +326,69 @@ async function main() {
   check("company: deleted once it has no offices", (await admin.del(`/api/companies/${acme.id}`)).status === 200);
   check("history: names the company it was", (await manager.get(`/api/offices/${o101.id}`)).data.office.assignments[0].companyName === "Acme");
   check("site: can't be removed while it has floors", (await admin.del(`/api/sites/${river.id}`)).status === 409);
+  // --- rates for each classification ---------------------------------------------------------------------
+  const { classes: roomClasses } = (await manager.get("/api/facilities/room-kinds")).data;
+  const scif = roomClasses.find((c) => c.name === "SCIF");
+  const scar = roomClasses.find((c) => c.name === "SCAR");
+  const level9 = (await manager.post("/api/floors", { siteId: harbor.id, name: "Level 9" })).data.floor;
+  const room = async (name, extra = {}) => (await manager.post("/api/offices", { floorId: level9.id, name, sqft: 100, ...extra })).data.office;
+  r = await manager.put(`/api/facilities/site-rates/${harbor.id}`, { rates: { 0: 3, [scif.id]: 9, [scar.id]: 6 } });
+  check("class rates: a site has one for each", r.status === 200 && r.data.rates[scif.id] === 9 && r.data.rates[scar.id] === 6 && r.data.rates[0] === 3, JSON.stringify(r.data));
+  const plainRoom = await room("901");
+  const scifRoom = await room("902", { classId: scif.id });
+  const scarRoom = await room("903", { classId: scar.id });
+  check("class rates: a room is offered at its classification's", plainRoom.askingRate === 3 && scifRoom.askingRate === 9 && scarRoom.askingRate === 6 && scifRoom.askingMonthly === 900, JSON.stringify([plainRoom.askingRate, scifRoom.askingRate, scarRoom.askingRate]));
+  r = (await manager.put(`/api/offices/${plainRoom.id}`, { classId: scif.id })).data.office;
+  check("class rates: changing a room's classification changes its rate", r.askingRate === 9);
+  await manager.put(`/api/offices/${plainRoom.id}`, { classId: null });
+  check("class rates: a classification that isn't one is refused", (await manager.put(`/api/facilities/site-rates/${harbor.id}`, { rates: { 99999: 3 } })).status === 400);
+  check("class rates: nor a negative rate, and none are saved", (await manager.put(`/api/facilities/site-rates/${harbor.id}`, { rates: { 0: 8, [scif.id]: -1 } })).status === 400
+    && (await manager.get("/api/facilities/rates")).data.sites.find((s) => s.siteId === harbor.id).rates[0] === 3);
+  const tenantCo = await mk("Rated Tenant", [{ siteId: harbor.id }]);
+  r = await manager.put(`/api/facilities/company-rates/${tenantCo.id}`, { rates: { [scif.id]: 7 } });
+  check("class rates: a tenant has its own for one classification", r.status === 200 && Object.keys(r.data.rates).join() === String(scif.id));
+  await manager.post(`/api/offices/${scifRoom.id}/assignments`, { companyId: tenantCo.id, startDate: "2020-01-01" });
+  await manager.post(`/api/offices/${scarRoom.id}/assignments`, { companyId: tenantCo.id, startDate: "2020-01-01" });
+  r = (await manager.get(`/api/offices/${scifRoom.id}`)).data.office;
+  check("class rates: the tenant's wins for that classification", r.effectiveRate === 7 && r.rateSource === "company" && r.monthly === 700 && r.askingRate === 9);
+  r = (await manager.get(`/api/offices/${scarRoom.id}`)).data.office;
+  check("class rates: and the site's applies to the others", r.effectiveRate === 6 && r.rateSource === "site" && r.monthly === 600);
+  r = (await manager.put(`/api/offices/${scifRoom.id}`, { rate: 8 })).data.office;
+  check("class rates: an office's own beats the site's, not the tenant's", r.effectiveRate === 7 && r.askingRate === 8);
+  r = (await manager.get(`/api/companies/${tenantCo.id}/facilities`)).data;
+  check("class rates: on the company's page", r.rates[scif.id] === 7 && r.classes.length === 3 && r.totals.monthly === 1300, JSON.stringify(r).slice(0, 300));
+  r = await manager.put(`/api/facilities/site-rates/${harbor.id}`, { rates: { [scar.id]: null } });
+  check("class rates: empty clears one", r.data.rates[scar.id] === undefined && (await manager.get(`/api/offices/${scarRoom.id}`)).data.office.effectiveRate === null);
+  const tempClass = (await manager.post("/api/facilities/room-classes", { name: "Temp class" })).data;
+  const tempId = (await manager.get("/api/facilities/room-kinds")).data.classes.find((c) => c.name === "Temp class").id;
+  r = await manager.put(`/api/facilities/site-rates/${harbor.id}`, { rates: { [tempId]: 5 } });
+  await manager.del(`/api/facilities/room-classes/${tempId}`);
+  check("class rates: a removed classification's go with it", r.data.rates[tempId] === 5 && (await manager.get("/api/facilities/rates")).data.sites.find((s) => s.siteId === harbor.id).rates[tempId] === undefined, JSON.stringify(tempClass).slice(0, 100));
+  check("class rates: changes are audited with the classification", (await admin.get("/api/audit?action=facilities.company_rate")).data.entries.some((e) => e.target === "Rated Tenant" && /SCIF \$7/.test(e.detail)));
+
+  // --- when a let room comes free ---------------------------------------------------------------------------
+  const letRoom = await room("910");
+  const letTo = (office, startDate, endDate = null) => manager.post(`/api/offices/${office.id}/assignments`, { companyId: tenantCo.id, startDate, endDate });
+  const freeInfo = async (id) => (await manager.get("/api/offices?status=")).data.offices.find((o) => o.id === id);
+  r = await freeInfo(letRoom.id);
+  check("available: a free room has no date", r.availableFrom === null && r.openEnded === false && r.status === "available");
+  await letTo(letRoom, "2020-01-01", "2099-06-30");
+  r = await freeInfo(letRoom.id);
+  check("available: the day after its lease ends", r.availableFrom === "2099-07-01" && r.availableUntil === null && r.status === "occupied", JSON.stringify(r).slice(0, 200));
+  await letTo(letRoom, "2099-07-01", "2099-12-31");
+  check("available: past a lease that follows straight on", (await freeInfo(letRoom.id)).availableFrom === "2100-01-01");
+  await letTo(letRoom, "2100-03-01");
+  r = await freeInfo(letRoom.id);
+  check("available: with the day a later lease starts", r.availableFrom === "2100-01-01" && r.availableUntil === "2100-03-01");
+  const runsOn = await room("911");
+  await letTo(runsOn, "2020-01-01");
+  r = await freeInfo(runsOn.id);
+  check("available: no date for a lease with no end", r.availableFrom === null && r.openEnded === true);
+  const comingUp = await room("912");
+  await letTo(comingUp, "2098-01-01", "2098-12-31");
+  r = await freeInfo(comingUp.id);
+  check("available: for a room let later, after that lease", r.status === "upcoming" && r.availableFrom === "2099-01-01");
+
   check("floors: deleted with their offices", (await manager.del(`/api/floors/${level1.id}`)).status === 200 && (await manager.get(`/api/offices/${o101.id}`)).status === 404);
   check("audit: assignments are logged", (await admin.get("/api/audit?action=office.assign")).data.entries.some((e) => /Acme from 2020-01-01/.test(e.detail)));
 

@@ -673,6 +673,8 @@ function createVisitors({ db, fields }) {
       if (nextOut !== null && !visit.checkedOutAt) raw.prepare("UPDATE visits SET checked_out_at = ?, checkout_method = 'staff', checked_out_by = ? WHERE id = ?").run(nextOut, by, visit.id);
       else if (nextOut !== null) raw.prepare("UPDATE visits SET checked_out_at = ? WHERE id = ?").run(nextOut, visit.id);
       for (const c of changes) raw.prepare("INSERT INTO visit_time_changes (visit_id, field, from_at, to_at, reason, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(visit.id, c.field, c.from, c.to, why, by, t);
+      // Their last visit follows.
+      raw.prepare("UPDATE visitors SET last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?) WHERE id = ?").run(visit.visitorId, visit.visitorId);
     });
     const timeZone = raw.prepare("SELECT time_zone FROM sites WHERE id = ?").get(visit.siteId)?.time_zone || null;
     return { visit: getVisit(visit.id), changes, reason: why, timeZone };

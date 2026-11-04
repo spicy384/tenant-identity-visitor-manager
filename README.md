@@ -406,21 +406,27 @@ Home.
   overlap. **End** sets the last day, and ended assignments stay as the office's history.
   **Remove** is for one made by mistake. Dates are days at the site.
 - **Size and cost.** Each office has its size in square feet. Rates are dollars per square
-  foot a month: a **company's** own rate wins, else the **office's**, else the **site's**
-  default (Facilities > Rates, and Change rate on a company's page). An office's monthly cost
+  foot a month, one for each classification (Unclassified, SCAR, SCIF, and any added under Room
+  types): a **company's** rate for the room's classification wins, else the **office's** own,
+  else the **site's** for that classification (Facilities > Rates, and Set rates on a company's
+  page). A classification added later has no rates until they are set. An office's monthly cost
   is its size times that rate; a free office shows what it would cost. A room can instead be
   priced at a **fixed amount a month** (Priced on its form), which then wins over every rate.
 - **Desks.** Each office can say how many desks it has. Each desk gives the company that leases
   it a tenant badge without charge (see Tenant badge allotments below). Set it on the office's
   form, or for several rooms at once.
 - **Rooms** lists every room at the chosen site with its floor, type, classification, size,
-  status, company, rate and monthly cost, totals underneath; filter by type or status, or search.
+  status, company, when it's available, rate and monthly cost, totals underneath; filter by type
+  or status, or search. **Available** is the day a let room comes free if its tenant doesn't
+  renew: the day after its lease ends, or after any lease already following straight on (with
+  the date a later lease starts, if there's a gap). A lease with no end date says so, and a free
+  room says Now.
 - **Several rooms at once.** Tick rooms on the Rooms page, or choose **Select rooms** on a
   floor plan and click them (or Choose all on this floor), then **Change** to set the room type,
   classification, rate, desks, unavailable or notes the same on all of them, or **Delete** them. If any
   room can't take the change (an assigned room can't become a shared type or unavailable, or
   be deleted), none does, and the message names it.
-- **On a company's page:** its offices now, upcoming and before, the rate it pays, and its
+- **On a company's page:** its offices now, upcoming and before, the rates it pays, and its
   space and rent now. **Assign offices** gives it offices from there: choose the dates, then
   click free offices on a floor's plan (taken ones are greyed out) or tick them in the list,
   across any floors, with their total size and monthly cost shown as you go; all of them are

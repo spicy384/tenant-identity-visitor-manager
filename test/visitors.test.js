@@ -16,6 +16,7 @@ const { createVisitors } = require("../visitors");
 const { createVisitClock, endOfDayFor, zonedTime } = require("../visit-clock");
 const { matchNames, isFullName, normalizeName } = require("../names");
 const { createKiosks, normalizeCode } = require("../kiosks");
+const { createFacilities } = require("../facilities");
 
 const { check, report } = createChecker("Visitors: names, end of day, retention, merge, site limits");
 const throwsStatus = (fn, status) => {
@@ -193,6 +194,13 @@ check("kiosks: the token itself isn't stored", !db.raw.prepare("SELECT token_has
 const fresh = kiosks.newCode(kiosk.id);
 check("kiosks: a new code signs the old device out", kiosks.authenticate(paired.token) === null && fresh.kiosk.status === "waiting");
 check("kiosks: a site with a kiosk can't be removed", throwsStatus(() => sites.remove(ny.id), 409) === true);
+
+// An older database: rates from before they went by classification apply to each, once.
+db.raw.prepare("INSERT INTO site_rates (site_id, rate, updated_at) VALUES (?, 3, 1)").run(ny.id);
+db.raw.prepare("INSERT INTO company_rates (company_id, rate, updated_at) VALUES (?, 2, 1)").run(nyCo.id);
+const upgraded = createFacilities({ db, sites, directory }).rates();
+check("upgrade: a site's and a company's old rate go to every classification", upgraded.classes.length === 3
+  && upgraded.classes.every((c) => upgraded.sites.find((s) => s.siteId === ny.id).rates[c.key] === 3 && upgraded.companies.find((x) => x.companyId === nyCo.id).rates[c.key] === 2));
 
 db.close();
 fs.rmSync(tmp, { recursive: true, force: true });

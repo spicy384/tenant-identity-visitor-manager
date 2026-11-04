@@ -1080,7 +1080,7 @@ async function editOffice(office, { floor = null, points = null } = {}) {
           inputs.monthlyRent.closest("label").hidden = input.value !== "monthly";
         } },
       { name: "rate", label: "Rate ($ per sq ft a month)", type: "number", value: office?.rate ?? "", step: "0.01", min: "0", half: true,
-        hint: "Empty to use the site's default. A company's own rate wins over both." },
+        hint: "Empty to use the site's rate for its classification. A company's own rate wins over both." },
       { name: "monthlyRent", label: "Monthly rent ($)", type: "number", value: office?.monthlyRent ?? "", step: "0.01", min: "0", half: true,
         hint: "What the room costs a month, whatever its size. Company and site rates don't apply." },
       { name: "desks", label: "Desks", type: "number", value: office?.desks ?? "", step: "1", min: "0", half: true,
@@ -1148,6 +1148,7 @@ async function openOffice(id, onChange = () => {}) {
       h("dt", { text: "Size" }), h("dd", {}, fmtSqft(office.sqft),
         office.measuredSqft && office.measuredSqft !== office.sqft ? h("span", { class: "muted small-text", text: ` (about ${fmtSqft(office.measuredSqft)} measured on the plan)` }) : null),
       office.desks !== null ? [h("dt", { text: "Desks" }), h("dd", { text: String(office.desks) })] : null,
+      availableText(office) ? [h("dt", { text: "Available" }), h("dd", { title: availableWhy(office), text: availableText(office) })] : null,
       h("dt", { text: "Rate" }), h("dd", { text: rateText }),
       office.rate !== null && office.monthlyRent === null && office.rateSource !== "office" ? [h("dt", { text: "Office's own rate" }), h("dd", { text: `${fmtRate(office.rate)} a month` })] : null,
       h("dt", { text: office.status === "occupied" ? "Monthly" : "Asking" }), h("dd", {}, h("strong", { text: office.monthly === null ? "—" : `${fmtMoney(office.monthly)} a month` })),
@@ -1284,7 +1285,7 @@ async function loadOffices() {
   try {
     ({ offices } = await api(`/api/offices?${params}`));
   } catch (error) {
-    $("offices-table").tBodies[0].replaceChildren(emptyRow(9, error.message));
+    $("offices-table").tBodies[0].replaceChildren(emptyRow(10, error.message));
     return;
   }
   const q = $("offices-search").value.trim().toLowerCase();
@@ -1294,7 +1295,7 @@ async function loadOffices() {
   const picking = canEditFacilities();
   const all = h("input", { type: "checkbox", "aria-label": "Choose every room listed" });
   const boxes = [];
-  table.tHead.replaceChildren(h("tr", {}, picking ? h("th", { class: "pick-cell" }, all) : null, ["Room", "Floor", "Type", "Classification", "Size", "Status", "Company", "Rate", "Monthly"].map((t) => h("th", { text: t }))));
+  table.tHead.replaceChildren(h("tr", {}, picking ? h("th", { class: "pick-cell" }, all) : null, ["Room", "Floor", "Type", "Classification", "Size", "Status", "Company", "Available", "Rate", "Monthly"].map((t) => h("th", { text: t }))));
   const bar = $("offices-actions");
   const showBar = () => roomActions(bar, loadOffices);
   table.tBodies[0].replaceChildren(...(offices.length ? offices.map((o) => {
@@ -1308,6 +1309,7 @@ async function loadOffices() {
       h("td", { class: "num", text: o.sqft === null ? "—" : Number(o.sqft).toLocaleString("en-US") }),
       h("td", {}, statusBadge(o.status)),
       h("td", { text: officeHolder(o) || "" }),
+      h("td", { class: "nowrap small-text", title: availableWhy(o), text: availableText(o) }),
       h("td", { class: "num", title: o.rateSource ? `From ${RATE_SOURCES[o.rateSource]}` : null, text: o.monthlyRent !== null ? "Fixed" : o.effectiveRate === null ? "—" : fmtRate(o.effectiveRate) }),
       h("td", { class: `num${o.status === "occupied" ? "" : " muted"}`, title: o.status === "occupied" ? null : "Asking", text: fmtMoney(o.monthly) }));
     row.addEventListener("click", () => openOffice(o.id, loadOffices));
@@ -1322,13 +1324,13 @@ async function loadOffices() {
       boxes.push(box);
     }
     return row;
-  }) : [emptyRow(picking ? 10 : 9, q || $("offices-status").value || typePick.value ? "No rooms match." : "No rooms yet. Add floors and draw their rooms under Floor plans.")]));
+  }) : [emptyRow(picking ? 11 : 10, q || $("offices-status").value || typePick.value ? "No rooms match." : "No rooms yet. Add floors and draw their rooms under Floor plans.")]));
   const occupied = offices.filter((o) => o.status === "occupied");
   const sqft = (list) => list.reduce((n, o) => n + (o.sqft || 0), 0);
   table.tFoot.replaceChildren(offices.length ? h("tr", {},
     h("td", { colspan: picking ? 5 : 4, text: `${offices.length} ${offices.length === 1 ? "room" : "rooms"}` }),
     h("td", { class: "num", text: Number(sqft(offices)).toLocaleString("en-US") }),
-    h("td", { colspan: 3, class: "muted small-text", text: `${occupied.length} occupied, ${Number(sqft(occupied)).toLocaleString("en-US")} sq ft let` }),
+    h("td", { colspan: 4, class: "muted small-text", text: `${occupied.length} occupied, ${Number(sqft(occupied)).toLocaleString("en-US")} sq ft let` }),
     h("td", { class: "num" }, h("strong", { text: fmtMoney(occupied.reduce((n, o) => n + (o.monthly || 0), 0)) }))) : "");
   all.checked = boxes.length > 0 && boxes.every((b) => b.checked);
   all.addEventListener("change", () => {
@@ -1341,6 +1343,19 @@ $("offices-search").addEventListener("input", debounce(loadOffices));
 $("offices-status").addEventListener("change", loadOffices);
 $("offices-type").addEventListener("change", loadOffices);
 $("offices-add").addEventListener("click", async () => { if (await editOffice(null)) loadOffices(); });
+
+/** When a room can next be let: the day it comes free if its tenant doesn't renew, or now. */
+function availableText(o) {
+  if (o.availableFrom) return `${fmtDay(o.availableFrom)}${o.availableUntil ? ` until ${fmtDay(o.availableUntil)}` : ""}`;
+  if (o.openEnded) return "No end date";
+  return o.status === "available" ? "Now" : "";
+}
+
+function availableWhy(o) {
+  const tenant = (o.current || o.next)?.companyName;
+  if (o.availableFrom) return `If ${tenant} doesn't renew${o.availableUntil ? "; another lease starts on the later date" : ""}`;
+  return o.openEnded ? `${tenant}'s lease has no end date` : null;
+}
 
 /** A name with a small square of its color. */
 function colorTag(text, color) {
@@ -1463,63 +1478,77 @@ async function showRates() {
   }
   const editor = canEditFacilities();
   const sites = state.site ? data.sites.filter((s) => String(s.siteId) === String(state.site)) : data.sites;
+  const { classes } = data;
   body.replaceChildren(
-    h("p", { class: "muted", text: "Rates are dollars per square foot a month. An office uses its company's rate when the company has one, else its own rate, else its site's default. Its monthly cost is its size times that rate." }),
+    h("p", { class: "muted", text: "Rates are dollars per square foot a month, one for each classification of space. An office uses its company's rate for its classification when the company has one, else its own rate, else its site's rate for its classification. Its monthly cost is its size times that rate." }),
     h("div", { class: "panel" },
-      h("h3", { text: "Site defaults" }),
+      h("h3", { text: "Site rates" }),
       h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-        h("thead", {}, h("tr", {}, ["Site", "Default rate", ""].map((t) => h("th", { text: t })))),
+        h("thead", {}, h("tr", {}, ["Site", ...classes.map((c) => c.name), ""].map((t) => h("th", { text: t })))),
         h("tbody", {}, sites.map((s) => h("tr", {},
           h("td", { text: s.name }),
-          h("td", { text: s.rate === null ? "None" : `${fmtRate(s.rate)} a month` }),
-          h("td", {}, editor ? h("button", { type: "button", class: "link-btn", text: "Set", onclick: () => setRate({ url: `/api/facilities/site-rates/${s.siteId}`, title: `${s.name}'s default rate`, rate: s.rate }).then((ok) => ok && showRates()) }) : null))))))),
+          rateCells(s.rates, classes, "None"),
+          h("td", {}, editor ? h("button", { type: "button", class: "link-btn", text: "Set", onclick: () => setRates({ url: `/api/facilities/site-rates/${s.siteId}`, title: `${s.name}'s rates`, rates: s.rates, classes, hint: "Empty for none." }).then((ok) => ok && showRates()) }) : null))))))),
     h("div", { class: "panel" },
       h("div", { class: "panel-head" }, h("h3", { text: "Company rates" }),
-        editor ? h("button", { type: "button", class: "primary small", text: "Set a company's rate", onclick: async () => { if (await setCompanyRate(null)) showRates(); } }) : null),
+        editor ? h("button", { type: "button", class: "primary small", text: "Set a company's rates", onclick: async () => { if (await setCompanyRates(null, classes)) showRates(); } }) : null),
       data.companies.length ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-        h("thead", {}, h("tr", {}, ["Company", "Rate", ""].map((t) => h("th", { text: t })))),
+        h("thead", {}, h("tr", {}, ["Company", ...classes.map((c) => c.name), ""].map((t) => h("th", { text: t })))),
         h("tbody", {}, data.companies.map((c) => h("tr", {},
           h("td", {}, h("a", { href: `#company/${c.companyId}`, text: c.name })),
-          h("td", { text: `${fmtRate(c.rate)} a month` }),
+          rateCells(c.rates, classes, "Usual rate"),
           h("td", {}, editor ? h("div", { class: "btn-row" },
-            h("button", { type: "button", class: "link-btn", text: "Change", onclick: async () => { if (await setCompanyRate(c)) showRates(); } }),
+            h("button", { type: "button", class: "link-btn", text: "Change", onclick: async () => { if (await setCompanyRates(c, classes)) showRates(); } }),
             h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: async () => {
               try {
                 await api(`/api/facilities/company-rates/${c.companyId}`, { method: "PUT", body: { rate: null } });
-                toast(`${c.name} now pays each office's rate.`);
+                toast(`${c.name} now pays each office's usual rate.`);
                 showRates();
               } catch (error) {
                 toast(error.message, "error");
               }
             } })) : null))))))
-        : h("p", { class: "muted small-text", text: "No company has its own rate: each pays its offices' rates." })));
+        : h("p", { class: "muted small-text", text: "No company has its own rates: each pays its offices' usual rates." })));
 }
 
-/** Asks for a rate and saves it at `url` (empty clears it). */
-async function setRate({ url, title, rate, intro = null }) {
+/** A table cell for each classification: its rate, or `none`. */
+function rateCells(rates, classes, none) {
+  return classes.map((c) => (rates[c.key] === undefined ? h("td", { class: "muted", text: none }) : h("td", { text: `${fmtRate(rates[c.key])} a month` })));
+}
+
+/** The rate fields for each classification, and what they add up to for saving (empty: none). */
+const rateFields = (rates, classes, hint) => classes.map((c, i) => ({ name: `rate${c.key}`, label: `${c.name} ($ per sq ft a month)`, type: "number", value: rates[c.key] ?? "", step: "0.01", min: "0", half: true, autofocus: i === 0, hint }));
+const rateValues = (v, classes) => Object.fromEntries(classes.map((c) => [c.key, v[`rate${c.key}`] === "" ? null : Number(v[`rate${c.key}`])]));
+
+/** Asks for a rate for each classification and saves them at `url`. */
+async function setRates({ url, title, rates, classes, hint, intro = null }) {
   const saved = await formDialog({
     title,
     intro,
-    fields: [{ name: "rate", label: "Rate ($ per sq ft a month)", type: "number", value: rate ?? "", step: "0.01", min: "0", autofocus: true, hint: "Empty to clear it." }],
-    onSubmit: async (v) => api(url, { method: "PUT", body: { rate: v.rate === "" ? null : Number(v.rate) } })
+    fields: rateFields(rates, classes, hint),
+    onSubmit: async (v) => api(url, { method: "PUT", body: { rates: rateValues(v, classes) } })
   });
-  if (saved) toast("Rate saved.");
+  if (saved) toast("Rates saved.");
   return saved;
 }
 
-/** Sets a company's rate: `company` ({ companyId, name, rate }), or one chosen here. */
-async function setCompanyRate(company) {
-  if (company) return setRate({ url: `/api/facilities/company-rates/${company.companyId}`, title: `${company.name}'s rate`, rate: company.rate, intro: h("p", { class: "muted small-text", text: "It applies to every office the company has, over the office's and the site's rates." }) });
+const COMPANY_RATE_NOTE = "Each applies to the company's offices of that classification, over the office's and the site's rates.";
+
+/** Sets a company's rates: `company` ({ companyId, name, rates }), or one chosen here. */
+async function setCompanyRates(company, classes) {
+  const hint = "Empty for the usual rate.";
+  if (company) return setRates({ url: `/api/facilities/company-rates/${company.companyId}`, title: `${company.name}'s rates`, rates: company.rates, classes, hint, intro: h("p", { class: "muted small-text", text: COMPANY_RATE_NOTE }) });
   const options = await facilityCompanyOptions();
   const saved = await formDialog({
-    title: "Set a company's rate",
+    title: "Set a company's rates",
+    intro: h("p", { class: "muted small-text", text: COMPANY_RATE_NOTE }),
     fields: [
       { name: "companyId", label: "Company", type: "select", options: [{ value: "", label: "Choose a company" }, ...options], required: true },
-      { name: "rate", label: "Rate ($ per sq ft a month)", type: "number", step: "0.01", min: "0", required: true, hint: "It applies to every office the company has, over the office's and the site's rates." }
+      ...rateFields({}, classes, hint)
     ],
-    onSubmit: async (v) => api(`/api/facilities/company-rates/${v.companyId}`, { method: "PUT", body: { rate: Number(v.rate) } })
+    onSubmit: async (v) => api(`/api/facilities/company-rates/${v.companyId}`, { method: "PUT", body: { rates: rateValues(v, classes) } })
   });
-  if (saved) toast("Rate saved.");
+  if (saved) toast("Rates saved.");
   return saved;
 }
 
@@ -1545,13 +1574,14 @@ function companyOfficesPanel(company) {
       return row;
     });
     const t = data.totals;
+    const ownRates = data.classes.filter((c) => data.rates[c.key] !== undefined).map((c) => `${c.name} ${fmtRate(data.rates[c.key])}`);
     panel.replaceChildren(
       h("div", { class: "panel-head" },
         h("h3", { text: "Offices" }),
         h("div", { class: "btn-row" },
-          h("span", { class: "small-text muted", text: data.rate === null ? "Pays each office's rate" : `Company rate ${fmtRate(data.rate)} a month` }),
-          editor ? h("button", { type: "button", class: "secondary small", text: data.rate === null ? "Set a rate" : "Change rate", onclick: async () => { if (await setCompanyRate({ companyId: company.id, name: company.name, rate: data.rate })) refresh(); } }) : null,
-          editor ? h("button", { type: "button", class: "primary small", text: "Assign offices", onclick: async () => { if (await assignOfficesToCompany(company, data.rate)) refresh(); } }) : null)),
+          h("span", { class: "small-text muted", text: ownRates.length ? `Company rates: ${ownRates.join(", ")}` : "Pays each office's usual rate" }),
+          editor ? h("button", { type: "button", class: "secondary small", text: ownRates.length ? "Change rates" : "Set rates", onclick: async () => { if (await setCompanyRates({ companyId: company.id, name: company.name, rates: data.rates }, data.classes)) refresh(); } }) : null,
+          editor ? h("button", { type: "button", class: "primary small", text: "Assign offices", onclick: async () => { if (await assignOfficesToCompany(company, data.rates)) refresh(); } }) : null)),
       rows.length ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
         h("thead", {}, h("tr", {}, ["Office", "Floor", "Dates", "Sq ft", "Desks", "Rate", "Monthly"].map((x) => h("th", { text: x })))),
         h("tbody", {}, rows),
@@ -1569,9 +1599,9 @@ function companyOfficesPanel(company) {
 /**
  * Assigns offices to a company from its page: the dates first, then the offices free for them,
  * picked on a floor's plan or from the list (any number, across floors). All or none are
- * assigned. `companyRate` (or null) works out what they would cost.
+ * assigned. `companyRates` ({ classKey: rate }) works out what they would cost.
  */
-async function assignOfficesToCompany(company, companyRate) {
+async function assignOfficesToCompany(company, companyRates) {
   const picked = new Map();
   const floorOffices = new Map();
   let free = [];
@@ -1590,7 +1620,7 @@ async function assignOfficesToCompany(company, companyRate) {
   const summary = h("p", { class: "pick-summary small-text" });
   // A room let for a fixed amount a month costs that, whatever the company's rate.
   const fixed = (o) => o.monthlyRent !== null && o.monthlyRent !== undefined;
-  const rateOf = (o) => (fixed(o) ? null : companyRate ?? o.askingRate);
+  const rateOf = (o) => (fixed(o) ? null : companyRates[o.classId || 0] ?? o.askingRate);
   const monthlyOf = (o) => (fixed(o) ? o.monthlyRent : rateOf(o) !== null && o.sqft !== null ? o.sqft * rateOf(o) : null);
   const floorLabel = (f) => (multiSite() && !state.site ? `${f.siteName}: ${f.name}` : f.name);
 
@@ -1624,7 +1654,7 @@ async function assignOfficesToCompany(company, companyRate) {
     const monthly = chosen.reduce((n, o) => n + (monthlyOf(o) || 0), 0);
     const unknown = chosen.some((o) => monthlyOf(o) === null);
     summary.replaceChildren(h("strong", { text: `${chosen.length} ${chosen.length === 1 ? "office" : "offices"}` }),
-      ` (${chosen.map((o) => o.name).join(", ")}): ${fmtSqft(sqft)}, about ${fmtMoney(monthly)} a month${companyRate !== null ? ` at ${company.name}'s rate` : ""}${unknown ? " (some have no size or rate)" : ""}.`);
+      ` (${chosen.map((o) => o.name).join(", ")}): ${fmtSqft(sqft)}, about ${fmtMoney(monthly)} a month${Object.keys(companyRates).length ? ` at ${company.name}'s rates` : ""}${unknown ? " (some have no size or rate)" : ""}.`);
   }
 
   function renderList() {

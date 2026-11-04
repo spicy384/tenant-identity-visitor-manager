@@ -16,9 +16,11 @@
  * also editable, with colors). Only rooms of a type that is assigned to companies can be; the
  * others show as "shared", with no rent.
  *
- * Rates are per square foot per month. A company's own rate wins; otherwise the office's,
- * otherwise its site's default. An office's monthly cost is its square feet times that rate,
- * unless it is let for a fixed amount a month (monthly_rent), which then wins over every rate.
+ * Rates are per square foot per month, and sites and companies have one for each classification
+ * (Unclassified, SCAR, SCIF, ...). The company's rate for the room's classification wins; otherwise
+ * the office's own, otherwise its site's for that classification. An office's monthly cost is its
+ * square feet times that rate, unless it is let for a fixed amount a month (monthly_rent), which
+ * then wins over every rate.
  *
  * Plans are PNG or JPEG, checked by their first bytes. Each has a random `ref` that changes
  * with every upload, so a browser may cache one for as long as it lasts.
@@ -33,6 +35,8 @@ const MAX_RATE = 100000;
 const MAX_MONTHLY = 100000000;
 const MAX_SQFT = 10000000;
 const MAX_DESKS = 10000;
+// A rate's classification when a room has none (otherwise, its room class's id).
+const UNCLASSIFIED_KEY = 0;
 const STATUSES = ["available", "occupied", "upcoming", "shared", "unavailable"];
 const COLOR_RE = /^#[0-9a-f]{6}$/i;
 // What a new database starts with: [name, color, assigned to companies].
@@ -240,33 +244,73 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
 
   // --- rates ------------------------------------------------------------------------------------
 
-  const siteRateStmt = raw.prepare("SELECT rate FROM site_rates WHERE site_id = ?");
-  const companyRateStmt = raw.prepare("SELECT rate FROM company_rates WHERE company_id = ?");
-  const siteRate = (siteId) => siteRateStmt.get(siteId)?.rate ?? null;
-  const companyRate = (companyId) => (companyId ? companyRateStmt.get(companyId)?.rate ?? null : null);
+  /** The classifications rates are set for: { key, name, color }, Unclassified first. */
+  function rateClasses() {
+    return [
+      { key: UNCLASSIFIED_KEY, name: "Unclassified", color: db.getSetting("facilities.unclassified_color") || DEFAULT_UNCLASSIFIED_COLOR },
+      ...raw.prepare("SELECT id, name, color FROM room_classes ORDER BY position, name COLLATE NOCASE").all().map((c) => ({ key: c.id, name: c.name, color: c.color }))
+    ];
+  }
 
-  function setSiteRate(siteId, value) {
+  // Rates from before they went by classification apply to every classification, once, so
+  // nobody's rent changes.
+  if (!db.getSetting("rates.by_class_seeded")) {
+    db.transaction(() => {
+      const keys = rateClasses().map((c) => c.key);
+      for (const r of raw.prepare("SELECT * FROM site_rates").all()) for (const key of keys) raw.prepare("INSERT OR IGNORE INTO site_class_rates (site_id, class_key, rate, updated_at) VALUES (?, ?, ?, ?)").run(r.site_id, key, r.rate, r.updated_at);
+      for (const r of raw.prepare("SELECT * FROM company_rates").all()) for (const key of keys) raw.prepare("INSERT OR IGNORE INTO company_class_rates (company_id, class_key, rate, updated_at) VALUES (?, ?, ?, ?)").run(r.company_id, key, r.rate, r.updated_at);
+      db.setSetting("rates.by_class_seeded", "1");
+    });
+  }
+
+  const siteRateStmt = raw.prepare("SELECT rate FROM site_class_rates WHERE site_id = ? AND class_key = ?");
+  const companyRateStmt = raw.prepare("SELECT rate FROM company_class_rates WHERE company_id = ? AND class_key = ?");
+  const siteRate = (siteId, key = UNCLASSIFIED_KEY) => siteRateStmt.get(siteId, key)?.rate ?? null;
+  const companyRate = (companyId, key = UNCLASSIFIED_KEY) => (companyId ? companyRateStmt.get(companyId, key)?.rate ?? null : null);
+  const byClass = (rows) => Object.fromEntries(rows.map((r) => [r.class_key, r.rate]));
+  /** A site's rates: { classKey: rate }, for those it has. */
+  const siteRates = (siteId) => byClass(raw.prepare("SELECT class_key, rate FROM site_class_rates WHERE site_id = ?").all(siteId));
+  /** A company's own rates: { classKey: rate }, for those it has. */
+  const companyRates = (companyId) => byClass(raw.prepare("SELECT class_key, rate FROM company_class_rates WHERE company_id = ?").all(companyId));
+
+  /** Saves rates, all or none: body { rates: { classKey: rate or null to clear } }, or { rate } for every classification. */
+  function saveRates(table, column, id, body) {
+    const keys = rateClasses().map((c) => c.key);
+    const given = body?.rates && typeof body.rates === "object" ? body.rates : Object.fromEntries(keys.map((k) => [k, body?.rate]));
+    const clean = Object.entries(given).map(([k, value]) => {
+      if (!keys.includes(Number(k))) throw fail(400, "No such classification.");
+      return [Number(k), amountInput(value, "rate", MAX_RATE)];
+    });
+    db.transaction(() => {
+      for (const [key, rate] of clean) {
+        if (rate === null) raw.prepare(`DELETE FROM ${table} WHERE ${column} = ? AND class_key = ?`).run(id, key);
+        else raw.prepare(`INSERT INTO ${table} (${column}, class_key, rate, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(${column}, class_key) DO UPDATE SET rate = excluded.rate, updated_at = excluded.updated_at`).run(id, key, rate, now());
+      }
+    });
+  }
+
+  function setSiteRates(siteId, body) {
     if (!sites.get(siteId)) throw fail(404, "No such site.");
-    const rate = amountInput(value, "rate", MAX_RATE);
-    if (rate === null) raw.prepare("DELETE FROM site_rates WHERE site_id = ?").run(siteId);
-    else raw.prepare("INSERT INTO site_rates (site_id, rate, updated_at) VALUES (?, ?, ?) ON CONFLICT(site_id) DO UPDATE SET rate = excluded.rate, updated_at = excluded.updated_at").run(siteId, rate, now());
-    return rate;
+    saveRates("site_class_rates", "site_id", siteId, body);
+    return siteRates(siteId);
   }
 
-  function setCompanyRate(companyId, value) {
+  function setCompanyRates(companyId, body) {
     if (!directory.getCompany(companyId)) throw fail(404, "No such company.");
-    const rate = amountInput(value, "rate", MAX_RATE);
-    if (rate === null) raw.prepare("DELETE FROM company_rates WHERE company_id = ?").run(companyId);
-    else raw.prepare("INSERT INTO company_rates (company_id, rate, updated_at) VALUES (?, ?, ?) ON CONFLICT(company_id) DO UPDATE SET rate = excluded.rate, updated_at = excluded.updated_at").run(companyId, rate, now());
-    return rate;
+    saveRates("company_class_rates", "company_id", companyId, body);
+    return companyRates(companyId);
   }
+
+  /** Rates in words, for the audit log. */
+  const rateWords = (rates) => rateClasses().filter((c) => rates[c.key] !== undefined).map((c) => `${c.name} $${rates[c.key]}`).join(", ") || "none";
 
   /** The rate that applies to an office for a company (or, with none, its asking rate), and where it came from. */
   function effectiveRate(office, siteId, companyId) {
-    const own = companyRate(companyId);
+    const key = office.classId || UNCLASSIFIED_KEY;
+    const own = companyRate(companyId, key);
     if (own !== null) return { rate: own, source: "company" };
     if (office.rate !== null && office.rate !== undefined) return { rate: office.rate, source: "office" };
-    const site = siteRate(siteId);
+    const site = siteRate(siteId, key);
     return site !== null ? { rate: site, source: "site" } : { rate: null, source: null };
   }
 
@@ -281,12 +325,12 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return { rate, source, monthly: rate !== null && office.sqft !== null && office.sqft !== undefined ? money(office.sqft * rate) : null };
   }
 
-  /** Every site's default rate and every company that has its own, for the caller's sites. */
+  /** The classifications, every site's rates and every company that has its own, for the caller's sites. */
   function rates({ scope = null } = {}) {
-    const siteList = sites.list({ includeInactive: false }).filter((s) => !scope || scope.has(s.id)).map((s) => ({ siteId: s.id, name: s.name, rate: siteRate(s.id) }));
-    const companies = raw.prepare(`SELECT r.company_id, r.rate, c.name FROM company_rates r JOIN companies c ON c.id = r.company_id ORDER BY c.name`).all()
-      .map((r) => ({ companyId: r.company_id, name: r.name, rate: r.rate }));
-    return { sites: siteList, companies };
+    const siteList = sites.list({ includeInactive: false }).filter((s) => !scope || scope.has(s.id)).map((s) => ({ siteId: s.id, name: s.name, rates: siteRates(s.id) }));
+    const companies = raw.prepare("SELECT DISTINCT r.company_id, c.name FROM company_class_rates r JOIN companies c ON c.id = r.company_id ORDER BY c.name").all()
+      .map((r) => ({ companyId: r.company_id, name: r.name, rates: companyRates(r.company_id) }));
+    return { classes: rateClasses(), sites: siteList, companies };
   }
 
   // --- floors -----------------------------------------------------------------------------------
@@ -462,6 +506,24 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return { current, next };
   }
 
+  /**
+   * When a let room comes free if its tenant doesn't renew: the day after the current lease (or,
+   * free now, the coming one), past any lease that already follows straight on. { availableFrom,
+   * availableUntil (the day a later lease starts), openEnded (a lease with no end date: no such day) }.
+   */
+  function freeAfter(list, today) {
+    const { current, next } = placeOf(list, today);
+    let held = current || next;
+    if (!held) return { availableFrom: null, availableUntil: null, openEnded: false };
+    while (held.endDate) {
+      const day = new Date(Date.parse(`${held.endDate}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+      const follows = list.find((a) => a.startDate === day);
+      if (!follows) return { availableFrom: day, availableUntil: list.map((a) => a.startDate).filter((d) => d > day).sort()[0] || null, openEnded: false };
+      held = follows;
+    }
+    return { availableFrom: null, availableUntil: null, openEnded: true };
+  }
+
   // --- offices ----------------------------------------------------------------------------------
 
   const OFFICE_SELECT = `SELECT o.*, f.site_id, f.name AS floor_name, f.plan_width, f.plan_height, f.scale_feet, s.name AS site_name,
@@ -476,7 +538,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     const assignable = r.room_type_id ? Boolean(r.type_assignable) : true;
     const status = r.unavailable ? "unavailable" : current ? "occupied" : next ? "upcoming" : assignable ? "available" : "shared";
     // Occupied: what its company pays. Otherwise what it would cost (its fixed rent, or the office's or site's rate); a shared room costs nothing.
-    const priced = { rate: r.rate, sqft: r.sqft, monthlyRent: r.monthly_rent };
+    const priced = { rate: r.rate, sqft: r.sqft, monthlyRent: r.monthly_rent, classId: r.class_id };
     const { rate, source, monthly } = assignable || current ? rentOf(priced, r.site_id, current?.companyId ?? null) : { rate: null, source: null, monthly: null };
     // What it costs a company without a rate of its own: its fixed rent, else the office's rate, else the site's.
     const asking = assignable ? rentOf(priced, r.site_id, null) : { rate: null, monthly: null };
@@ -517,6 +579,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       status,
       current,
       next,
+      ...freeAfter(list, today),
       effectiveRate: rate,
       rateSource: source,
       askingRate,
@@ -768,7 +831,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     rows.sort((a, b) => order[a.when] - order[b.when] || b.assignment.startDate.localeCompare(a.assignment.startDate));
     const held = rows.filter((r) => r.when === "current");
     return {
-      rate: companyRate(companyId),
+      classes: rateClasses(),
+      rates: companyRates(companyId),
       offices: rows,
       totals: { offices: held.length, sqft: money(held.reduce((n, r) => n + (r.sqft || 0), 0)), desks: held.reduce((n, r) => n + (r.desks || 0), 0), monthly: money(held.reduce((n, r) => n + (r.monthly || 0), 0)) }
     };
@@ -886,7 +950,11 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
   function removeRoomClass(id) {
     const existing = mustRoomClass(id);
     if (existing.rooms) throw fail(409, `${existing.rooms} ${existing.rooms === 1 ? "room is" : "rooms are"} ${existing.name}; change ${existing.rooms === 1 ? "its" : "their"} classification first.`);
-    raw.prepare("DELETE FROM room_classes WHERE id = ?").run(existing.id);
+    db.transaction(() => {
+      raw.prepare("DELETE FROM site_class_rates WHERE class_key = ?").run(existing.id);
+      raw.prepare("DELETE FROM company_class_rates WHERE class_key = ?").run(existing.id);
+      raw.prepare("DELETE FROM room_classes WHERE id = ?").run(existing.id);
+    });
     return existing;
   }
 
@@ -904,7 +972,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
   }
 
   return {
-    todayAt, rates, siteRate, companyRate, effectiveRate, rentOf, setSiteRate, setCompanyRate,
+    todayAt, rates, siteRate, companyRate, effectiveRate, rentOf, setSiteRates, setCompanyRates, rateWords,
     listFloors, getFloor, createFloor, updateFloor, removeFloor, setPlan, clearPlan, setScale, planImage,
     listOffices, getOffice, createOffice, updateOffice, removeOffice, updateMany, removeMany,
     getAssignment, assign, assignMany, updateAssignment, removeAssignment,

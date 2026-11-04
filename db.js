@@ -433,10 +433,30 @@ CREATE TABLE IF NOT EXISTS office_assignments (
 CREATE INDEX IF NOT EXISTS office_assignments_office ON office_assignments(office_id, start_date);
 CREATE INDEX IF NOT EXISTS office_assignments_company ON office_assignments(company_id);
 
+-- No longer used: rates go by classification now (site_class_rates, company_class_rates), these
+-- having been copied to each. Kept so older databases open as they were; company_rates with it.
 CREATE TABLE IF NOT EXISTS site_rates (
   site_id INTEGER PRIMARY KEY REFERENCES sites(id) ON DELETE CASCADE,
   rate REAL NOT NULL,
   updated_at INTEGER NOT NULL
+);
+
+-- A site's and a company's rate for each classification (class_key: a room class's id, or 0 for
+-- unclassified rooms).
+CREATE TABLE IF NOT EXISTS site_class_rates (
+  site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  class_key INTEGER NOT NULL,
+  rate REAL NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (site_id, class_key)
+);
+
+CREATE TABLE IF NOT EXISTS company_class_rates (
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  class_key INTEGER NOT NULL,
+  rate REAL NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (company_id, class_key)
 );
 
 -- Kinds of room (Office, Conference Room, ...), each with a color for the plan and whether it

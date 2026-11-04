@@ -257,17 +257,17 @@ function createFacilityRoutes({ access, facilities, leases, directory, sites, au
   router.put("/api/facilities/site-rates/:id", editFacilities, (req, res) => {
     const siteId = siteParam(req, req.params.id);
     if (!siteId) throw fail(404, "No such site.");
-    const rate = facilities.setSiteRate(siteId, req.body?.rate);
-    auditFrom(req, "facilities.site_rate", sites.get(siteId)?.name || String(siteId), money(rate));
-    res.json({ ok: true, rate });
+    const rates = facilities.setSiteRates(siteId, req.body);
+    auditFrom(req, "facilities.site_rate", sites.get(siteId)?.name || String(siteId), facilities.rateWords(rates));
+    res.json({ ok: true, rates });
   });
 
   router.put("/api/facilities/company-rates/:id", editFacilities, (req, res) => {
     const company = directory.getCompany(idOf(req), { sites: req.ctx.sites });
     if (!company) throw fail(404, "No such company, or not at your sites.");
-    const rate = facilities.setCompanyRate(company.id, req.body?.rate);
-    auditFrom(req, "facilities.company_rate", company.name, money(rate));
-    res.json({ ok: true, rate });
+    const rates = facilities.setCompanyRates(company.id, req.body);
+    auditFrom(req, "facilities.company_rate", company.name, facilities.rateWords(rates));
+    res.json({ ok: true, rates });
   });
 
   /** Assigns several offices to a company for the same dates (all or none): { officeIds, startDate, endDate, notes }. */
