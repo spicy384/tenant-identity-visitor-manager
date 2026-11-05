@@ -6,6 +6,8 @@
  *                                    row counts, and a token for the next steps
  *   GET  /api/import/:token/table    one table's columns and its first rows, to match and preview
  *   POST /api/import/:token/run      { table, target, mapping, createCompanies }: imports it
+ *   POST /api/import/:token/tenant-badges/review   { table, mapping }: who each row's name may be,
+ *                                    to choose from before running it with { choices }
  *
  * The file is read on the server and held in memory only, for IMPORT_TTL_MS, by the account
  * that sent it; it is never written to disk. Running the import goes through the same
@@ -108,10 +110,12 @@ const TARGETS = {
   visitors: { may: (access, ctx) => access.canEditVisitors(ctx), refusal: "This account can't change visitors." },
   badges: { may: (access, ctx) => access.canManageBadges(ctx), refusal: "Only Security adds and changes badges." },
   // Clearances validated elsewhere, onto people already here: only Security sets clearances.
-  clearances: { may: (access, ctx) => access.isSecurity(ctx) && access.canSeeClearances(ctx), refusal: "Only Security validates clearances." }
+  clearances: { may: (access, ctx) => access.isSecurity(ctx) && access.canSeeClearances(ctx), refusal: "Only Security validates clearances." },
+  // Badges tenants hold already, onto people here: adds badges, so Security, who must see who's who.
+  tenant_badges: { may: (access, ctx) => access.canManageBadges(ctx) && access.canReadDirectory(ctx), refusal: "Only Security adds and changes badges." }
 };
 
-function createImportRoutes({ access, importCompanies, importPeople, importVisitors, importBadges, importClearances, now = Date.now }) {
+function createImportRoutes({ access, importCompanies, importPeople, importVisitors, importBadges, importClearances, tenantBadges, now = Date.now }) {
   // Reading a file needs the right to import something; running it, the right to import that.
   const mayImport = (req, res, next) => (Object.values(TARGETS).some((t) => t.may(access, req.ctx)) ? next() : res.status(403).json({ error: "This account can't import anything." }));
 
@@ -178,13 +182,8 @@ function createImportRoutes({ access, importCompanies, importPeople, importVisit
     res.json({ name: table.name, columns: table.columns, rowCount: table.rowCount, sample });
   });
 
-  router.post("/api/import/:token/run", mayImport, (req, res) => {
-    const h = heldFor(req);
-    const body = req.body || {};
-    const table = tableOf(h, String(body.table || ""));
-    const target = Object.prototype.hasOwnProperty.call(TARGETS, body.target) ? body.target : null;
-    if (!target) throw fail(400, "Import into people, companies, visitors, badges or clearances.");
-    if (!TARGETS[target].may(access, req.ctx)) throw fail(403, TARGETS[target].refusal);
+  /** A table's rows as the import's columns, by the mapping, and what names a row in a message. */
+  function mappedRows(h, table, body) {
     const mapping = body.mapping && typeof body.mapping === "object" ? body.mapping : {};
     const known = new Set(table.columns.map((c) => c.name));
     const sources = [];
@@ -200,12 +199,33 @@ function createImportRoutes({ access, importCompanies, importPeople, importVisit
     }
     const all = table.rows();
     if (all.length > MAX_ROWS) throw fail(400, `The table has ${all.length.toLocaleString("en-US")} rows; import at most ${MAX_ROWS.toLocaleString("en-US")} at a time (split it with a query in Access).`);
-    const rows = all.map((r) => Object.fromEntries(sources.map(([key, get]) => [key, get(r)])));
-    const from = h.format === "access" ? `Access table "${table.name}"${h.fileName ? ` in ${h.fileName}` : ""}` : `CSV${h.fileName ? ` ${h.fileName}` : ""}`;
-    const where = h.format === "access" ? (i) => `Row ${i + 1}` : (i) => `Line ${table.lines?.[i] ?? i + 2}`;
+    return {
+      rows: all.map((r) => Object.fromEntries(sources.map(([key, get]) => [key, get(r)]))),
+      from: h.format === "access" ? `Access table "${table.name}"${h.fileName ? ` in ${h.fileName}` : ""}` : `CSV${h.fileName ? ` ${h.fileName}` : ""}`,
+      where: h.format === "access" ? (i) => `Row ${i + 1}` : (i) => `Line ${table.lines?.[i] ?? i + 2}`
+    };
+  }
+
+  router.post("/api/import/:token/tenant-badges/review", mayImport, (req, res) => {
+    if (!TARGETS.tenant_badges.may(access, req.ctx)) throw fail(403, TARGETS.tenant_badges.refusal);
+    const h = heldFor(req);
+    const body = req.body || {};
+    const { rows, where } = mappedRows(h, tableOf(h, String(body.table || "")), body);
+    res.json(tenantBadges.review(req, rows, { where }));
+  });
+
+  router.post("/api/import/:token/run", mayImport, (req, res) => {
+    const h = heldFor(req);
+    const body = req.body || {};
+    const table = tableOf(h, String(body.table || ""));
+    const target = Object.prototype.hasOwnProperty.call(TARGETS, body.target) ? body.target : null;
+    if (!target) throw fail(400, "Import into people, companies, visitors, badges or clearances.");
+    if (!TARGETS[target].may(access, req.ctx)) throw fail(403, TARGETS[target].refusal);
+    const { rows, from, where } = mappedRows(h, table, body);
     // skipProblems: import the rows that can be, and list the ones left out, rather than none.
     const skipProblems = body.skipProblems === true;
-    const result = target === "companies" ? importCompanies(req, rows, { where, from, skipProblems })
+    const result = target === "tenant_badges" ? tenantBadges.assign(req, rows, { choices: body.choices, where, from })
+      : target === "companies" ? importCompanies(req, rows, { where, from, skipProblems })
       : target === "visitors" ? importVisitors(req, rows, { where, from, skipProblems })
         : target === "badges" ? importBadges(req, rows, { where, from, skipProblems })
           : target === "clearances" ? importClearances(req, rows, { where, from, skipProblems, addVisitors: body.addVisitors === true })

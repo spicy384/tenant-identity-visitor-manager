@@ -66,6 +66,16 @@ const IMPORT_FIELDS = {
     { key: "status", label: "Status", hint: "active, lost or retired", names: ["status", "state"] },
     { key: "notes", label: "Notes", names: ["notes", "note", "comments", "remarks"] }
   ],
+  // Badges tenants hold already, given to people on record whose names are matched for review.
+  tenant_badges: [
+    { key: "name", label: "Name", hint: "\"First Last\", \"Last, First\" or \"Last First\". Or match First name and Last name instead.", names: ["name", "fullname", "personname", "employeename", "employee", "person", "holder", "badgeholder", "lastfirst", "firstlast"] },
+    { key: "first_name", label: "First name", names: ["firstname", "first", "givenname", "forename", "fname"] },
+    { key: "last_name", label: "Last name", names: ["lastname", "surname", "familyname", "last", "lname"] },
+    { key: "number", label: "Badge number", required: true, names: ["number", "badgenumber", "badgeno", "badge", "badgeid", "no", "card", "cardnumber"] },
+    { key: "facility_code", label: "Facility code", hint: "2 or 3 digits, if the badge has one", names: ["facilitycode", "facility", "fc", "sitecode", "facilitycodenumber"] },
+    { key: "company", label: "Company", hint: "Only needed to tell apart two with the same name. People there are matched first.", names: ["company", "companyname", "firm", "organization", "employer", "tenant"] },
+    { key: "level", label: "Clearance level", clearance: true, hint: "For badges not on record yet: a level's name, or Uncleared (the same if empty). A badge can't change level once it is out, so give it here if any are cleared.", names: ["level", "lvl", "clearance", "clearancelevel", "classification", "class"] }
+  ],
   // Clearances validated elsewhere, onto people and visitors already on record (Security).
   clearances: [
     { key: "name", label: "Name", hint: "\"First Last\", \"Last, First\" or \"Last First\". Or match First name and Last name instead.", names: ["name", "fullname", "personname", "employeename", "employee", "person", "lastfirst", "firstlast"] },
@@ -93,6 +103,7 @@ const IMPORT_KINDS = {
   companies: { label: "Companies", one: "company", many: "companies", may: () => canEditDirectory(), entity: "company", matched: "same name" },
   visitors: { label: "Visitors", one: "visitor", many: "visitors", may: () => canEditVisitors(), entity: "visitor", matched: "same email, or without one the same name" },
   badges: { label: "Badges", one: "badge", many: "badges", may: () => canManageBadges(), entity: null, matched: "same facility code and number" },
+  tenant_badges: { label: "Tenant badges, assigned to people by name", one: "badge", many: "tenant badges", may: () => canManageBadges() && canReadDirectory(), entity: null, added: (n) => `${n === 1 ? "badge" : "badges"} added and assigned`, updated: "already on record, and assigned", unchanged: "already with that person, left as they were" },
   clearances: { label: "Clearances (people and visitors)", one: "clearance", many: "clearances", may: () => isSecurity(), entity: null, added: (n) => `${n === 1 ? "visitor" : "visitors"} added, with their clearance`, updated: "validated", unchanged: "validated more recently here, left as they were" }
 };
 
@@ -101,6 +112,7 @@ const normalizeName = (s) => String(s || "").normalize("NFKD").replace(/[̀-ͯ]/
 /** The fields this account may import into: built-in ones it can change, and its custom fields. */
 function importTargets(kind) {
   if (kind === "clearances") return IMPORT_FIELDS.clearances;
+  if (kind === "tenant_badges") return IMPORT_FIELDS.tenant_badges.filter((t) => !t.clearance || canSeeClearances());
   // Badges have no field grid: every column, the level only for those who see clearance levels.
   if (kind === "badges") {
     const custom = (state.schema.badge || []).filter((f) => !f.builtIn && !f.recordOnly && f.access === "edit")
@@ -266,16 +278,20 @@ async function importDialog(kind) {
         return s;
       })())
       : null;
-    const label = `Import ${table.rowCount} ${table.rowCount === 1 ? IMPORT_KINDS[target].one : IMPORT_KINDS[target].many}`;
+    const label = target === "tenant_badges" ? "Match the names" : `Import ${table.rowCount} ${table.rowCount === 1 ? IMPORT_KINDS[target].one : IMPORT_KINDS[target].many}`;
     // skip: import what can be, leaving out (and listing) the rows with problems.
     const run = async (skip) => {
       clearError();
       const missing = fieldsHere.filter((f) => f.required && !(mapping[f.key]?.column || String(mapping[f.key]?.value || "").trim()));
       if (missing.length) return showError(new Error(`Match ${missing.map((f) => f.label).join(", ")} first.`));
-      if (target === "clearances" && !mapping.name && !(mapping.first_name && mapping.last_name)) return showError(new Error("Match Name, or First name and Last name, first."));
+      if ((target === "clearances" || target === "tenant_badges") && !mapping.name && !(mapping.first_name && mapping.last_name)) return showError(new Error("Match Name, or First name and Last name, first."));
       importBtn.disabled = true;
-      importBtn.textContent = "Importing…";
+      importBtn.textContent = target === "tenant_badges" ? "Matching…" : "Importing…";
       try {
+        if (target === "tenant_badges") {
+          stepReview(await api(`/api/import/${read.token}/tenant-badges/review`, { method: "POST", body: { table: table.name, mapping } }));
+          return null;
+        }
         const result = await api(`/api/import/${read.token}/run`, { method: "POST", body: { table: table.name, target, mapping, createCompanies: createCompanies.checked, addVisitors: addVisitors.checked, skipProblems: skip } });
         dlg.finish(result);
       } catch (error) {
@@ -298,17 +314,174 @@ async function importDialog(kind) {
       // replaceChildren would write out null as text, so "" where there is nothing.
       target === "people" ? h("label", { class: "check-row" }, createCompanies, h("span", { text: "Add companies that don't exist yet" })) : "",
       target === "clearances" ? h("label", { class: "check-row" }, addVisitors, h("span", { text: "Add visitors who aren't on record yet: anyone the file names who isn't found is added as a visitor, with their clearance" })) : "",
-      h("label", { class: "check-row" }, skipProblems, h("span", { text: "Skip rows with problems (such as a required field left empty): import the rest, and list the ones skipped" })),
+      target === "tenant_badges" ? "" : h("label", { class: "check-row" }, skipProblems, h("span", { text: "Skip rows with problems (such as a required field left empty): import the rest, and list the ones skipped" })),
       h("p", { class: "muted small-text", text: `${{
         people: "Someone already in the company with the same email (or, without one, the same name) is updated rather than added twice.",
         companies: "A company with the same name is updated.",
         visitors: `A visitor with the same email (or, without one, the same name) is updated rather than added twice. Imported visitors count as checked by staff. ${isSecurity() ? "Visitors with a clearance level are validated by you, on the date validated (unless validated more recently here)." : "Clearances aren't imported: Security validates them."}`,
         badges: "A badge with the same facility code and number is updated; a file that gives the same badge twice is refused. One that is out can't change its type, clearance level or whether it is temporary.",
-        clearances: "Each row validates the clearance of a person or visitor already on record; nobody is added unless you tick Add visitors below. They're found by email, else by name in any order (only among people or visitors, or at a company, when those columns are given), and validated on the date given, by you. Anyone validated more recently here is left as they are. A name that matches nobody, or more than one, is a problem to fix."
-      }[target]} Rows with nothing in them are passed over. Otherwise, if any row has a problem, nothing is imported and the problems are listed, unless you skip rows with problems.` }),
+        clearances: "Each row validates the clearance of a person or visitor already on record; nobody is added unless you tick Add visitors below. They're found by email, else by name in any order (only among people or visitors, or at a company, when those columns are given), and validated on the date given, by you. Anyone validated more recently here is left as they are. A name that matches nobody, or more than one, is a problem to fix.",
+        tenant_badges: "Next you'll see who each name is matched to, and choose where a name isn't exact or could be several people. Nothing is saved until you assign them."
+      }[target]} Rows with nothing in them are passed over.${target === "tenant_badges" ? "" : " Otherwise, if any row has a problem, nothing is imported and the problems are listed, unless you skip rows with problems."}` }),
       message,
       h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary", text: "Back", onclick: () => { clearError(); stepFile(); } }), importBtn));
     renderPreview();
+  }
+
+  // --- step 3, for tenant badges: who each name is -------------------------------------------------
+  function stepReview(review) {
+    const STATUS = {
+      exact: { text: "Same name" },
+      close: { text: "Close: check", tone: "attention" },
+      several: { text: "Choose", tone: "attention" },
+      none: { text: "Not found", tone: "bad" },
+      done: { text: "Already theirs" },
+      problem: { text: "Problem", tone: "bad" }
+    };
+    const toLook = (r) => ["close", "several", "none", "problem"].includes(r.status);
+    const open = review.rows.filter((r) => r.status !== "done" && r.status !== "problem");
+    const chosen = new Map(open.filter((r) => r.personId).map((r) => [r.row, r.personId]));
+    const noteOf = new Map();
+    const candidateOf = new Map();
+    const assignBtn = h("button", { type: "button", class: "primary" });
+    const tally = h("p", { class: "muted small-text", role: "status" });
+    // The file is held while someone is working on it: a long list can take a while.
+    let lastTouch = Date.now();
+    const stayHeld = () => {
+      if (Date.now() - lastTouch < 5 * 60 * 1000) return;
+      lastTouch = Date.now();
+      api(`/api/import/${read.token}/table?${new URLSearchParams({ name: table.name })}`).catch(() => {});
+    };
+
+    function refresh() {
+      const where = new Map();
+      for (const r of open) {
+        const id = chosen.get(r.row);
+        if (id) where.set(id, [...(where.get(id) || []), r.where]);
+      }
+      for (const r of open) {
+        const note = noteOf.get(r.row);
+        const id = chosen.get(r.row);
+        const problem = candidateOf.get(id)?.get(r.row);
+        const others = id ? where.get(id).filter((w) => w !== r.where) : [];
+        const person = r.candidates.find((c) => c.id === id);
+        const says = [problem, others.length ? `Also chosen on ${others.join(", ").toLowerCase()}.` : null, person?.held.length ? `Already holds ${person.held.join(", ")}; this adds another.` : null].filter(Boolean);
+        note.textContent = says.join(" ");
+        note.hidden = !says.length;
+      }
+      const n = chosen.size;
+      const leftOut = open.length - n + review.counts.problem;
+      assignBtn.textContent = `Assign ${n} ${n === 1 ? "badge" : "badges"}`;
+      assignBtn.disabled = !n;
+      tally.textContent = leftOut ? `${leftOut} ${leftOut === 1 ? "row" : "rows"} with nobody chosen or with a problem will be left out and listed afterward, to fix and import again.` : "Every row will be assigned.";
+    }
+
+    function personCell(r) {
+      if (r.status === "problem") return h("span", { class: "small-text", text: r.problem });
+      if (r.status === "done") return h("span", { class: "small-text", text: `${r.candidates[0].name}, ${r.candidates[0].company || ""}` });
+      const blocked = new Map(r.candidates.filter((c) => c.problem).map((c) => [c.id, c.problem]));
+      for (const [id, why] of blocked) {
+        if (!candidateOf.has(id)) candidateOf.set(id, new Map());
+        candidateOf.get(id).set(r.row, why);
+      }
+      const describe = (c) => `${c.name}, ${c.company || "no company"}${c.exact ? "" : c.weak ? " (same last name)" : " (similar)"}`;
+      const select = h("select", { "aria-label": `Who ${r.name} on ${r.where.toLowerCase()} is` },
+        h("option", { value: "", text: r.candidates.length ? "Leave this row out" : "Nobody found: leave this row out" }),
+        r.candidates.map((c) => h("option", { value: String(c.id), text: describe(c) })),
+        h("option", { value: "search", text: "Someone else…" }));
+      select.value = r.personId ? String(r.personId) : "";
+      const search = h("input", { type: "search", autocomplete: "off", placeholder: "Type a name from the directory", "aria-label": `Find the person for ${r.name}`, hidden: true });
+      const results = h("div", { class: "stack tenant-review-results", hidden: true });
+      const note = h("div", { class: "message warn small-text", hidden: true });
+      noteOf.set(r.row, note);
+      const pick = () => {
+        const id = Number(select.value) || null;
+        if (id) chosen.set(r.row, id);
+        else chosen.delete(r.row);
+        refresh();
+        stayHeld();
+      };
+      select.addEventListener("change", () => {
+        const searching = select.value === "search";
+        search.hidden = !searching;
+        results.hidden = !searching;
+        if (searching) {
+          chosen.delete(r.row);
+          refresh();
+          search.focus();
+        } else {
+          pick();
+        }
+      });
+      const find = debounce(async () => {
+        const q = search.value.trim();
+        if (!q) return results.replaceChildren();
+        const { people } = await api(`/api/people?${new URLSearchParams({ q, limit: "8" })}`).catch(() => ({ people: [] }));
+        if (search.value.trim() !== q) return null; // typed on meanwhile: a newer search is coming
+        const usable = people.filter((p) => p.active);
+        results.replaceChildren(...(usable.length ? usable.map((p) => h("button", { type: "button", class: "link-btn small-text", text: `${personName(p)}, ${p.companyName || "no company"}`, onclick: () => {
+          const c = { id: p.id, name: personName(p), company: p.companyName, exact: true, held: (p.heldBadges || []).filter((b) => !b.temporary).map((b) => b.label), problem: null };
+          if (!r.candidates.some((x) => x.id === c.id)) {
+            r.candidates.push(c);
+            select.querySelector('option[value="search"]').before(h("option", { value: String(c.id), text: describe(c) }));
+          }
+          select.value = String(c.id);
+          search.hidden = true;
+          results.hidden = true;
+          pick();
+        } })) : [h("p", { class: "muted small-text", text: "Nobody current with that name." })]));
+        return null;
+      });
+      search.addEventListener("input", find);
+      return h("div", { class: "stack tenant-review-person" }, select, search, results, note);
+    }
+
+    const lines = review.rows.map((r) => {
+      const status = STATUS[r.status];
+      const tr = h("tr", {},
+        h("td", { class: "nowrap small-text muted", text: r.where }),
+        h("td", {}, h("span", { text: r.name || "(no name)" }), r.company ? h("div", { class: "muted small-text", text: r.company }) : null),
+        h("td", { class: "nowrap" }, h("span", { class: "mono", text: r.label }), r.isNew ? h("div", { class: "muted small-text", text: "New badge" }) : null),
+        h("td", {}, h("span", { class: `pill nowrap${status.tone ? ` ${status.tone}` : ""}`, text: status.text })),
+        h("td", {}, personCell(r)));
+      return { r, tr };
+    });
+    const looking = lines.filter((l) => toLook(l.r)).length;
+    const show = h("select", { "aria-label": "Rows shown" },
+      h("option", { value: "look", text: `Rows to look at (${looking})` }),
+      h("option", { value: "all", text: `All rows (${lines.length})` }));
+    show.value = looking ? "look" : "all";
+    const applyFilter = () => { for (const { r, tr } of lines) tr.hidden = show.value === "look" && !toLook(r); };
+    show.addEventListener("change", applyFilter);
+    applyFilter();
+
+    const c = review.counts;
+    const part = (n, text) => (n ? `${n} ${text}` : null);
+    const summary = [part(c.exact, "the same name"), part(c.close, "close, to check"), part(c.several, "to choose from"), part(c.none, "not found"), part(c.done, "already theirs"), part(c.problem, "with a problem")].filter(Boolean).join(", ");
+
+    assignBtn.addEventListener("click", async () => {
+      clearError();
+      assignBtn.disabled = true;
+      assignBtn.textContent = "Assigning…";
+      try {
+        dlg.finish(await api(`/api/import/${read.token}/run`, { method: "POST", body: { table: table.name, target, mapping, choices: Object.fromEntries(chosen) } }));
+      } catch (error) {
+        showError(error);
+        refresh();
+      }
+    });
+
+    body.replaceChildren(
+      h("p", {}, h("strong", { text: `${review.rows.length} ${review.rows.length === 1 ? "row" : "rows"}: ${summary}.` })),
+      h("p", { class: "muted small-text", text: `Check the people below; only the person shown on a row gets its badge. ${review.newBadges ? `${review.newBadges} ${review.newBadges === 1 ? "badge isn't" : "badges aren't"} on record yet and will be added as tenant badges${canSeeClearances() ? ", Uncleared unless the file gives a level" : ""}. ` : ""}Nothing is charged: tenants hold these already, so any past what a company may hold are added to what it may hold.` }),
+      h("label", {}, h("span", { text: "Show" }), show),
+      h("div", { class: "table-wrap skipped-rows" }, h("table", { class: "table compact tenant-review" },
+        h("thead", {}, h("tr", {}, ["Row", "Name in the file", "Badge", "Match", "Person"].map((t) => h("th", { text: t })))),
+        h("tbody", {}, lines.map((l) => l.tr)))),
+      tally,
+      message,
+      h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary", text: "Back", onclick: () => { clearError(); stepMatch(); } }), assignBtn));
+    refresh();
   }
 
   stepFile();
@@ -322,8 +495,8 @@ async function importDialog(kind) {
   // Whatever happened, the server needn't hold the file any longer.
   if (read && !result) api(`/api/import/${read.token}`, { method: "DELETE" }).catch(() => {});
   if (!result) return false;
-  if (result.skippedCount) await showSkippedRows(kind, result);
-  else if (result.updated || result.blank || result.unchanged) await showImportCounts(kind, result);
+  if (result.skippedCount) await showSkippedRows(target, result);
+  else if (result.updated || result.blank || result.unchanged || result.notes?.length) await showImportCounts(target, result);
   else toast(`${result.added} added.${result.ignored.length ? ` Columns left out: ${result.ignored.join(", ")}.` : ""}`);
   return true;
 }
@@ -345,6 +518,7 @@ async function showImportCounts(kind, result) {
         line(result.updated, IMPORT_KINDS[kind].updated || `already here, and updated (${IMPORT_KINDS[kind].matched || "matched"})`),
         line(result.unchanged, IMPORT_KINDS[kind].unchanged || "already here, left as they were"),
         line(result.blank, `empty in every column imported, passed over`)),
+      (result.notes || []).map((text) => h("p", { text })),
       result.ignored.length ? h("p", { class: "muted small-text", text: `Columns left out: ${result.ignored.join(", ")}.` }) : null),
     actions: [{ label: "OK", value: true, kind: "primary" }]
   });
@@ -369,13 +543,14 @@ async function showSkippedRows(kind, result) {
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   };
   // Clearances add nobody: they validate people and visitors already here.
-  const done = kind === "clearances" ? `${result.added ? `${result.added} ${IMPORT_KINDS.clearances.added(result.added).replace(", with their clearance", "")}, ` : ""}${result.updated} validated${result.unchanged ? `, ${result.unchanged} left as they were` : ""}` : `${result.added} added, ${result.updated} updated`;
+  const done = kind === "tenant_badges" ? `${result.added + result.updated} assigned${result.added ? `, ${result.added} of them new` : ""}${result.unchanged ? `, ${result.unchanged} already theirs` : ""}` : kind === "clearances" ? `${result.added ? `${result.added} ${IMPORT_KINDS.clearances.added(result.added).replace(", with their clearance", "")}, ` : ""}${result.updated} validated${result.unchanged ? `, ${result.unchanged} left as they were` : ""}` : `${result.added} added, ${result.updated} updated`;
   const summary = `${done}, ${result.skippedCount} ${result.skippedCount === 1 ? "row" : "rows"} skipped${result.blank ? `, ${result.blank} empty ${result.blank === 1 ? "row" : "rows"} passed over` : ""}.`;
   await openDialog({
     title: `Imported ${IMPORT_KINDS[kind].many}, with rows skipped`,
     wide: true,
     body: h("div", { class: "stack" },
       h("p", {}, h("strong", { text: summary }), result.ignored.length ? h("span", { class: "muted", text: ` Columns left out: ${result.ignored.join(", ")}.` }) : null),
+      (result.notes || []).map((text) => h("p", { text })),
       h("p", { class: "muted small-text", text: "These rows weren't imported. Download them to fix them and import that file; the problem column says what to change." }),
       h("div", { class: "table-wrap skipped-rows" }, h("table", { class: "table compact" },
         h("thead", {}, h("tr", {}, ["Row", "Problem", ...columns.slice(0, 4)].map((t) => h("th", { text: t })))),

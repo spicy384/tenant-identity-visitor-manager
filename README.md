@@ -878,6 +878,35 @@ A company's site can come from one column (a site's name) and its suite from ano
   columns, else the name: "Last, First", or the last word as the last name), their own company,
   email, phone, citizenship, visitor type and notes, and the tenant they visit (which an account
   limited to some sites must give). Never a person in the directory.
+- **Tenant badges, assigned to people by name** (Security, or any role with the badge manage level
+  and directory read access): tenant badges people already hold, from a file with a name and a
+  badge number, onto people already on record; nobody is added. The name is one column ("First
+  Last", "Last, First" or "Last First") or first and last name columns; a facility code, a company
+  (to tell apart two with the same name) and a clearance level (for badges not on record yet) are
+  optional. **Match the names** then shows each row and who it was matched to, before anything is
+  saved:
+  - **Same name**: the same words in any order, leaving out initials and Jr, Sr, II. Chosen for you.
+  - **Close: check**: one person with a name like it (Bob or Rob for Robert, Chris for Christopher,
+    Jonh or Smyth for a typo, a middle name or initial). Chosen for you to check.
+  - **Choose**: several people it could be, or only someone with the same last name (Moe for
+    Maurice, a nickname nothing can know); pick one. With a company in the file, people there come
+    first and a single match there is chosen.
+  - **Not found**: **Someone else...** searches the directory, as it does on any row.
+  - **Already theirs**: that person holds that badge already, so importing a file again is safe.
+  - **Problem**: the badge is with someone else, isn't a tenant badge, is given twice in the file,
+    or its number was shortened by a spreadsheet.
+
+  Only current people of tenant companies are matched: not visitors, people who have left, or
+  building staff, who wear personnel badges. A row with nobody chosen, or one that can't be done
+  (a person's clearance doesn't cover a cleared badge, say), is left out and listed with the
+  reason, to download, fix and import again; the others are assigned. A number not on record is
+  added as a tenant badge, valid at every site (an account limited to some sites: at those sites),
+  and Uncleared unless the file gives a level. A badge can't change level once it is out, so give
+  the level, or add the badges with their levels first. Nothing is charged, since tenants hold these
+  already: when a company is being counted, a badge past what it may hold is added to what it may
+  hold, with a note on its ledger, so it can be handed on later at no charge. Each badge given, and
+  each one added, is in the audit log. Import after setting the desks on a company's offices: its
+  badges aren't counted before that, so any past its desks would then be over its allotment.
 
 The CSV column names below are what a CSV file is matched to automatically, and what the CSV import
 API takes.

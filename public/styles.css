@@ -568,6 +568,10 @@ a.dash-row:hover, .dash-add-row:hover, .dash-row.is-clickable:hover { background
 .import-match-row { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); gap: 12px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .import-match-source { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .message.pre { white-space: pre-wrap; }
+.tenant-review-person { gap: 4px; min-width: 240px; }
+.tenant-review-person select, .tenant-review-person input { width: 100%; }
+.tenant-review-results { gap: 2px; align-items: flex-start; }
+.tenant-review td { vertical-align: top; }
 @media (max-width: 600px) { .import-match-row { grid-template-columns: 1fr; gap: 4px; } }
 
 /* Choosing several: companies and people */

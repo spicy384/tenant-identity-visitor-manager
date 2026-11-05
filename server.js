@@ -40,6 +40,8 @@ const { createClearanceRoutes } = require("./clearance-routes");
 const { createBadgeTemplates } = require("./badge-templates");
 const { createPrefs } = require("./prefs");
 const { createImportRoutes } = require("./import-routes");
+const { createTenantBadgeImport } = require("./tenant-badge-import");
+const { nameWords } = require("./name-match");
 const { createAuth } = require("./auth-routes");
 const { createEntra } = require("./entra");
 const { resolveTlsOptions } = require("./tls-setup");
@@ -1078,15 +1080,8 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
 }
 
 const CLEARANCE_COLUMNS = ["name", "first_name", "last_name", "kind", "company", "email", "level", "validated", "granted", "expires", "visiting", "phone", "citizenship", "visitor_type", "notes"];
-const NAME_SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv"]);
 // What the "Person or visitor" column may say.
 const HOLDER_KINDS = { person: "person", people: "person", tenant: "person", staff: "person", employee: "person", directory: "person", visitor: "visitor", visitors: "visitor", guest: "visitor" };
-
-/** A name's words, lowercase without accents or punctuation, leaving out initials and Jr, Sr, II... */
-function nameWords(name) {
-  return String(name || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ")
-    .split(" ").filter((w) => w.length > 1 && !NAME_SUFFIXES.has(w));
-}
 
 /**
  * Imports clearances validated outside this system, onto people and visitors already on record
@@ -1233,7 +1228,8 @@ function importClearances(req, rows, { where, from = "CSV", skipProblems = false
 }
 
 // Importing from an Access database or a CSV file, with its columns matched to fields.
-app.use(createImportRoutes({ access, importCompanies, importPeople, importVisitors, importBadges, importClearances, auditFrom }));
+const tenantBadges = createTenantBadgeImport({ db, badges, allotments, clearance, directory, access, importRows, isBlankRow, auditFrom });
+app.use(createImportRoutes({ access, importCompanies, importPeople, importVisitors, importBadges, importClearances, tenantBadges, auditFrom }));
 
 // --- custom fields (administrators) ------------------------------------------------------------
 

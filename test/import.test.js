@@ -11,6 +11,7 @@ const os = require("os");
 const path = require("path");
 const { createChecker } = require("./helpers/assert");
 const { cellText, csvTable } = require("../import-routes");
+const { createNameMatcher, wordSimilarity } = require("../name-match");
 
 // The site as the sample Access file (test/fixtures) spells it: its rows name it, and a binary file isn't rewritten.
 const SITE_NAME = "Harbour Point";
@@ -42,6 +43,7 @@ function client() {
   return {
     get: (u) => call("GET", u),
     post: (u, b = {}) => call("POST", u, b),
+    put: (u, b = {}) => call("PUT", u, b),
     del: (u) => call("DELETE", u),
     upload: (u, buf, headers) => call("POST", u, buf, { raw: true, headers })
   };
@@ -64,6 +66,34 @@ check("cells: a date alone as YYYY-MM-DD", cellText(new Date("2024-03-01T00:00:0
 check("cells: yes/no as yes or no", cellText(true) === "yes" && cellText(false) === "no");
 check("cells: empty as nothing", cellText(null) === "" && cellText(undefined) === "");
 check("cells: numbers and text as text, trimmed", cellText(42) === "42" && cellText("  Ada ") === "Ada");
+
+// --- a name in a file, against the names on record --------------------------------------------------
+const roster = [
+  { id: 1, firstName: "Robert", lastName: "Smith" }, { id: 2, firstName: "Jane", lastName: "Smith" }, { id: 3, firstName: "John", lastName: "Smith" },
+  { id: 4, firstName: "John", lastName: "Smith" }, { id: 5, firstName: "Christopher", lastName: "Nguyen", preferredName: "Topher" }, { id: 6, firstName: "Maria", lastName: "De La Cruz" },
+  { id: 7, firstName: "Sean", lastName: "O'Brien" }, { id: 8, firstName: "Anne", lastName: "Smith-Jones" }, { id: 9, firstName: "Elizabeth", lastName: "Warren" }, { id: 10, firstName: "Jonathan", lastName: "Doe" }
+];
+const { match: matchName } = createNameMatcher(roster);
+const ids = (name) => matchName(name).map((m) => m.person.id).sort((a, b) => a - b).join();
+const top = (name) => matchName(name)[0];
+check("names: the same, in any order", top("Elizabeth Warren").exact && top("Warren, Elizabeth").exact && top("Warren Elizabeth").exact && ids("Warren, Elizabeth") === "9");
+check("names: initials and a suffix don't matter", top("Elizabeth Q. Warren Jr.").exact);
+check("names: accents and punctuation don't matter", top("Séan O'Brien").exact && top("SEAN OBRIEN")?.person.id === 7);
+check("names: two with one name are both offered, both exact", ids("John Smith").startsWith("3,4") && matchName("John Smith").filter((m) => m.exact).length === 2);
+check("names: a sharing surname isn't enough when the first name is another's", !ids("John Smith").split(",").includes("2") && !ids("Robert Smith").split(",").includes("2"));
+check("names: a nickname", top("Bob Smith")?.person.id === 1 && !top("Bob Smith").exact && top("Liz Warren")?.person.id === 9);
+check("names: a shortened name", top("Chris Nguyen")?.person.id === 5 && top("Jon Doe")?.person.id === 10);
+check("names: a preferred name is exact", top("Topher Nguyen").exact);
+check("names: typos, in either name", top("Elizabth Warren")?.person.id === 9 && top("Elizabeth Warrne")?.person.id === 9 && top("Robert Smyth")?.person.id === 1);
+check("names: an initial for the first name", top("E Warren")?.person.id === 9 && !top("E Warren").exact && !top("E Warren").weak);
+check("names: with nobody closer, the same last name alone is a guess", top("Q Warren")?.person.id === 9 && top("Moe Warren").weak && !top("Moe Warren").exact && ids("Moe Warren") === "9");
+check("names: and only the very same last name", ids("Moe Warrne") === "" && ids("Zebedee Smith").split(",").length === 4 && matchName("Zebedee Smith").every((m) => m.weak));
+check("names: a middle name not on record is close, not exact", top("Elizabeth Ann Warren")?.person.id === 9 && !top("Elizabeth Ann Warren").exact);
+check("names: written apart or together", top("Maria Delacruz")?.person.id === 6 && top("Maria De La Cruz").exact);
+check("names: one of a double surname", top("Anne Jones")?.person.id === 8 && !top("Anne Jones").exact);
+check("names: a last name alone offers everyone with it, none exact", ["1", "2", "3", "4"].every((i) => ids("Smith").split(",").includes(i)) && matchName("Smith").every((m) => !m.exact));
+check("names: nobody close is nobody", ids("Zebedee Quux") === "" && ids("") === "" && ids("J") === "");
+check("names: similar words are similar, others aren't", wordSimilarity("jonh", "john") > 0.7 && wordSimilarity("tim", "tom") === 0 && wordSimilarity("bill", "will") > 0.9);
 
 let server;
 async function main() {
@@ -368,6 +398,106 @@ async function main() {
   check("visitor import: Security with visitor access adds them with their clearance", r.status === 200 && r.data.added === 1 && cleo?.clearanceLevelName === "TS" && localDay(cleo.clearanceValidatedAt) === "2025-07-07" && cleo.clearanceValidatedBy === "secdesk", JSON.stringify([r.data, cleo]));
   r = await visitorRun(secDesk, "First,Last,Org,Level,Validated\nCleo Cleared,Visitor,Initech,Secret,2024-01-01\n");
   check("visitor import: an older validation leaves the newer one", r.status === 200 && r.data.updated === 1 && (await security.get("/api/visitors?q=Cleo")).data.visitors[0].clearanceLevelName === "TS");
+
+  // --- tenant badges, assigned to people by name ---------------------------------------------------------
+  const tb = async (client_, csv, choices, mapping = { name: { column: "Name" }, number: { column: "Badge" } }) => {
+    const read1 = (await client_.upload("/api/import/read?name=badges.csv", Buffer.from(csv))).data;
+    const review = await client_.post(`/api/import/${read1.token}/tenant-badges/review`, { table: "CSV", mapping });
+    const pick = choices ? choices(review.data) : null;
+    const run = pick ? await client_.post(`/api/import/${read1.token}/run`, { table: "CSV", target: "tenant_badges", mapping, choices: pick }) : null;
+    return { review, run, token: read1.token };
+  };
+  const preselected = (rv) => Object.fromEntries(rv.rows.filter((x) => x.personId && x.status !== "done").map((x) => [x.row, x.personId]));
+  const tbCompany = (await admin.post("/api/companies", { name: "Tessera Labs", sites: [{ siteId: harbor.id }] })).data.company;
+  const tbOther = (await admin.post("/api/companies", { name: "Northwind Partners", sites: [{ siteId: harbor.id }] })).data.company;
+  const tbStaff = (await admin.post("/api/companies", { name: "Tower Services", buildingStaff: true, sites: [{ siteId: harbor.id }] })).data.company;
+  const tbPerson = async (firstName, lastName, company, extra = {}) => (await admin.post("/api/people", { firstName, lastName, companyId: company.id, ...extra })).data.person;
+  const roberta = await tbPerson("Roberta", "Quimby", tbCompany);
+  const zed1 = await tbPerson("Zed", "Barlowe", tbCompany);
+  const zed2 = await tbPerson("Zed", "Barlowe", tbOther);
+  const mo = await tbPerson("Thomas", "Fennimore", tbCompany);
+  const lena = await tbPerson("Lena", "Ostrander", tbOther);
+  await tbPerson("Gus", "Staffer", tbStaff);
+  const gone = await tbPerson("Hank", "Departed", tbCompany);
+  await admin.put(`/api/people/${gone.id}`, { active: false });
+
+  const tbCsv = "Name,Badge\nQuimby; Roberta,TB-1\n\"Quimby, Roberta\",TB-2\nZed Barlowe,TB-3\nTom Fennimore,TB-4\nNobody Atall,TB-5\nGus Staffer,TB-6\nHank Departed,TB-7\n\"Ostrander, Lena\",1.23E+11\n\"Ostrander, Lena\",TB-1\n";
+  r = await tb(manager, tbCsv);
+  check("tenant badges: a manager, who issues badges but doesn't add them, may not", r.review.status === 403);
+  const deskRead2 = (await desk.upload("/api/import/read?name=badges.csv", Buffer.from(tbCsv))).data;
+  check("tenant badges: nor the front desk, reviewing or running", (await desk.post(`/api/import/${deskRead2.token}/tenant-badges/review`, { table: "CSV", mapping: {} })).status === 403
+    && (await desk.post(`/api/import/${deskRead2.token}/run`, { table: "CSV", target: "tenant_badges", mapping: {}, choices: {} })).status === 403);
+
+  r = await tb(security, tbCsv);
+  const rv = r.review.data;
+  const onLine = (n) => rv.rows.find((x) => x.where === `Line ${n}`);
+  check("tenant badges: review answers", r.review.status === 200 && rv.rows.length === 9, JSON.stringify(r.review.data).slice(0, 400));
+  check("tenant badges: the same name is chosen for you", onLine(3).status === "exact" && onLine(3).personId === roberta.id && onLine(2).status === "exact");
+  check("tenant badges: two with one name are to choose from, with their companies", onLine(4).status === "several" && onLine(4).personId === null && onLine(4).candidates.length === 2 && onLine(4).candidates.map((c) => c.company).sort().join() === "Northwind Partners,Tessera Labs");
+  check("tenant badges: a nickname is close, chosen to check", onLine(5).status === "close" && onLine(5).personId === mo.id && onLine(5).candidates[0].exact === false);
+  check("tenant badges: nobody like it isn't found", onLine(6).status === "none" && onLine(6).candidates.length === 0);
+  check("tenant badges: building staff and people who left aren't offered", onLine(7).status === "none" && onLine(8).status === "none");
+  check("tenant badges: a shortened number is a problem", onLine(9).status === "problem" && /scientific notation/.test(onLine(9).problem));
+  check("tenant badges: a badge given twice is a problem, naming the line", onLine(10).status === "problem" && /line 2/i.test(onLine(10).problem), onLine(10).problem);
+  check("tenant badges: new badges are counted, and nothing was saved", rv.newBadges === 7 && (await security.get("/api/badges?q=TB-")).data.badges.length === 0, String(rv.newBadges));
+  await security.del(`/api/import/${r.token}`);
+
+  // Counted, with one badge to spare: the second is past what it may hold.
+  await admin.post(`/api/companies/${tbCompany.id}/badge-allotment`, { quantity: 1, note: "test" });
+  const chargesBefore = (await admin.get(`/api/charges?companyId=${tbCompany.id}`)).data.charges?.length || 0;
+  const tbFile = "Name,Badge\n\"Quimby, Roberta\",TB-10\nZed Barlowe,TB-11\nTom Fennimore,TB-12\nNobody Atall,TB-13\n\"Ostrander, Lena\",TB-10\n";
+  r = await tb(security, tbFile, (data) => ({ ...preselected(data), 1: zed2.id }));
+  check("tenant badges: assigns what was chosen, and lists the rest", r.run.status === 200 && r.run.data.added === 3 && r.run.data.skippedCount === 2, JSON.stringify(r.run.data).slice(0, 500));
+  check("tenant badges: a row with nobody chosen says so", r.run.data.skipped.some((x) => x.where === "Line 5" && /Nobody was chosen/.test(x.reason)));
+  check("tenant badges: a row with a problem says why", r.run.data.skipped.some((x) => x.where === "Line 6" && /in the file already/.test(x.reason)));
+  const heldNow = async (p) => (await security.get(`/api/people?companyId=${p.companyId}`)).data.people.find((x) => x.id === p.id).heldBadges.map((b) => b.label).join();
+  check("tenant badges: each to the person shown", (await heldNow(roberta)) === "TB-10" && (await heldNow(zed2)) === "TB-11" && (await heldNow(mo)) === "TB-12" && (await heldNow(zed1)) === "");
+  const added = (await security.get("/api/badges?q=TB-12")).data.badges[0];
+  check("tenant badges: added as a tenant badge, Uncleared, valid everywhere", added.type === "tenant" && !added.clearanceLevelId && added.sites.length === 0);
+  const allot = (await admin.get(`/api/companies/${tbCompany.id}/badge-allotment`)).data.allotment;
+  check("tenant badges: past the allotment isn't charged, and is added to it", allot.held === 2 && allot.allowed === 2 && allot.over === 0 && ((await admin.get(`/api/charges?companyId=${tbCompany.id}`)).data.charges?.length || 0) === chargesBefore && r.run.data.notes.some((n) => /Tessera Labs now may hold 1 more/.test(n)), JSON.stringify([allot, r.run.data.notes]));
+  check("tenant badges: its ledger says why", allot.held === 2 && (await admin.get(`/api/companies/${tbCompany.id}/badge-allotment`)).data.allotment.entries.some((e) => e.kind === "adjust" && /TB-12, already held by .* when imported/.test(e.note)));
+  check("tenant badges: a company not being counted is left uncounted", !(await admin.get(`/api/companies/${tbOther.id}/badge-allotment`)).data.allotment.counted);
+  const tbAudit = (await admin.get("/api/audit?limit=50")).data;
+  const tbEntries = tbAudit.entries || tbAudit.events || tbAudit.records || [];
+  check("tenant badges: in the audit log", tbEntries.some((e) => e.action === "badge.assign" && e.target === "TB-10") && tbEntries.some((e) => e.action === "import.tenant_badges"), JSON.stringify(tbAudit).slice(0, 300));
+
+  r = await tb(security, "Name,Badge\n\"Quimby, Roberta\",TB-10\n\"Ostrander, Lena\",TB-11\n", preselected);
+  check("tenant badges: importing again leaves one already theirs", r.review.data.rows[0].status === "done" && r.review.data.counts.done === 1);
+  check("tenant badges: one with someone else is a problem", r.review.data.rows[1].status === "problem" && /is with Zed Barlowe; take it back first/.test(r.review.data.rows[1].problem), r.review.data.rows[1].problem);
+  check("tenant badges: and running it changes nothing", r.run.data.added === 0 && r.run.data.updated === 0 && (await heldNow(lena)) === "" && (await heldNow(roberta)) === "TB-10", JSON.stringify(r.run.data).slice(0, 300));
+
+  // A choice can't reach what the caller couldn't choose, nor another's badge, nor a higher clearance.
+  const tbLevels = Object.fromEntries((await security.get("/api/config")).data.clearanceLevels.map((l) => [l.name, l.id]));
+  await security.post("/api/badges", { number: "TB-V", type: "visitor" });
+  const ownStock = (await security.post("/api/badges", { number: "TB-OWN", type: "tenant" })).data.badge;
+  await security.post("/api/badges", { number: "TB-TS", type: "tenant", clearanceLevelId: tbLevels.TS });
+  r = await tb(security, "Name,Badge\nLena Ostrander,TB-V\nLena Ostrander,TB-TS\nLena Ostrander,TB-NEWTS\n", (data) => Object.fromEntries(data.rows.map((x) => [x.row, lena.id])), { name: { column: "Name" }, number: { column: "Badge" }, level: { value: "TS" } });
+  check("tenant badges: a visitor badge isn't a tenant's", /visitor badge, not a tenant badge/.test(r.review.data.rows[0].problem || ""), JSON.stringify(r.review.data.rows[0]));
+  check("tenant badges: review warns of a clearance that doesn't cover it", /doesn't cover badge TB-TS/.test(r.review.data.rows[1].candidates[0].problem || ""), JSON.stringify(r.review.data.rows[1]));
+  check("tenant badges: clearance still decides, on the badge and on a new one with a level", r.run.data.added === 0 && r.run.data.updated === 0 && r.run.data.skipped.filter((x) => /doesn't cover badge/.test(x.reason)).length === 2, JSON.stringify(r.run.data).slice(0, 500));
+  check("tenant badges: a badge refused isn't left added", (await security.get("/api/badges?q=TB-NEWTS")).data.badges.length === 0);
+  r = await tb(security, "Name,Badge\nLena Ostrander,TB-OWN\n", () => ({ 0: gone.id }));
+  check("tenant badges: someone who left is refused even if asked for", r.run.data.updated === 0 && /inactive/.test(r.run.data.skipped[0]?.reason || ""), JSON.stringify(r.run.data).slice(0, 300));
+  r = await tb(security, "Name,Badge\nLena Ostrander,TB-OWN\n", preselected);
+  check("tenant badges: a badge on record is given, not added", r.run.data.updated === 1 && r.run.data.added === 0 && (await heldNow(lena)) === ownStock.label);
+  r = await tb(security, "Name,Company,Badge\nZed Barlowe,Tessera Labs,TB-20\n", preselected, { name: { column: "Name" }, company: { column: "Company" }, number: { column: "Badge" } });
+  check("tenant badges: a company tells apart two with one name", r.review.data.rows[0].status === "exact" && r.review.data.rows[0].personId === zed1.id && (await heldNow(zed1)) === "TB-20", JSON.stringify(r.review.data.rows[0]));
+  r = await tb(security, "First,Last,Badge\nThomas,Fennimore,FC-1\n", null, { first_name: { column: "First" }, last_name: { column: "Last" }, number: { column: "Badge" } });
+  r = await tb(security, "Name,Badge\nMoe Fennimore,WK-1\n");
+  check("tenant badges: only a last name in common is offered, never chosen for you", r.review.data.rows[0].status === "several" && r.review.data.rows[0].personId === null && r.review.data.rows[0].candidates[0]?.id === mo.id, JSON.stringify(r.review.data.rows[0]));
+  await security.del(`/api/import/${r.token}`);
+  r = await tb(security, "First,Last,Badge\nThomas,Fennimore,FC-1\n", null, { first_name: { column: "First" }, last_name: { column: "Last" }, number: { column: "Badge" } });
+  check("tenant badges: first and last name columns", r.review.data.rows[0].status === "exact" && r.review.data.rows[0].personId === mo.id);
+  await security.del(`/api/import/${r.token}`);
+  r = await tb(admin, "Name,Badge\nThomas Fennimore,FC-2\n", null, { name: { column: "Name" }, number: { column: "Badge" }, facility_code: { value: "ABCD" } });
+  check("tenant badges: a bad facility code is a problem", r.review.data.rows[0].status === "problem" && /2 or 3 digits/.test(r.review.data.rows[0].problem));
+  await admin.del(`/api/import/${r.token}`);
+  await security.post("/api/badges", { number: "SAME", facilityCode: "101", type: "tenant" });
+  await security.post("/api/badges", { number: "SAME", facilityCode: "102", type: "tenant" });
+  r = await tb(security, "Name,Badge\nThomas Fennimore,SAME\n");
+  check("tenant badges: a number under two facility codes asks for the code", r.review.data.rows[0].status === "problem" && /101-SAME or 102-SAME/.test(r.review.data.rows[0].problem), r.review.data.rows[0].problem);
+  await security.del(`/api/import/${r.token}`);
 
   // --- never on disk ------------------------------------------------------------------------------------
   const written = [];
