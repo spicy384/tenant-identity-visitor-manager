@@ -25,6 +25,16 @@ function dashList(items, empty, { more = null } = {}) {
     items.length > DASHBOARD_LIST_MAX && more ? h("a", { class: "small-text dash-more", href: more, text: `${items.length - DASHBOARD_LIST_MAX} more` }) : null);
 }
 
+/** A company's insurance cover as a row: who, who insures them and until when, and its status. */
+function coverRow(c) {
+  return dashRow({
+    href: `#company/${c.companyId}`,
+    main: c.companyName,
+    sub: c.certificate ? [c.certificate.insurer, `expires ${dateText(c.certificate.expiresOn)}`].filter(Boolean).join(" · ") : null,
+    right: coverBadge(c.status, c.certificate)
+  });
+}
+
 /**
  * The modules. load() returns { count, body }: count goes beside the title (null for none).
  * The server decides which a role may have (prefs.js); these say what each shows.
@@ -271,13 +281,18 @@ const DASHBOARD_MODULES = {
     description: "Tenants with an office whose certificate of insurance has expired, expires within 30 days, or isn't on file.",
     href: "#insurance",
     async load() {
-      const { companies } = await api("/api/insurance/attention");
-      return { count: companies.length, attention: companies.some((c) => c.status !== "expiring"), body: dashList(companies.map((c) => dashRow({
-        href: `#company/${c.companyId}`,
-        main: c.companyName,
-        sub: c.certificate ? [c.certificate.insurer, `expires ${dateText(c.certificate.expiresOn)}`].filter(Boolean).join(" · ") : null,
-        right: coverBadge(c.status, c.certificate)
-      })), "Every tenant's insurance is current.", { more: "#insurance" }) };
+      const { companies } = await api(`/api/insurance/attention?${siteParams()}`);
+      return { count: companies.length, attention: companies.some((c) => c.status !== "expiring"), body: dashList(companies.map(coverRow), "Every tenant's insurance is current.", { more: "#insurance" }) };
+    }
+  },
+  insuranceExpiring: {
+    title: "COIs expiring soon",
+    description: "Certificates of insurance that run out within 30 days, soonest first.",
+    href: "#insurance",
+    async load() {
+      const { companies } = await api(`/api/insurance?${siteParams({ status: "expiring" })}`);
+      companies.sort((a, b) => a.certificate.expiresOn.localeCompare(b.certificate.expiresOn) || a.companyName.localeCompare(b.companyName));
+      return { count: companies.length, body: dashList(companies.map(coverRow), "No certificate runs out in the next 30 days.", { more: "#insurance" }) };
     }
   },
   overdueInvoices: {

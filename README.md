@@ -22,7 +22,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Home** is each person's dashboard. **Customize** adds, removes and reorders modules: who
   is in the building, who is expected today, visitors whose check-in the desk must finish, visitors to
   check, badges out past their time, a quick list of tenants, offices by status with the space
-  let and the monthly rent (for those who see facilities), leases ending soon, insurance to renew, overdue invoices
+  let and the monthly rent (for those who see facilities), leases ending soon, insurance to renew, COIs expiring soon, overdue invoices
   (for those who see the books), and for Security the clearance
   queue, visitor re-checks, clearances expiring and recent validations (administrators get
   all but the queue). Only modules the role can see are offered, every role starts with a
@@ -185,7 +185,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   they have a badge, need none, or check out. Pages check every 15 seconds.
 - **Reserved badges**: a regular visitor can have a visitor badge kept for them (their
   visitor page, Reserved badge). Check-in tells the desk to hand them that badge; it goes
-  back into stock when they leave and stays theirs. Nobody else can be given it.
+  back into stock when they leave and stays theirs. Nobody else can be given it. The Expected
+  page shows it beside the guest, unless it can't be used at the event's site; Change picks
+  another for that event alone.
 - **Visit log**: every visit with filters and a CSV export (administrators), with the visitor
   badge each visitor had (for those who see badges; a badge given from a visitor's page goes
   with the visit they're on). **Add badge** enters one that wasn't recorded at the time: for a
@@ -236,8 +238,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
   staff**, tenant badges to everyone else's people, visitor badges to visitors. A badge with
   a clearance level goes only to someone whose clearance covers it. A badge can be given to
   anyone, whatever site they work at. The app refuses anything else, whoever asks, and that
-  includes a badge reserved for a visitor or picked ahead for an expected guest: Pick badge offers
-  only the ones that guest's clearance covers. A badge kept for someone whose clearance later
+  includes a badge reserved for a visitor or picked ahead for an expected guest: Pick badge lists,
+  with a filter by number, only the ones that guest's clearance covers. A badge kept for someone whose clearance later
   no longer covers it can't be handed over; check-in says so and asks for another. Staff
   limited to some sites see the badges valid at any of their sites.
 - **Clearance levels** are an ordered list under Settings > Badges and clearances: Secret <
@@ -465,7 +467,9 @@ Home.
   JPEG scan, up to 3 MB), kept in the encrypted database. A company's cover is its certificate
   that runs latest: current, expiring (within 30 days), expired, or none on file. The page lists
   every active company, needing attention first; **Insurance to renew** on Home lists tenants
-  with an office now whose cover has expired, expires within 30 days, or isn't on file. Seen by
+  with an office now whose cover has expired, expires within 30 days, or isn't on file, and
+  **COIs expiring soon** (on a Manager's Home from the start, for others under Customize) lists
+  just the certificates running out within 30 days, soonest first. Seen by
   those who see facilities or the books, kept by Managers and Finance. Merging companies moves
   their certificates; deleting a company deletes them and their copies.
 - **Tenant badge allotments** (the Tenant badges panel on a company's page). Each desk in the
@@ -525,7 +529,9 @@ when) or left. Staff who give badges out can pick the visitor badge to hand each
 visitors on record, or typed in under Someone new: pressing Done (or Enter, to add another)
 looks the name and email up, offers the visitor on record when there is one, and otherwise
 asks before adding them as a new visitor. Guests are linked to the event's company and host,
-so the kiosk recognizes them. **Check in**, here or on Home's Expected today card, starts the
+so the kiosk recognizes them. For an event still to come (a later date, or today before its start
+time, or today with no start time), Pick badge also lists badges out now, marked as such, as
+they should be back by then; if one isn't, check-in says so and asks for another. **Check in**, here or on Home's Expected today card, starts the
 check-in with the event's company, host and purpose (its name) filled in. **Remove** takes a guest
 off (Add guest lists the event's guests too, each with Remove). A guest who came stays on
 that date, their visit with it; on a repeating event they can be taken off its later dates.

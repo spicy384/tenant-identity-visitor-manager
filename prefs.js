@@ -33,6 +33,7 @@ function createPrefs({ db, access }) {
     occupancy: (ctx) => access.canReadFacilities(ctx),
     leasesEnding: (ctx) => access.canReadFacilities(ctx) || access.canReadFinance(ctx),
     insurance: (ctx) => access.canReadFacilities(ctx) || access.canReadFinance(ctx),
+    insuranceExpiring: (ctx) => access.canReadFacilities(ctx) || access.canReadFinance(ctx),
     overdueInvoices: (ctx) => access.canReadFinance(ctx)
   };
   // What each role starts with, in order (only the modules it may see are kept).
@@ -41,6 +42,7 @@ function createPrefs({ db, access }) {
     responder: ["alarms", "guardReports"],
     admin: ["here", "expected", "badgeNeeded", "rechecks", "badgesOut", "tenants", "occupancy", "overdueInvoices", "leasesEnding", "insurance"],
     finance: ["overdueInvoices", "leasesEnding", "insurance", "occupancy", "tenants"],
+    manager: ["badgeNeeded", "expected", "here", "review", "badgesOut", "tenants", "occupancy", "leasesEnding", "insuranceExpiring", "insurance", "overdueInvoices"],
     other: ["badgeNeeded", "expected", "here", "review", "badgesOut", "tenants", "occupancy", "leasesEnding", "insurance", "overdueInvoices"]
   };
 

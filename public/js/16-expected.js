@@ -133,20 +133,28 @@ function removeGuestButton(e, g, after) {
   } });
 }
 
-/** The visitor badge picked ahead for an expected guest, and (for those who give badges) picking it. */
+/**
+ * The visitor badge kept for a guest (picked for this event, or reserved on their record), and
+ * for those who give badges, picking one for this event. Clear undoes a pick; a reservation is
+ * released on the visitor's record.
+ */
 function guestBadgeCell(e, g) {
   const may = canGiveBadges() && canEditVisitors() && g.status === "expected";
+  const reserved = g.badge?.source === "reserved";
   const pickBadge = async () => {
-    // Only the free badges here that this guest may hold: their clearance decides.
+    // Only the badges here that this guest may hold at the event: their clearance decides, and for
+    // an event still to come those out now are offered too.
     let free;
+    let later;
     try {
-      free = (await api(`/api/badge-holders/visitor/${g.visitorId}?${new URLSearchParams({ site: String(e.siteId) })}`)).available;
+      ({ available: free, later } = await api(`/api/events/${e.id}/guests/${g.visitorId}/badge-options`));
     } catch (error) {
       toast(error.message, "error");
       return;
     }
     const total = free.length;
-    const search = h("input", { type: "search", placeholder: "Type the badge number", autocomplete: "off", inputmode: "numeric", "aria-label": "Badge number" });
+    free.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+    const search = h("input", { type: "search", placeholder: "Filter by badge number", autocomplete: "off", inputmode: "numeric", "aria-label": "Filter by badge number" });
     const results = h("div", { class: "choices-list short" });
     let dialog = null;
     const choose = async (b) => {
@@ -157,31 +165,32 @@ function guestBadgeCell(e, g) {
         dialog?.showError(error.message);
       }
     };
-    const run = debounce(() => {
+    // Every badge on offer, in number order, until a filter narrows them; a very long list stops at LIST_MAX.
+    const LIST_MAX = 200;
+    const showBadges = () => {
       const q = search.value.trim().toLowerCase();
-      if (!q) return results.replaceChildren();
       // An exact number first, then the rest in order.
       const exact = (b) => b.label.toLowerCase() === q || b.number.toLowerCase() === q;
-      const badges = free.filter((b) => b.label.toLowerCase().includes(q)).sort((a, b) => exact(b) - exact(a)).slice(0, 10);
-      results.replaceChildren(...(badges.length
-        ? badges.map((b) => h("button", { type: "button", class: "pick-row", onclick: () => choose(b) },
-          h("strong", { class: "mono", text: b.label }), " ", h("span", { class: "muted small-text", text: badgeLevelText(b) })))
-        : [h("p", { class: "muted small-text", text: `No free visitor badge here with that number that ${g.firstName} may hold.` })]));
-      return null;
-    }, 200);
-    search.addEventListener("input", run);
-    // Enter takes the first match.
+      const badges = q ? free.filter((b) => b.label.toLowerCase().includes(q)).sort((a, b) => exact(b) - exact(a)) : free;
+      results.replaceChildren(...badges.slice(0, LIST_MAX).map((b) => h("button", { type: "button", class: `pick-row${b.id === g.badge?.id ? " is-active" : ""}`, onclick: () => choose(b) },
+        h("strong", { class: "mono", text: b.label }), " ", h("span", { class: "muted small-text", text: badgeLevelText(b) }), b.outNow ? h("span", { class: "badge warn", text: "Out now" }) : null)));
+      if (badges.length > LIST_MAX) results.append(h("p", { class: "muted small-text", text: `The first ${LIST_MAX} of ${badges.length}. Filter by number to find the rest.` }));
+      if (q && !badges.length) results.append(h("p", { class: "muted small-text", text: `No ${later ? "" : "free "}visitor badge here with that number that ${g.firstName} may hold${later ? ` on ${eventDay(e.date)}` : ""}.` }));
+    };
+    showBadges();
+    search.addEventListener("input", showBadges);
+    // Enter takes the first match once a filter is typed, never just the top of the whole list.
     search.addEventListener("keydown", (ev) => {
       if (ev.key !== "Enter") return;
       ev.preventDefault();
-      results.querySelector(".pick-row")?.click();
+      if (search.value.trim()) results.querySelector(".pick-row")?.click();
     });
     const chosen = await openDialog({
       title: `Badge for ${g.firstName} ${g.lastName}`,
       body: h("div", { class: "stack" },
-        h("p", { class: "muted", text: "Check-in tells the front desk to hand them this badge when they arrive." }),
+        h("p", { class: "muted", text: `Check-in tells the front desk to hand them this badge when they arrive.${later ? " Badges out now are listed too: if one isn't back by then, check-in says so and asks for another." : ""}` }),
         h("label", {}, h("span", { text: "Visitor badge" }), search,
-          h("span", { class: "hint", text: total ? `${total} free that ${g.firstName} may hold${multiSite() ? ` at ${e.siteName}` : ""}${g.badge ? `; now ${g.badge.label}` : ""}.` : `No visitor badge is free${multiSite() ? ` at ${e.siteName}` : ""} that ${g.firstName} may hold.` })),
+          h("span", { class: "hint", text: total ? `${total} ${later ? `available on ${eventDay(e.date)}` : "free"} that ${g.firstName} may hold${multiSite() ? ` at ${e.siteName}` : ""}${g.badge ? `; now ${g.badge.label}${reserved ? ", reserved on their record. A badge picked here is for this event only" : ""}` : ""}.` : `No visitor badge is ${later ? `available on ${eventDay(e.date)}` : "free"}${multiSite() ? ` at ${e.siteName}` : ""} that ${g.firstName} may hold.` })),
         results),
       actions: [{ label: "Cancel", value: null }],
       onOpen: (dlg) => { dialog = dlg; setTimeout(() => search.focus(), 50); }
@@ -198,8 +207,9 @@ function guestBadgeCell(e, g) {
   };
   if (g.badge) {
     return h("span", { class: "btn-row" }, h("span", { class: "mono", text: g.badge.label }),
+      reserved ? h("span", { class: "muted small-text", text: "Reserved" }) : null,
       may ? h("button", { type: "button", class: "link-btn", text: "Change", onclick: pickBadge }) : null,
-      may ? h("button", { type: "button", class: "link-btn danger-text", text: "Clear", onclick: clearBadge }) : null);
+      may && !reserved ? h("button", { type: "button", class: "link-btn danger-text", text: "Clear", onclick: clearBadge }) : null);
   }
   return may ? h("button", { type: "button", class: "link-btn", text: "Pick badge", onclick: pickBadge }) : h("span", { class: "muted small-text", text: "—" });
 }

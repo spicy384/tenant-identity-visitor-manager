@@ -576,17 +576,19 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
   /** "following": a change reaches the date and its series' later dates; otherwise that date alone. */
   const scopeOf = (value) => (str(value, 20) === "following" ? "following" : "one");
   const datesText = (n) => (n > 1 ? ` (${n} dates)` : "");
+  /** An event as the caller may see it: without the badges kept for its guests, for those who don't see badges. */
+  const eventFor = (req, event) => (access.canReadBadges(req.ctx) ? event : { ...event, guests: event.guests.map(({ badge, ...guest }) => guest) });
 
   router.get("/api/events", readVisitors, (req, res) => {
     const from = day(req.query.from || req.query.date);
     const to = day(req.query.to || req.query.date || from);
-    res.json({ events: events.list({ from, to, siteId: siteParam(req, req.query.site), sites: req.ctx.sites }) });
+    res.json({ events: events.list({ from, to, siteId: siteParam(req, req.query.site), sites: req.ctx.sites }).map((e) => eventFor(req, e)) });
   });
 
   router.get("/api/events/:id", readVisitors, (req, res) => {
     const event = events.get(positiveInt(req.params.id), { sites: req.ctx.sites });
     if (!event) throw fail(404, "No such event.");
-    res.json({ event });
+    res.json({ event: eventFor(req, event) });
   });
 
   router.post("/api/events", editVisitors, (req, res) => {
@@ -599,7 +601,7 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const { scope, ...body } = req.body || {};
     const event = events.update(positiveInt(req.params.id), body, { sites: req.ctx.sites, scope: scopeOf(scope) });
     auditFrom(req, "event.update", event.title, `${Object.keys(body).join(", ")}${datesText(event.count)}`);
-    res.json({ ok: true, event });
+    res.json({ ok: true, event: eventFor(req, event) });
   });
 
   router.delete("/api/events/:id", editVisitors, (req, res) => {
@@ -643,7 +645,27 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const updated = events.addGuest(event.id, visitorId, { sites: req.ctx.sites, scope });
     const guest = updated.guests.find((g) => g.visitorId === visitorId);
     auditFrom(req, "event.guest_add", event.title, `${guest.firstName} ${guest.lastName}${scope === "following" && event.seriesId ? `, ${event.date} and later dates` : ""}`);
-    res.json({ ok: true, event: updated });
+    res.json({ ok: true, event: eventFor(req, updated) });
+  });
+
+  /**
+   * The badges that can be picked for an expected guest, as things will stand at the event: valid
+   * at its site, not picked for another guest that day, and their clearance covering them. For
+   * an event under way or past, those free now. For one still to come, also those out now (outNow), being due back.
+   */
+  router.get("/api/events/:id/guests/:visitorId/badge-options", editVisitors, editBadges, (req, res) => {
+    const visitorId = positiveInt(req.params.visitorId);
+    const event = events.get(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!event) throw fail(404, "No such event.");
+    if (!event.guests.some((g) => g.visitorId === visitorId)) throw fail(404, "They aren't a guest at this event.");
+    const later = events.isLater(event);
+    const found = later ? badges.availableLater(visitorId, event.date, { sites: req.ctx.sites }) : badges.availableFor("visitor", visitorId, { sites: req.ctx.sites });
+    const taken = events.pickedForOthers(event, visitorId);
+    const available = found.filter((b) => validAtSite(b, event.siteId) && !taken.has(b.id)).map((b) => {
+      const out = badgeOut(req, b);
+      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, cleared: out.cleared, clearanceLevelName: out.clearanceLevelName, outNow: Boolean(b.holder) };
+    });
+    res.json({ later, available });
   });
 
   /** Picks the visitor badge to hand an expected guest when they arrive ({ badgeId } or null). */
@@ -655,7 +677,7 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     refuseUncovered(req, badgeId, visitorId);
     const event = events.setGuestBadge(positiveInt(req.params.id), visitorId, badgeId, { sites: req.ctx.sites });
     const guest = event.guests.find((g) => g.visitorId === visitorId);
-    auditFrom(req, "event.guest_badge", event.title, `${guest.firstName} ${guest.lastName}: ${guest.badge ? `badge ${guest.badge.label}` : "no badge picked"}`);
+    auditFrom(req, "event.guest_badge", event.title, `${guest.firstName} ${guest.lastName}: ${guest.badge?.source === "event" ? `badge ${guest.badge.label}` : "no badge picked"}`);
     res.json({ ok: true, event });
   });
 
@@ -667,7 +689,7 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const event = events.removeGuest(before.id, positiveInt(req.params.visitorId), { sites: req.ctx.sites, scope });
     const came = guest && guest.status !== "expected";
     if (guest) auditFrom(req, "event.guest_remove", event.title, `${guest.firstName} ${guest.lastName}${scope === "following" && before.seriesId ? (came ? `, the dates after ${before.date} (came on it)` : `, ${before.date} and later dates`) : ""}`);
-    res.json({ ok: true, event });
+    res.json({ ok: true, event: eventFor(req, event) });
   });
 
   return router;

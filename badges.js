@@ -399,6 +399,17 @@ function createBadges({ db, clearance, now = Date.now }) {
     return found.filter((b) => !refusal(b, h));
   }
 
+  /**
+   * The visitor badges a visitor may be given at an event still to come on `day`, among those
+   * `sites` sees: those out now count, being due back by then, but not one whose expiry comes
+   * before that day.
+   */
+  function availableLater(visitorId, day, { sites = null } = {}) {
+    const h = holder("visitor", visitorId);
+    if (!h) throw fail(404, "No such person or visitor.");
+    return list({ type: "visitor", sites, limit: 5000 }).badges.filter((b) => !refusal(b, h) && !(b.expiresOn && b.expiresOn < day));
+  }
+
   /** Midnight at the end of today where `timeZone` is (or the server's), as a timestamp. */
   function endOfToday(timeZone) {
     const tz = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -563,7 +574,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     return [...out.values()];
   }
 
-  return { list, get, history, forHolder, openForHolder, heldByPeople, create, createRange, update, remove, holder, refusal, clearanceRefusal, availableFor, assign, recordForVisit, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
+  return { list, get, history, forHolder, openForHolder, heldByPeople, create, createRange, update, remove, holder, refusal, clearanceRefusal, availableFor, availableLater, assign, recordForVisit, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
 }
 
 module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES, FACILITY_CODE_RE, badgeLabel, RECORDED_NOTE };

@@ -28,10 +28,12 @@ function createInsuranceRoutes({ access, insurance, directory, auditFrom }) {
   const seesInsurance = need((ctx) => access.canReadFacilities(ctx) || access.canReadFinance(ctx), "This account can't see certificates of insurance.");
   const editInsurance = need(access.canEditCharges, "This account can't change certificates of insurance.");
 
-  /** The companies the caller sees (a Set of ids), or null when it sees every one. */
+  /** The companies the caller sees, at the site asked for if any (a Set of ids), or null when that's every one. */
   function companies(req) {
-    if (!req.ctx.sites) return null;
-    return new Set(directory.listCompanies({ sites: req.ctx.sites, limit: 1000000, includeInactive: true }).records.map((c) => c.id));
+    const siteId = positiveInt(req.query.site);
+    if (siteId && !access.siteVisible(req.ctx, siteId)) throw fail(403, "This account can't see that site.");
+    if (!req.ctx.sites && !siteId) return null;
+    return new Set(directory.listCompanies({ sites: req.ctx.sites, siteId, limit: 1000000, includeInactive: true }).records.map((c) => c.id));
   }
 
   function mustCompany(req, id) {
