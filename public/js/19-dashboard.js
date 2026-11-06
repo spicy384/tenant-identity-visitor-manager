@@ -30,7 +30,7 @@ function coverRow(c) {
   return dashRow({
     href: `#company/${c.companyId}`,
     main: c.companyName,
-    sub: c.certificate ? [c.certificate.insurer, `expires ${dateText(c.certificate.expiresOn)}`].filter(Boolean).join(" · ") : null,
+    sub: c.certificate ? [c.certificate.insurer, `${c.status === "expired" ? "expired" : "expires"} ${dateText(c.certificate.expiresOn)}`].filter(Boolean).join(" · ") : null,
     right: coverBadge(c.status, c.certificate)
   });
 }
@@ -286,13 +286,13 @@ const DASHBOARD_MODULES = {
     }
   },
   insuranceExpiring: {
-    title: "COIs expiring soon",
-    description: "Certificates of insurance that run out within 30 days, soonest first.",
+    title: "COIs expiring or expired",
+    description: "Certificates of insurance that run out within 30 days or ran out in the last 30, earliest date first.",
     href: "#insurance",
     async load() {
-      const { companies } = await api(`/api/insurance?${siteParams({ status: "expiring" })}`);
+      const { companies } = await api(`/api/insurance?${siteParams({ status: "soon" })}`);
       companies.sort((a, b) => a.certificate.expiresOn.localeCompare(b.certificate.expiresOn) || a.companyName.localeCompare(b.companyName));
-      return { count: companies.length, body: dashList(companies.map(coverRow), "No certificate runs out in the next 30 days.", { more: "#insurance" }) };
+      return { count: companies.length, attention: companies.some((c) => c.status === "expired"), body: dashList(companies.map(coverRow), "No certificate has just run out or runs out in the next 30 days.", { more: "#insurance" }) };
     }
   },
   overdueInvoices: {

@@ -451,9 +451,14 @@ async function main() {
   check("insurance: Home lists tenants with an office whose cover needs seeing to", coverOf("Initech") === "expiring" && coverOf("Acme") === "none" && !coverOf("Hooli") && !coverOf("Umbrella"), JSON.stringify(attention.map((c) => [c.companyName, c.status])));
   check("insurance: a company's cover is the certificate that runs latest", (await manager.get("/api/insurance?status=expiring")).data.companies.some((c) => c.companyName === "Initech" && c.certificates === 2));
   const elsewhere = (await admin.post("/api/sites", { name: "Elsewhere" })).data.site;
-  const expiringAt = async (c, site) => { const x = await c.get(`/api/insurance?status=expiring&site=${site.id}`); return x.status === 200 ? x.data.companies.map((co) => co.companyName).join() : x.status; };
+  const expiringAt = async (c, site) => { const x = await c.get(`/api/insurance?status=soon&site=${site.id}`); return x.status === 200 ? x.data.companies.map((co) => co.companyName).join() : x.status; };
   check("insurance: the expiring card lists those at the chosen site, not those with cover for longer", (await expiringAt(manager, harbor)) === "Initech" && (await expiringAt(manager, elsewhere)) === "");
   check("insurance: the card for Home's other list follows the site too", (await manager.get(`/api/insurance/attention?site=${elsewhere.id}`)).data.companies.length === 0);
+  for (const [name, days] of [["Lapsed Lately", -10], ["Lapsed At The Limit", -30], ["Lapsed Long Ago", -31]]) await manager.post(`/api/companies/${(await mk(name)).id}/insurance`, { insurer: "Old Cover", expiresOn: inDays(days) });
+  const soonList = (await expiringAt(manager, harbor)).split(",");
+  check("insurance: the card adds those expired in the last 30 days, and no older", ["Initech", "Lapsed Lately", "Lapsed At The Limit"].every((n) => soonList.includes(n)) && soonList.length === 3, soonList.join());
+  check("insurance: a renewed company's old certificate doesn't count", !soonList.includes("Hooli"));
+  check("insurance: status expiring still means just that", (await manager.get("/api/insurance?status=expiring")).data.companies.map((c) => c.companyName).join() === "Initech");
   check("insurance: a Manager's Home starts with the expiring card", (await manager.get("/api/me/prefs")).data.dashboard.includes("insuranceExpiring"));
   check("insurance: Finance can add it; front desk isn't offered it", (await finance.get("/api/me/prefs")).data.available.includes("insuranceExpiring") && !(await finance.get("/api/me/prefs")).data.dashboard.includes("insuranceExpiring") && !(await desk.get("/api/me/prefs")).data.available.includes("insuranceExpiring"));
   r = await manager.put(`/api/insurance/${cert.id}`, { removeFile: true, notes: "Waiting on the original" });

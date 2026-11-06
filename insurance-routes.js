@@ -50,7 +50,7 @@ function createInsuranceRoutes({ access, insurance, directory, auditFrom }) {
 
   const words = (c) => `${c.insurer || "insurer not given"}, expires ${c.expiresOn}${c.file ? `; copy ${c.file.name}` : ""}`;
 
-  /** Every tenant's cover: status (current, expiring, expired, none, or attention: any but current), words. */
+  /** Every tenant's cover: status (current, expiring, expired, none, attention: any but current, or soon: expiring or expired lately), words. */
   router.get("/api/insurance", seesInsurance, (req, res) => {
     res.json({ companies: insurance.overview({ companies: companies(req), status: str(req.query.status, 20) || null, q: str(req.query.q) || "" }) });
   });

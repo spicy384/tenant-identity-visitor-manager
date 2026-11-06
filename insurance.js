@@ -10,6 +10,7 @@ const { dateInput, text } = require("./leases");
 const { decodeFile } = require("./stored-files");
 
 const EXPIRING_DAYS = 30;
+const RECENTLY_EXPIRED_DAYS = 30;
 
 function fail(status, message) {
   const error = new Error(message);
@@ -60,6 +61,13 @@ function createInsurance({ db, files, today, now = Date.now }) {
     return raw.prepare(`${SELECT} WHERE i.company_id = ? ORDER BY i.expires_on DESC, i.id DESC`).all(Number(companyId)).map((r) => out(r, day));
   }
 
+  /** Whether a company's cover is of a status: one of its own, attention (any but current), or soon (expiring, or expired lately). */
+  function ofStatus(c, status) {
+    if (status === "attention") return ["expired", "expiring", "none"].includes(c.status);
+    if (status === "soon") return c.status === "expiring" || (c.status === "expired" && c.certificate.daysLeft >= -RECENTLY_EXPIRED_DAYS);
+    return c.status === status;
+  }
+
   /**
    * Each active company's cover (the certificate that runs latest), for the companies a caller
    * sees (a Set of ids, or null for every one), of a status, or matching words. withOffices:
@@ -79,7 +87,7 @@ function createInsurance({ db, files, today, now = Date.now }) {
         const cert = r.cert_id ? get(r.cert_id) : null;
         return { companyId: r.id, companyName: r.name, hasOffice: Boolean(r.has_office), certificates: r.certs, status: cert ? cert.status : "none", certificate: cert };
       })
-      .filter((c) => (!status || (status === "attention" ? ["expired", "expiring", "none"].includes(c.status) : c.status === status))
+      .filter((c) => (!status || ofStatus(c, status))
         && words.every((w) => [c.companyName, c.certificate?.insurer].some((s) => String(s || "").toLowerCase().includes(w))));
   }
 

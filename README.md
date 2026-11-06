@@ -22,7 +22,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Home** is each person's dashboard. **Customize** adds, removes and reorders modules: who
   is in the building, who is expected today, visitors whose check-in the desk must finish, visitors to
   check, badges out past their time, a quick list of tenants, offices by status with the space
-  let and the monthly rent (for those who see facilities), leases ending soon, insurance to renew, COIs expiring soon, overdue invoices
+  let and the monthly rent (for those who see facilities), leases ending soon, insurance to renew, COIs expiring or expired, overdue invoices
   (for those who see the books), and for Security the clearance
   queue, visitor re-checks, clearances expiring and recent validations (administrators get
   all but the queue). Only modules the role can see are offered, every role starts with a
@@ -468,8 +468,9 @@ Home.
   that runs latest: current, expiring (within 30 days), expired, or none on file. The page lists
   every active company, needing attention first; **Insurance to renew** on Home lists tenants
   with an office now whose cover has expired, expires within 30 days, or isn't on file, and
-  **COIs expiring soon** (on a Manager's Home from the start, for others under Customize) lists
-  just the certificates running out within 30 days, soonest first. Seen by
+  **COIs expiring or expired** (on a Manager's Home from the start, for others under Customize)
+  lists just the certificates running out within 30 days or that ran out in the last 30, earliest
+  date first. Seen by
   those who see facilities or the books, kept by Managers and Finance. Merging companies moves
   their certificates; deleting a company deletes them and their copies.
 - **Tenant badge allotments** (the Tenant badges panel on a company's page). Each desk in the
