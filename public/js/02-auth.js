@@ -71,6 +71,9 @@ function showAuth(message = "", step = "login") {
   state.me = null;
   localOpen = null;
   state.csrfToken = null;
+  forgetSearches();
+  // The next sign-in starts at its own choice of site, not where this one left off.
+  try { sessionStorage.removeItem(SESSION_SITE_KEY); } catch { /* storage blocked */ }
   $("main").hidden = true;
   $("nav").hidden = true;
   $("subnav").hidden = true;

@@ -426,6 +426,54 @@ function openDialog({ title, body, actions = [{ label: "Close", value: null }], 
   });
 }
 
+// What each Security panel is searching for, kept while it is drawn again.
+const securityFilters = {};
+const filterMemory = (key) => { securityFilters[key] ||= {}; return securityFilters[key]; };
+
+/** Forgets what was searched for on Home and the Security pages, so the next to sign in here doesn't see it. */
+function forgetSearches() {
+  for (const key of Object.keys(securityFilters)) delete securityFilters[key];
+  $("home-search-results").replaceChildren();
+  $("home-search-results").hidden = true;
+  for (const el of document.querySelectorAll("#home-search input, #view-alarms .toolbar input, #view-alarms .toolbar select, #view-guard-reports .toolbar input, #view-guard-reports .toolbar select")) {
+    if (el.type === "checkbox") el.checked = false;
+    else el.value = "";
+  }
+}
+
+/**
+ * A search box and dropdowns over rows already in the page: what is typed stays in the browser.
+ * words(row): the text a row is found by (what it shows). filters: { key, label, value(row) }, each a
+ * dropdown of the values the rows have, shown when there are two or more; label is its "any" choice.
+ * render(rows): draws them (also when there are none at all). memory: an object keeping the
+ * choices when the panel is drawn again. { tools, body }: to place, tools null with nothing to search.
+ */
+function rowFilter({ list, words, filters = [], render, memory = {}, placeholder = "Search", noMatch = "Nothing matches." }) {
+  const body = h("div", {});
+  const search = h("input", { type: "search", placeholder, "aria-label": placeholder });
+  search.value = memory.q || "";
+  const count = h("span", { class: "muted small-text nowrap" });
+  const texts = new Map(list.map((row) => [row, [words(row)].flat(Infinity).filter(Boolean).join(" ").toLowerCase()]));
+  const choices = filters.map((f) => {
+    const values = [...new Set(list.map(f.value).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const select = h("select", { "aria-label": f.label }, h("option", { value: "", text: f.label }), values.map((v) => h("option", { value: v, text: v })));
+    select.value = values.includes(memory[f.key]) ? memory[f.key] : "";
+    return { f, select, shown: values.length > 1 };
+  });
+  function draw() {
+    const terms = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+    memory.q = search.value;
+    for (const { f, select } of choices) memory[f.key] = select.value;
+    const rows = list.filter((row) => terms.every((t) => texts.get(row).includes(t)) && choices.every(({ f, select }) => !select.value || f.value(row) === select.value));
+    count.textContent = rows.length === list.length ? "" : `Showing ${rows.length} of ${list.length}`;
+    body.replaceChildren(rows.length || !list.length ? render(rows) : h("p", { class: "muted", text: noMatch }));
+  }
+  search.addEventListener("input", debounce(draw, 120));
+  for (const { select } of choices) select.addEventListener("change", draw);
+  draw();
+  return { body, tools: list.length ? h("div", { class: "toolbar" }, search, choices.filter((c) => c.shown).map((c) => c.select), count) : null };
+}
+
 function confirmDialog(message, { title = "Are you sure?", confirmLabel = "Confirm", danger = false } = {}) {
   return openDialog({
     title,

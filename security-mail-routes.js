@@ -27,6 +27,7 @@ function createSecurityMailRoutes({ access, reports, mailbox, admin, auditFrom, 
   const security = (req, res, next) => (access.isSecurity(req.ctx) ? next() : res.status(403).json({ error: "Only Security adds alarms and guard reports." }));
   const noStore = (req, res, next) => { res.setHeader("Cache-Control", "no-store"); next(); };
   const positiveInt = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
+  const dateParam = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")) ? String(v) : null);
   const KIND = { alarms: "alarm", "guard-reports": "guard" };
 
   router.use("/api/security", noStore);
@@ -45,10 +46,21 @@ function createSecurityMailRoutes({ access, reports, mailbox, admin, auditFrom, 
         unread: req.query.unread === "1" || req.query.unread === "true",
         siteId: positiveInt(req.query.site),
         sites: req.ctx.sites,
+        fromAt: positiveInt(req.query.fromAt),
+        toAt: positiveInt(req.query.toAt),
+        fromDate: dateParam(req.query.from),
+        toDate: dateParam(req.query.to),
+        event: req.query.event ? String(req.query.event).slice(0, 200) : null,
+        needs: req.query.needs ? String(req.query.needs) : null,
         limit: positiveInt(req.query.limit) || 50,
         offset: Math.max(0, Number(req.query.offset) || 0)
       });
-      res.json({ [kind === "alarm" ? "alarms" : "reports"]: found.items, total: found.total, unread: reports.unread({ sites: req.ctx.sites }) });
+      res.json({
+        [kind === "alarm" ? "alarms" : "reports"]: found.items,
+        total: found.total,
+        unread: reports.unread({ sites: req.ctx.sites }),
+        ...(kind === "alarm" ? { events: reports.alarmEvents({ sites: req.ctx.sites, siteId: positiveInt(req.query.site) }) } : {})
+      });
     });
 
     router.get(`/api/security/${list}/:id`, reader, (req, res) => {

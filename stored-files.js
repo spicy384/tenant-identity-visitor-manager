@@ -1,7 +1,8 @@
 /**
- * Files people upload (a company's certificates of insurance), kept in the encrypted database
- * (stored_files). Only PDFs and PNG or JPEG images are taken, checked by their contents, not
- * their names. Each has a random ref, its address, which changes with every upload.
+ * Files people upload (a company's certificates of insurance, a lease's documents), kept in the
+ * encrypted database (stored_files). Only PDFs and PNG or JPEG images are taken, and for a lease's
+ * documents Word and Excel files too, checked by their contents, not their names. Each has a
+ * random ref, its address, which changes with every upload.
  */
 const crypto = require("crypto");
 
@@ -36,6 +37,28 @@ function decodeFile(dataUrl, name, what = "The file") {
   return { type: m[1], data, name: cleanName(name, m[1]) };
 }
 
+// A scanned lease runs well past that, so a document comes as the file itself rather than JSON.
+const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+// These are zip files: what they hold, whose names a zip doesn't compress, says which they are.
+const OFFICE_TYPES = [
+  { ending: /\.docx$/i, holds: "word/document.xml", type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+  { ending: /\.xlsx$/i, holds: "xl/workbook.xml", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+];
+
+/** { type, data, name } from an uploaded document's bytes and name; throws for anything but the kinds taken. */
+function readDocument(data, name) {
+  if (!data.length) throw fail(400, "Choose a file.");
+  if (data.length > MAX_DOCUMENT_BYTES) throw fail(413, "That file is larger than 25 MB; save it smaller (a scan in black and white, or at a lower resolution).");
+  const seen = Object.keys(TYPES).find((type) => TYPES[type](data));
+  if (seen) return { type: seen, data, name: cleanName(name, seen) };
+  const office = data.subarray(0, 4).toString("latin1") === "PK\u0003\u0004" && OFFICE_TYPES.find((o) => o.ending.test(String(name || "")) && data.includes(o.holds, 0, "latin1"));
+  if (!office) throw fail(400, "A document must be a PDF, a Word (.docx) or Excel (.xlsx) file, or a PNG or JPEG image.");
+  return { type: office.type, data, name: cleanName(name, office.type) };
+}
+
+/** Whether a browser may show a file of this type rather than save it: those it shows without running anything of theirs. */
+const shownInBrowser = (type) => Boolean(TYPES[type]);
+
 function createStoredFiles({ db, now = Date.now }) {
   const raw = db.raw;
 
@@ -58,4 +81,4 @@ function createStoredFiles({ db, now = Date.now }) {
   return { save, info, byRef, remove };
 }
 
-module.exports = { createStoredFiles, decodeFile, MAX_FILE_BYTES };
+module.exports = { createStoredFiles, decodeFile, readDocument, shownInBrowser, MAX_FILE_BYTES, MAX_DOCUMENT_BYTES };

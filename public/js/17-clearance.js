@@ -12,6 +12,8 @@ const CLEARANCE_STATUS = {
 };
 const DIGITS_SHOWN_MS = 30 * 1000;
 const clearanceView = { loaded: [] };
+const holderKind = (x) => (x.kind === "visitor" ? "Visitor" : "Person");
+const KIND_FILTER = { key: "kind", label: "People and visitors", value: holderKind };
 
 const isSecurity = () => Boolean(state.config?.clearance?.security);
 const canAskValidation = (kind) => isSecurity() || (kind === "person" ? canEditDirectory() : canEditVisitors());
@@ -217,10 +219,10 @@ async function showClearance() {
   }
   clearanceView.loaded = data.requests;
   const digitsText = (q) => (q.digitsHeld ? "Held" : q.hadDigits ? "Wiped" : "Not given");
-  clear(list).append(data.requests.length
+  const queueTable = (requests) => (requests.length
     ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
       h("thead", {}, h("tr", {}, ["Name", "Clearance on record", "Requested", "Note", "SSN last four", ""].map((t) => h("th", { text: t })))),
-      h("tbody", {}, data.requests.map((q) => h("tr", {},
+      h("tbody", {}, requests.map((q) => h("tr", {},
         h("td", {}, h("a", { href: q.kind === "visitor" ? `#visitor/${q.holderId}` : `#person/${q.holderId}`, text: q.name }),
           h("div", { class: "muted small-text", text: [q.kind === "visitor" ? "Visitor" : "Person", q.organization].filter(Boolean).join(" · ") })),
         h("td", { class: "small-text" }, q.currentLevel || "None", q.lastValidatedAt ? h("div", { class: "muted", text: `last validated ${fmtDate(q.lastValidatedAt)}` }) : null),
@@ -241,6 +243,16 @@ async function showClearance() {
             }
           } }))))))))
     : h("p", { class: "muted", text: "Nothing waiting. Requests appear here when someone asks for a clearance to be validated." }));
+  // Found by what the table shows: whether digits were given, never the digits, which aren't sent here.
+  const queue = rowFilter({
+    list: data.requests,
+    memory: filterMemory("queue"),
+    placeholder: "Search name, organization, note or who asked",
+    words: (q) => [q.name, q.organization, holderKind(q), q.currentLevel || "None", fmtDateTime(q.requestedAt), q.requestedBy, q.note],
+    filters: [KIND_FILTER, { key: "level", label: "Every clearance on record", value: (q) => q.currentLevel || "None" }, { key: "digits", label: "SSN digits: any", value: digitsText }],
+    render: queueTable
+  });
+  clear(list).append(...[queue.tools, queue.body].filter(Boolean));
   $("clearance-hint").textContent = `SSN digits given with a request are kept in memory only, never stored or logged, and wiped when you validate or cancel, or after ${data.digitsHeldHours} hours.`;
 }
 
@@ -312,39 +324,64 @@ async function showClearances() {
     return;
   }
   const level = { label: "Clearance", cell: (x) => x.levelName || "None" };
+  const LEVEL_FILTER = { key: "level", label: "Every clearance", value: (x) => x.levelName || "None" };
+  // A panel of people and visitors, with its search and dropdowns.
+  const holderPanel = (key, title, intro, list, columns, empty, { words, filters }) => {
+    const found = rowFilter({
+      list,
+      memory: filterMemory(key),
+      placeholder: "Search name, organization or clearance",
+      words: (x) => [x.name, x.organization, holderKind(x), x.levelName || "None", words(x)],
+      filters,
+      render: (rows) => clearanceTable(rows, columns, empty)
+    });
+    return h("div", { class: "panel" }, h("div", { class: "panel-head" }, h("h3", { text: title })), intro ? h("p", { class: "muted", text: intro }) : null, found.tools, found.body);
+  };
   // Badges first (expired, then expiring); a panel only for roles that read badges.
   body.replaceChildren(...[
     expired ? badgeExpiryPanel("Expired badges", "Past their expiry date: they can't be given out, and one still out is with the person or visitor named. Take it back, give a new date, or retire it.", expired, "No badge has expired.", "expired") : null,
     expiring ? badgeExpiryPanel("Badges expiring in the next 30 days", "Badges whose expiry date is within 30 days. Each is good through its date; after it, it can't be given out. Change the date on the badge to renew it.", expiring, "No badge expires in the next 30 days.", "expiring") : null,
-    h("div", { class: "panel" },
-      h("div", { class: "panel-head" }, h("h3", { text: "Visitor re-checks" })),
-      h("p", { class: "muted", text: `A visitor's validation lasts ${o.recheckDays} days (Settings > Badges and clearances). These run out within ${o.withinDays} days, or already have: until Security validates them again, their clearance counts as none.` }),
-      clearanceTable(o.rechecks, [level, { label: "Re-check due", cell: (x) => [fmtDate(x.dueAt), x.overdue ? h("span", { class: "badge bad", text: "Overdue" }) : null] },
-        { label: "Last validated", cell: (x) => `${fmtDate(x.validatedAt)}${x.validatedBy ? ` by ${x.validatedBy}` : ""}` }], "No visitor re-checks coming up.")),
-    h("div", { class: "panel" },
-      h("div", { class: "panel-head" }, h("h3", { text: "Clearances expiring" })),
-      h("p", { class: "muted", text: `Clearances on record that expire within ${o.expiringDays} days, or expired in the last 30. An expired clearance counts as none.` }),
-      clearanceTable(o.expiring, [level, { label: "Expires", cell: (x) => [dateText(x.expires), x.expired ? h("span", { class: "badge bad", text: "Expired" }) : null] }], "Nothing expiring soon.")),
-    h("div", { class: "panel" },
-      h("div", { class: "panel-head" }, h("h3", { text: "Recently validated" })),
-      clearanceTable(o.recent, [level, { label: "Validated", cell: (x) => `${fmtDateTime(x.validatedAt)}${x.validatedBy ? ` by ${x.validatedBy}` : ""}` }], `Nothing validated in the last ${o.recentDays} days.`))].filter(Boolean));
+    holderPanel("rechecks", "Visitor re-checks", `A visitor's validation lasts ${o.recheckDays} days (Settings > Badges and clearances). These run out within ${o.withinDays} days, or already have: until Security validates them again, their clearance counts as none.`,
+      o.rechecks, [level, { label: "Re-check due", cell: (x) => [fmtDate(x.dueAt), x.overdue ? h("span", { class: "badge bad", text: "Overdue" }) : null] },
+        { label: "Last validated", cell: (x) => `${fmtDate(x.validatedAt)}${x.validatedBy ? ` by ${x.validatedBy}` : ""}` }], "No visitor re-checks coming up.",
+      { words: (x) => [fmtDate(x.dueAt), x.overdue ? "Overdue" : null, fmtDate(x.validatedAt), x.validatedBy],
+        filters: [LEVEL_FILTER, { key: "due", label: "Overdue and coming up", value: (x) => (x.overdue ? "Overdue" : "Coming up") }] }),
+    holderPanel("expiring", "Clearances expiring", `Clearances on record that expire within ${o.expiringDays} days, or expired in the last 30. An expired clearance counts as none.`,
+      o.expiring, [level, { label: "Expires", cell: (x) => [dateText(x.expires), x.expired ? h("span", { class: "badge bad", text: "Expired" }) : null] }], "Nothing expiring soon.",
+      { words: (x) => [dateText(x.expires), x.expired ? "Expired" : null],
+        filters: [KIND_FILTER, LEVEL_FILTER, { key: "state", label: "Expired and expiring", value: (x) => (x.expired ? "Expired" : "Expiring") }] }),
+    holderPanel("recent", "Recently validated", null,
+      o.recent, [level, { label: "Validated", cell: (x) => `${fmtDateTime(x.validatedAt)}${x.validatedBy ? ` by ${x.validatedBy}` : ""}` }], `Nothing validated in the last ${o.recentDays} days.`,
+      { words: (x) => [fmtDateTime(x.validatedAt), x.validatedBy],
+        filters: [KIND_FILTER, LEVEL_FILTER, { key: "by", label: "Validated by anyone", value: (x) => x.validatedBy }] })].filter(Boolean));
 }
 
 /** A panel of badges (from /api/badges) by expiry: each badge, its type and level, who has it, when it expires. */
 function badgeExpiryPanel(title, intro, data, empty, state) {
   const list = [...data.badges].sort((a, b) => a.expiresOn.localeCompare(b.expiresOn));
-  return h("div", { class: "panel" },
-    h("div", { class: "panel-head" }, h("h3", { text: `${title}${list.length ? ` (${data.total})` : ""}` }),
-      list.length ? h("a", { class: "small-text", href: "#badges", onclick: () => { $("badges-state").value = state; $("badges-type").value = ""; }, text: "Open in All badges" }) : null),
-    h("p", { class: "muted", text: intro }),
-    list.length ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+  const heldText = (b) => (b.holder ? "Out" : b.status === "active" ? "In stock" : BADGE_STATUS_LABELS[b.status]);
+  const found = rowFilter({
+    list,
+    memory: filterMemory(`badges-${state}`),
+    placeholder: "Search badge, holder, company or level",
+    words: (b) => [b.label, b.temporary ? "Temporary" : null, BADGE_TYPE_LABELS[b.type], badgeLevelText(b), b.holder?.name, b.holder?.company, heldText(b), dateText(b.expiresOn)],
+    filters: [{ key: "type", label: "Every type", value: (b) => BADGE_TYPE_LABELS[b.type] }, { key: "level", label: "Every clearance level", value: badgeLevelText }, { key: "held", label: "Out and in stock", value: heldText }],
+    render: (rows) => (rows.length ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
       h("thead", {}, h("tr", {}, ["Badge", "Type", "Clearance level", "Held by", "Expires"].map((t) => h("th", { text: t })))),
-      h("tbody", {}, list.map((b) => h("tr", { class: "clickable", onclick: () => { location.hash = `#badge/${b.id}`; } },
+      h("tbody", {}, rows.map((b) => h("tr", { class: "clickable", onclick: () => { location.hash = `#badge/${b.id}`; } },
         h("td", {}, h("strong", { class: "mono", text: b.label }), b.temporary ? h("span", { class: "badge muted", text: "Temporary" }) : null),
         h("td", { text: BADGE_TYPE_LABELS[b.type] }),
         h("td", { class: "small-text", text: badgeLevelText(b) }),
         h("td", {}, b.holder ? [h("span", { text: b.holder.name }), b.holder.company ? h("div", { class: "muted small-text", text: b.holder.company }) : null] : h("span", { class: "muted", text: b.status === "active" ? "In stock" : BADGE_STATUS_LABELS[b.status] })),
-        h("td", { class: "small-text" }, badgeExpiryCell(b))))))) : h("p", { class: "muted small-text", text: empty }));
+        h("td", { class: "small-text" }, badgeExpiryCell(b))))))) : h("p", { class: "muted small-text", text: empty }))
+  });
+  return h("div", { class: "panel" },
+    h("div", { class: "panel-head" }, h("h3", { text: `${title}${list.length ? ` (${data.total})` : ""}` }),
+      list.length ? h("a", { class: "small-text", href: "#badges", onclick: () => { $("badges-state").value = state; $("badges-type").value = ""; }, text: "Open in All badges" }) : null),
+    h("p", { class: "muted", text: intro }),
+    data.total > list.length ? h("p", { class: "message warn small-text", text: `Searching the ${list.length} loaded here of ${data.total}. Open in All badges to search them all.` }) : null,
+    found.tools,
+    found.body);
 }
 
 // --- Settings > Badges and clearances: the visitor re-check period ---------------------------------

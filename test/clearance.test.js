@@ -394,6 +394,15 @@ async function overHttp() {
   check("prefs: only their own", (await security.get("/api/me/prefs")).data.site === null);
   check("prefs: not a site they can't see", (await riverSecurity.put("/api/me/prefs", { site: site.id })).status === 403);
   check("prefs: nor one that doesn't exist", (await desk.put("/api/me/prefs", { site: 9999 })).status === 400);
+  check("start site: all of them, until they choose otherwise", (await desk.get("/api/me/prefs")).data.startSite === "all" && (await desk.get("/api/me/prefs")).data.site === other.id);
+  check("start site: the one chosen last", (await desk.put("/api/me/prefs", { startSite: "last" })).data.startSite === "last" && (await desk.get("/api/me/prefs")).data.startSite === "last");
+  check("start site: or a particular one", (await desk.put("/api/me/prefs", { startSite: String(site.id) })).data.startSite === site.id);
+  check("start site: choosing a site in the header doesn't change it", (await desk.put("/api/me/prefs", { site: other.id })).data.startSite === site.id);
+  check("start site: only their own", (await security.get("/api/me/prefs")).data.startSite === "all");
+  check("start site: not a site they can't see", (await riverSecurity.put("/api/me/prefs", { startSite: site.id })).status === 403);
+  check("start site: nor one that doesn't exist", (await desk.put("/api/me/prefs", { startSite: 9999 })).status === 400);
+  check("start site: nor anything else", (await desk.put("/api/me/prefs", { startSite: "soon" })).status === 400 && (await desk.put("/api/me/prefs", { startSite: null })).status === 400 && (await desk.put("/api/me/prefs", { startSite: -1 })).status === 400);
+  check("start site: back to all of them", (await desk.put("/api/me/prefs", { startSite: "all" })).data.startSite === "all");
   r = await desk.put("/api/me/prefs", { dashboard: null, site: null });
   check("prefs: back to the defaults", r.data.dashboard[0] === "badgeNeeded" && r.data.site === null);
   check("prefs: administrators see re-checks but not the queue", (await admin.get("/api/me/prefs")).data.available.includes("rechecks") && !(await admin.get("/api/me/prefs")).data.available.includes("clearanceQueue"));

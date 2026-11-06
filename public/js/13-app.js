@@ -36,6 +36,8 @@ const VIEWS = {
 };
 
 const SITE_KEY = "ivm-site";
+// The site this tab is on since signing in, so reloading the page doesn't put it back at the start.
+const SESSION_SITE_KEY = "ivm-session-site";
 const seesSecurity = () => isSecurity() || (isAdmin() && canSeeClearances());
 
 /**
@@ -170,7 +172,10 @@ function applyConfig() {
 /** Switches site everywhere: the pages, the counts, the banner, and their saved choice. */
 function setSite(id) {
   state.site = id ? String(id) : "";
-  try { localStorage.setItem(SITE_KEY, state.site); } catch { /* storage blocked */ }
+  try {
+    localStorage.setItem(SITE_KEY, state.site);
+    sessionStorage.setItem(SESSION_SITE_KEY, state.site);
+  } catch { /* storage blocked */ }
   api("/api/me/prefs", { method: "PUT", body: { site: state.site ? Number(state.site) : null } }).catch(() => {});
   applyConfig();
   refreshCurrentView();
@@ -361,6 +366,21 @@ async function refreshCounts() {
 setInterval(() => { if (!document.hidden) refreshCounts(); }, 60 * 1000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshCounts(); });
 
+/** The site to show: the one this tab is on, else the one they start at when they sign in (all of them, unless they chose otherwise on Your account). */
+function startingSite() {
+  let kept = null;
+  let last = "";
+  try {
+    kept = sessionStorage.getItem(SESSION_SITE_KEY);
+    last = localStorage.getItem(SITE_KEY) || "";
+  } catch { /* storage blocked */ }
+  if (kept !== null) return kept;
+  const start = state.prefs.startSite;
+  // The site they chose last, wherever they chose it; this browser's choice if they never have.
+  if (start === "last") return state.prefs.site ? String(state.prefs.site) : last;
+  return start && start !== "all" ? String(start) : "";
+}
+
 async function startApp() {
   try {
     state.config = await api("/api/config");
@@ -370,10 +390,8 @@ async function startApp() {
     showAuth(error.message);
     return;
   }
-  // The site they chose last, wherever they chose it; this browser's choice if they never have.
-  let saved = "";
-  try { saved = localStorage.getItem(SITE_KEY) || ""; } catch { /* storage blocked */ }
-  state.site = state.prefs.site ? String(state.prefs.site) : saved;
+  state.site = startingSite();
+  try { sessionStorage.setItem(SESSION_SITE_KEY, state.site); } catch { /* storage blocked */ }
   // Light or dark as chosen on their account, wherever they chose it.
   applyTheme(state.prefs.theme);
   showThemeButton();

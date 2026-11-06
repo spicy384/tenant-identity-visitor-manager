@@ -238,6 +238,10 @@
         <button type="button" id="home-checkin" class="primary" data-visitor-editor>Check in a visitor</button>
         <button type="button" id="home-customize" class="secondary">Customize</button>
       </div>
+      <div id="home-search" class="home-search" hidden>
+        <input id="home-search-input" type="search" placeholder="Find a person or company" aria-label="Find a person or company" role="combobox" aria-expanded="false" aria-controls="home-search-results" aria-autocomplete="list" autocomplete="off" />
+        <div id="home-search-results" class="home-search-results" role="listbox" aria-label="Matches" hidden></div>
+      </div>
       <div id="home-edit-bar" class="dashboard-edit-bar" hidden>
         <span class="muted small-text">Add, remove and reorder your modules. Only modules your role can see are offered.</span>
         <span class="spacer"></span>
@@ -257,6 +261,9 @@
     <section id="view-alarms" class="view" data-title="Alarms" hidden>
       <div class="toolbar">
         <input id="alarms-search" type="search" placeholder="Search account, zone, event or name" />
+        <select id="alarms-event" aria-label="Kind of alarm"><option value="">Every kind of alarm</option></select>
+        <label class="inline toolbar-date">From <input type="date" id="alarms-from" /></label>
+        <label class="inline toolbar-date">To <input type="date" id="alarms-to" /></label>
         <label class="check-row inline-check"><input type="checkbox" id="alarms-unread" /> Unread only</label>
         <span class="spacer"></span>
         <button type="button" id="alarms-check" class="secondary" hidden>Check the mailbox</button>
@@ -276,6 +283,14 @@
     <section id="view-guard-reports" class="view" data-title="Guard reports" hidden>
       <div class="toolbar">
         <input id="guard-search" type="search" placeholder="Search site, officer or what they wrote" />
+        <select id="guard-needs" aria-label="What it needs a look for">
+          <option value="">Everything</option>
+          <option value="incidents">With incidents</option>
+          <option value="missed">With missed checkpoints</option>
+          <option value="answeredNo">With questions answered No</option>
+        </select>
+        <label class="inline toolbar-date">From <input type="date" id="guard-from" /></label>
+        <label class="inline toolbar-date">To <input type="date" id="guard-to" /></label>
         <label class="check-row inline-check"><input type="checkbox" id="guard-unread" /> Unread only</label>
         <span class="spacer"></span>
         <button type="button" id="guard-check" class="secondary" hidden>Check the mailbox</button>

@@ -41,11 +41,13 @@ function roomColor(o, colorBy = planColorBy()) {
 }
 
 const classificationText = (o) => (o.classification ? `Classified: ${o.classification.name}` : "Unclassified");
-const RATE_SOURCES = { company: "the company's rate", office: "the office's rate", site: "the site's default", monthly: "a fixed amount a month" };
+const RATE_SOURCES = { company: "the company's rate", office: "the office's rate", site: "the site's default", monthly: "a fixed amount a month", lease: "the lease's base rate", leaseRoom: "the rate on its lease", fixedLease: "a share of the lease's fixed rent" };
 
 const moneyFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const fmtMoney = (n) => (n === null || n === undefined ? "—" : moneyFormat.format(n));
-const fmtRate = (n) => (n === null || n === undefined ? "—" : `${moneyFormat.format(n)}/sq ft`);
+// A rate with yearly increases runs past cents, and its monthly cost comes from all of it.
+const rateFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 });
+const fmtRate = (n) => (n === null || n === undefined ? "—" : `${rateFormat.format(n)}/sq ft`);
 const fmtSqft = (n) => (n === null || n === undefined ? "—" : `${Number(n).toLocaleString("en-US")} sq ft`);
 const facilitySite = () => new URLSearchParams(siteQuery());
 
@@ -1136,7 +1138,8 @@ async function openOffice(id, onChange = () => {}) {
             h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: () => pick({ do: "remove", a }) })) : null));
       }))))
     : h("p", { class: "muted small-text", text: "Never assigned." });
-  const rateText = office.monthlyRent !== null ? "A fixed amount a month" : office.effectiveRate === null ? "No rate set" : `${fmtRate(office.effectiveRate)} a month, ${RATE_SOURCES[office.rateSource]}`;
+  const rateText = office.rateSource === "monthly" ? "A fixed amount a month" : office.rateSource === "fixedLease" ? "A share of its lease's fixed rent" : office.effectiveRate === null ? "No rate set"
+    : `${fmtRate(office.effectiveRate)} a month, ${office.baseRate !== office.effectiveRate ? `with its lease's yearly increases on ${fmtRate(office.baseRate)}, ` : ""}${RATE_SOURCES[office.rateSource]}`;
   const body = h("div", { class: "stack" },
     h("dl", { class: "facts" },
       h("dt", { text: "Status" }), h("dd", {}, statusBadge(office.status), office.status === "unavailable" ? null : h("span", { text: ` ${officeHolder(office) || ""}` })),
@@ -1310,7 +1313,7 @@ async function loadOffices() {
       h("td", {}, statusBadge(o.status)),
       h("td", { text: officeHolder(o) || "" }),
       h("td", { class: "nowrap small-text", title: availableWhy(o), text: availableText(o) }),
-      h("td", { class: "num", title: o.rateSource ? `From ${RATE_SOURCES[o.rateSource]}` : null, text: o.monthlyRent !== null ? "Fixed" : o.effectiveRate === null ? "—" : fmtRate(o.effectiveRate) }),
+      h("td", { class: "num", title: o.rateSource ? `From ${RATE_SOURCES[o.rateSource]}${o.baseRate !== null && o.baseRate !== o.effectiveRate ? `: ${fmtRate(o.baseRate)} with its lease's yearly increases` : ""}` : null, text: o.rateSource === "monthly" || o.rateSource === "fixedLease" ? "Fixed" : o.effectiveRate === null ? "—" : fmtRate(o.effectiveRate) }),
       h("td", { class: `num${o.status === "occupied" ? "" : " muted"}`, title: o.status === "occupied" ? null : "Asking", text: fmtMoney(o.monthly) }));
     row.addEventListener("click", () => openOffice(o.id, loadOffices));
     if (box) {
@@ -1480,7 +1483,7 @@ async function showRates() {
   const sites = state.site ? data.sites.filter((s) => String(s.siteId) === String(state.site)) : data.sites;
   const { classes } = data;
   body.replaceChildren(
-    h("p", { class: "muted", text: "Rates are dollars per square foot a month, one for each classification of space. An office uses its company's rate for its classification when the company has one, else its own rate, else its site's rate for its classification. Its monthly cost is its size times that rate." }),
+    h("p", { class: "muted", text: "Rates are dollars per square foot a month, one for each classification of space. An office uses its company's rate for its classification when the company has one, else its own rate, else its site's rate for its classification. Its monthly cost is its size times that rate. A lease can have a base rate of its own instead, or a rate for each of its rooms, and a lease's yearly increase goes on top of whichever rate it uses, so enter the rate as it was when the lease began." }),
     h("div", { class: "panel" },
       h("h3", { text: "Site rates" }),
       h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
@@ -1568,7 +1571,7 @@ function companyOfficesPanel(company) {
         h("td", { text: `${fmtDay(o.assignment.startDate)} – ${o.assignment.endDate ? fmtDay(o.assignment.endDate) : "no end date"}` }),
         h("td", { class: "num", text: o.sqft === null ? "—" : Number(o.sqft).toLocaleString("en-US") }),
         h("td", { class: "num", text: o.desks === null || o.desks === undefined ? "—" : String(o.desks) }),
-        h("td", { class: "num", text: o.when === "ended" ? "" : fmtRate(o.rate) }),
+        h("td", { class: "num" }, o.when === "ended" ? "" : fmtRate(o.rate), o.when !== "ended" && o.baseRate !== null && o.baseRate !== o.rate ? h("div", { class: "muted small-text", text: `Base ${fmtRate(o.baseRate)}` }) : null),
         h("td", { class: "num", text: o.when === "ended" ? "" : fmtMoney(o.monthly) }));
       row.addEventListener("click", () => openOffice(o.officeId, refresh));
       return row;

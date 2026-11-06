@@ -18,7 +18,8 @@ async function renderAccount() {
     h("div", { class: "panel" },
       h("h3", { text: "Appearance" }),
       h("p", { class: "muted", text: "Light or dark, or as this device is set. The button with the moon or sun in the header switches too. Kept with your account, so it follows you." }),
-      h("label", { class: "half" }, h("span", { text: "Show" }), appearance)));
+      h("label", { class: "half" }, h("span", { text: "Show" }), appearance)),
+    startSitePanel());
 
   if (me.provider === "local") {
     body.append(settingsForm({
@@ -36,6 +37,29 @@ async function renderAccount() {
     body.append(await mfaPanel(), await passkeyPanel());
   }
   body.append(await sessionsPanel());
+}
+
+/** Which site they start at when they sign in; nothing to choose with only one. */
+function startSitePanel() {
+  const sites = activeSites();
+  if (sites.length < 2) return "";
+  const pick = h("select", { "aria-label": "Site when you sign in" },
+    h("option", { value: "all", text: allSitesLabel() }), h("option", { value: "last", text: "The site I chose last" }), sites.map((s) => h("option", { value: String(s.id), text: s.name })));
+  pick.value = String(state.prefs.startSite);
+  // A site that has since closed: as the server would take it.
+  if (pick.selectedIndex < 0) pick.value = "all";
+  pick.addEventListener("change", async () => {
+    try {
+      state.prefs = await api("/api/me/prefs", { method: "PUT", body: { startSite: pick.value } });
+      toast("Saved. It applies the next time you sign in.");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+  return h("div", { class: "panel" },
+    h("h3", { text: "Site when you sign in" }),
+    h("p", { class: "muted", text: "Which site every page shows when you sign in. The site button in the header still switches at any time. Kept with your account, so it follows you." }),
+    h("label", { class: "half" }, h("span", { text: "Start at" }), pick));
 }
 
 async function mfaPanel() {

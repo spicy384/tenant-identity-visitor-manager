@@ -398,6 +398,7 @@ function addModuleCard() {
 function renderDashboard() {
   $("home-greeting").textContent = greeting();
   $("home-customize").hidden = dashboard.editing;
+  $("home-search").hidden = dashboard.editing || !canReadDirectory();
   $("home-edit-bar").hidden = !dashboard.editing;
   const list = (dashboard.editing ? dashboard.draft : state.prefs.dashboard).filter((id) => DASHBOARD_MODULES[id]);
   const cards = list.map((id, i) => moduleCard(id, i, list));
@@ -477,4 +478,111 @@ $("home-customize").addEventListener("click", () => {
 });
 $("home-cancel").addEventListener("click", () => { dashboard.editing = false; renderDashboard(); });
 $("home-save").addEventListener("click", () => saveDashboard(dashboard.draft));
+
+// --- finding a person or company ---------------------------------------------------------------------
+
+// How many matches of each to fetch and to show: the best are chosen from those fetched.
+const HOME_SEARCH_FETCH = 25;
+const HOME_SEARCH_SHOWN = 6;
+const homeSearch = { asked: 0, active: -1 };
+
+/** Whose name begins with what was typed first, then a word of it, then anywhere; a match on another field last. */
+function nameRank(name, q) {
+  const n = String(name || "").toLowerCase();
+  if (n.startsWith(q)) return 0;
+  if (n.split(/\s+/).some((word) => word.startsWith(q))) return 1;
+  return n.includes(q) ? 2 : 3;
+}
+const bestMatches = (list, nameOf, q) => list.map((row, i) => ({ row, i, rank: nameRank(nameOf(row), q) })).sort((a, b) => a.rank - b.rank || a.i - b.i).map((x) => x.row).slice(0, HOME_SEARCH_SHOWN);
+
+function closeHomeSearch() {
+  $("home-search-results").hidden = true;
+  $("home-search-input").setAttribute("aria-expanded", "false");
+  $("home-search-input").removeAttribute("aria-activedescendant");
+  homeSearch.active = -1;
+}
+
+function homeSearchOptions() {
+  return [...$("home-search-results").querySelectorAll("[role=option]")];
+}
+
+function markHomeSearchOption(index) {
+  const options = homeSearchOptions();
+  homeSearch.active = index;
+  options.forEach((o, i) => { o.classList.toggle("is-active", i === index); o.setAttribute("aria-selected", String(i === index)); });
+  if (options[index]) {
+    $("home-search-input").setAttribute("aria-activedescendant", options[index].id);
+    options[index].scrollIntoView({ block: "nearest" });
+  } else $("home-search-input").removeAttribute("aria-activedescendant");
+}
+
+/** A match leaves the search empty behind it. */
+function homeSearchChosen() {
+  $("home-search-input").value = "";
+  closeHomeSearch();
+}
+
+/** One kind of match under its heading, and a link to the whole list when there are more than fit. */
+function homeSearchGroup(title, rows, total, rowFor, seeAll) {
+  if (!rows.length) return [];
+  return [
+    h("div", { class: "label home-search-group", role: "presentation", text: title }),
+    ...rows.map(rowFor),
+    total > rows.length ? h("a", { class: "small-text dash-more", href: seeAll.href, onclick: () => { $(seeAll.input).value = $("home-search-input").value.trim(); homeSearchChosen(); }, text: `All ${total} in ${title}` }) : null
+  ].filter(Boolean);
+}
+
+async function runHomeSearch() {
+  const typed = $("home-search-input").value.trim();
+  homeSearch.asked += 1;
+  const asked = homeSearch.asked;
+  if (!typed) return closeHomeSearch();
+  const box = $("home-search-results");
+  let content;
+  try {
+    const query = siteParams({ q: typed, limit: String(HOME_SEARCH_FETCH) });
+    const [{ people, total: peopleTotal }, { companies, total: companiesTotal }] = await Promise.all([api(`/api/people?${query}`), api(`/api/companies?${query}`)]);
+    // Typed on since, or signed out: this answer is no longer wanted.
+    if (asked !== homeSearch.asked || !state.me) return null;
+    const q = typed.toLowerCase();
+    const option = (prefix, row, attrs) => h("div", { role: "option", id: `home-search-${prefix}-${row.id}`, "aria-selected": "false" }, dashRow(attrs));
+    const peopleFound = bestMatches(people, personName, q);
+    const companiesFound = bestMatches(companies, (c) => c.name, q);
+    const peopleGroup = homeSearchGroup("People", peopleFound, peopleTotal, (p) => option("person", p, { href: `#person/${p.id}`, main: personName(p), sub: [p.jobTitle, p.companyName].filter(Boolean).join(" · ") || null }), { href: "#people", input: "people-search" });
+    const companiesGroup = homeSearchGroup("Companies", companiesFound, companiesTotal, (c) => option("company", c, { href: `#company/${c.id}`, main: c.name, right: h("span", { class: "muted small-text", text: `${c.peopleCount ?? 0} ${c.peopleCount === 1 ? "person" : "people"}` }) }), { href: "#companies", input: "companies-search" });
+    // Whichever matches by its name goes first: typing a company's name shouldn't bury it under its staff.
+    const companyFirst = companiesFound.length && (!peopleFound.length || nameRank(companiesFound[0].name, q) < nameRank(personName(peopleFound[0]), q));
+    content = companyFirst ? [...companiesGroup, ...peopleGroup] : [...peopleGroup, ...companiesGroup];
+    if (!content.length) content = [h("p", { class: "muted small-text dash-empty", text: state.site ? `No one matches at ${siteName(state.site)}. The site button at the top switches to ${allSitesLabel().toLowerCase()}.` : "No one matches." })];
+  } catch (error) {
+    if (asked !== homeSearch.asked) return null;
+    content = [h("p", { class: "message error small-text", text: error.message })];
+  }
+  box.replaceChildren(...content);
+  box.hidden = false;
+  $("home-search-input").setAttribute("aria-expanded", "true");
+  homeSearch.active = -1;
+  return null;
+}
+
+$("home-search-input").addEventListener("input", debounce(runHomeSearch, 150));
+$("home-search-input").addEventListener("focus", () => { if ($("home-search-input").value.trim()) runHomeSearch(); });
+$("home-search-input").addEventListener("keydown", (e) => {
+  const options = homeSearchOptions();
+  if (e.key === "Escape") {
+    if ($("home-search-results").hidden) $("home-search-input").value = "";
+    closeHomeSearch();
+  } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && options.length && !$("home-search-results").hidden) {
+    e.preventDefault();
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    markHomeSearchOption(homeSearch.active < 0 && step < 0 ? options.length - 1 : (homeSearch.active + step + options.length) % options.length);
+  } else if (e.key === "Enter" && options.length && !$("home-search-results").hidden) {
+    // The one marked, or the best match.
+    e.preventDefault();
+    location.hash = (options[homeSearch.active] || options[0]).querySelector("a").getAttribute("href");
+    homeSearchChosen();
+  }
+});
+$("home-search-results").addEventListener("click", (e) => { if (e.target.closest("[role=option]")) homeSearchChosen(); });
+document.addEventListener("click", (e) => { if (!e.target.closest("#home-search")) closeHomeSearch(); });
 $("home-reset").addEventListener("click", () => { dashboard.draft = [...state.prefs.defaults]; renderDashboard(); });

@@ -134,6 +134,17 @@ check("keep: with one site, what comes in is at it", reports.sources().every((x)
 const listed = reports.list("alarm").items[0];
 check("list: unread, newest first, what it came to", listed.read === false && listed.event === "BURGLARY ALARM" && listed.outcome.disarmedBy === "LEE EXAMPLE" && listed.outcome.dispatch === "No dispatch requested");
 check("list: found by a word in it", reports.list("alarm", { q: "lobby" }).total === 2 && reports.list("alarm", { q: "nowhere" }).total === 0);
+const oneAt = Date.UTC(2027, 0, 3, 14, 16);
+const hasOne = (filters) => reports.list("alarm", filters).items.some((a) => a.id === one.id);
+check("filter: an alarm from a time", hasOne({ fromAt: oneAt }) && !hasOne({ fromAt: oneAt + 1 }));
+check("filter: to a time, not including it", hasOne({ toAt: oneAt + 1 }) && !hasOne({ toAt: oneAt }));
+check("filter: an alarm's kind", reports.list("alarm", { event: "BURGLARY ALARM" }).total > 0 && reports.list("alarm", { event: "BURGLARY ALARM" }).items.every((a) => a.event === "BURGLARY ALARM") && reports.list("alarm", { event: "Nothing like it" }).total === 0);
+check("filter: the kinds that have come in", reports.alarmEvents().includes("BURGLARY ALARM"));
+check("filter: a guard report by the day it covers", reports.list("guard", { fromDate: "2027-01-04" }).total === 1 && reports.list("guard", { fromDate: "2027-01-05" }).total === 0 && reports.list("guard", { toDate: "2027-01-04" }).total === 1 && reports.list("guard", { toDate: "2027-01-03" }).total === 0);
+const guardRow = reports.list("guard").items[0];
+check("filter: a guard report with incidents, or questions answered No", guardRow.incidents > 0 && guardRow.answeredNo > 0 && reports.list("guard", { needs: "incidents" }).total === 1 && reports.list("guard", { needs: "answeredNo" }).total === 1);
+check("filter: with missed checkpoints, only if it has any", reports.list("guard", { needs: "missed" }).total === (guardRow.missed > 0 ? 1 : 0));
+check("filter: asking for what isn't one goes nowhere near the SQL", reports.list("guard", { needs: "incidents') > 0 OR ('1" }).total === 1 && reports.list("guard", { needs: "constructor" }).total === 1);
 check("unread: counted", reports.unread().alarms === 2 && reports.unread().reports === 1);
 clockNow += 1000;
 reports.setRead("alarm", one.id, true, { by: "Sam" });
@@ -329,6 +340,15 @@ async function httpTests() {
   r = await security.post(`/api/security/alarms/${alarmId}/read`, { read: true });
   check("http: opened, it is read, by whom", r.data.read && r.data.readBy === "sec" && (await security.get("/api/security/mail/unread")).data.alarms === 0);
   await security.post(`/api/security/alarms/${alarmId}/read`, { read: false });
+  const alarmsAt = (query) => security.get(`/api/security/alarms?${new URLSearchParams(query)}`);
+  check("http: an alarm's kind", (await alarmsAt({ event: "BURGLARY ALARM" })).data.total === 1 && (await alarmsAt({ event: "Nothing like it" })).data.total === 0);
+  check("http: the kinds on offer", (await alarmsAt({})).data.events.includes("BURGLARY ALARM"));
+  const alarmAt = Date.UTC(2027, 0, 3, 14, 16);
+  check("http: by dates", (await alarmsAt({ fromAt: alarmAt })).data.total === 1 && (await alarmsAt({ fromAt: alarmAt + 1 })).data.total === 0 && (await alarmsAt({ toAt: alarmAt })).data.total === 0 && (await alarmsAt({ toAt: alarmAt + 1 })).data.total === 1);
+  const reportsAt = (query) => security.get(`/api/security/guard-reports?${new URLSearchParams(query)}`);
+  check("http: a guard report by the day it covers", (await reportsAt({ from: "2027-01-04", to: "2027-01-04" })).data.total === 1 && (await reportsAt({ from: "2027-01-05" })).data.total === 0);
+  check("http: a date that isn't one is ignored", (await reportsAt({ from: "soon" })).data.total === 1);
+  check("http: a guard report with incidents", (await reportsAt({ needs: "incidents" })).data.total === 1);
   check("http: made unread again, in the audit log", (await security.get("/api/security/alarms?unread=1")).data.total === 1
     && (await admin.get("/api/audit?action=security.alarm_unread")).data.entries.length === 1);
   r = await security.get(`/api/security/guard-reports/${reportId}`);
@@ -369,6 +389,7 @@ async function httpTests() {
 
   // Sites: two sites, so nothing is placed until an administrator does it.
   check("http: limited Security doesn't see what isn't placed", (await annexSecurity.get("/api/security/alarms")).data.total === 0 && (await annexSecurity.get(`/api/security/alarms/${alarmId}`)).status === 404);
+  check("http: limited Security isn't told the kinds of alarm it doesn't see", (await annexSecurity.get("/api/security/alarms")).data.events.length === 0);
   r = await admin.get("/api/settings/security-mail");
   check("http: Settings lists the accounts and sites seen", r.status === 200 && r.data.sources.length === 2 && r.data.sources.every((x) => x.siteId === null) && r.data.settings.enabled === false);
   check("http: only administrators set it up", (await security.get("/api/settings/security-mail")).status === 403 && (await security.put("/api/settings/security-mail", { enabled: false })).status === 403);
@@ -398,6 +419,7 @@ async function httpTests() {
   } finally {
     if (server) server.kill();
     db.close?.();
-    report();
+    // Without this, a failed check here wouldn't fail the run.
+    process.exitCode = report() ? 0 : 1;
   }
 })();

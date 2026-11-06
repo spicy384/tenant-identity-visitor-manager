@@ -1,7 +1,8 @@
 /**
  * Each person's own preferences, kept on the server so they follow them to any device: the
- * site they last chose in the header, the modules on their dashboard (Home), in order, and
- * light or dark (or as the device is set).
+ * site they last chose in the header, which site to start at when they sign in (all, the one they
+ * last chose, or a site's id), the modules on their dashboard (Home), in order, and light or dark
+ * (or as the device is set).
  *
  * A module is offered only to roles that may see what it shows; one a person can no longer
  * see (their role changed) is left out of what they get back, and refused when saved.
@@ -51,17 +52,19 @@ function createPrefs({ db, access }) {
   const defaults = (ctx) => [...new Set((ctx.roles?.length ? ctx.roles : [ctx.role]).flatMap((r) => DEFAULTS[r?.id] || DEFAULTS.other))].filter((id) => MODULES[id](ctx));
   const key = (user) => `prefs.${user.id}`;
 
-  /** { site, dashboard (the modules they see, in order), available, defaults }. */
+  /** { site, startSite, dashboard (the modules they see, in order), available, defaults }. */
   function get(user, ctx) {
     const stored = db.readDoc(key(user), {}) || {};
     const allowed = new Set(available(ctx));
     const site = stored.site && (!ctx.sites || ctx.sites.has(Number(stored.site))) ? Number(stored.site) : null;
     const dashboard = Array.isArray(stored.dashboard) ? stored.dashboard.filter((id) => allowed.has(id)) : defaults(ctx);
     const theme = THEMES.includes(stored.theme) ? stored.theme : "auto";
-    return { site, dashboard, theme, available: [...allowed], defaults: defaults(ctx) };
+    // A site they can no longer see goes back to all of theirs.
+    const startSite = stored.startSite === "last" || (Number.isInteger(stored.startSite) && (!ctx.sites || ctx.sites.has(stored.startSite))) ? stored.startSite : "all";
+    return { site, startSite, dashboard, theme, available: [...allowed], defaults: defaults(ctx) };
   }
 
-  /** Saves what is given: site (a site id, or null for all their sites) and dashboard (module ids, or null for the defaults). */
+  /** Saves what is given: site (a site id, or null for all their sites), startSite (all, last or a site id) and dashboard (module ids, or null for the defaults). */
   function save(user, ctx, patch = {}, { siteExists = () => true } = {}) {
     const stored = db.readDoc(key(user), {}) || {};
     const next = { ...stored };
@@ -72,6 +75,15 @@ function createPrefs({ db, access }) {
         if (!Number.isInteger(id) || !siteExists(id)) throw fail(400, "No such site.");
         if (ctx.sites && !ctx.sites.has(id)) throw fail(403, "This account can't see that site.");
         next.site = id;
+      }
+    }
+    if (patch.startSite !== undefined) {
+      if (patch.startSite === "all" || patch.startSite === "last") next.startSite = patch.startSite;
+      else {
+        const id = Number(patch.startSite);
+        if (!Number.isInteger(id) || id <= 0 || !siteExists(id)) throw fail(400, "Start at all sites, the last one chosen, or a site.");
+        if (ctx.sites && !ctx.sites.has(id)) throw fail(403, "This account can't see that site.");
+        next.startSite = id;
       }
     }
     if (patch.theme !== undefined) {

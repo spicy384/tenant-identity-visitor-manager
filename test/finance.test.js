@@ -45,7 +45,11 @@ function client() {
   }
   return {
     get: (u) => call("GET", u), post: (u, b = {}) => call("POST", u, b), put: (u, b = {}) => call("PUT", u, b), del: (u) => call("DELETE", u),
-    raw: (u, opts = {}) => call("GET", u, undefined, { raw: true, ...opts })
+    raw: (u, opts = {}) => call("GET", u, undefined, { raw: true, ...opts }),
+    upload: async (u, bytes) => {
+      const res = await fetch(BASE + u, { method: "POST", headers: { "content-type": "application/octet-stream", ...(csrf ? { "x-csrf-token": csrf } : {}), cookie: Object.entries(jar).map(([k, v]) => `${k}=${v}`).join("; ") }, body: bytes });
+      return { status: res.status, data: await res.json().catch(() => ({})) };
+    }
   };
 }
 
@@ -310,7 +314,7 @@ async function main() {
   check("rent: and up by the yearly increase after each anniversary", (await manager.get(`/api/leases/${initechLease.id}/rent?period=2025-06`)).data.rent.amount === 1785
     && (await manager.get(`/api/leases/${initechLease.id}/rent?period=2026-01`)).data.rent.amount === 1874.25);
   r = await manager.put(`/api/offices/${o204.id}`, { monthlyRent: null });
-  check("rooms: back to by the square foot", r.data.office.monthlyRent === null && r.data.office.monthly === 1600 && r.data.office.rateSource === "site");
+  check("rooms: back to by the square foot", r.data.office.monthlyRent === null && r.data.office.baseMonthly === 1600 && r.data.office.rateSource === "site");
 
   // --- a commencement date apart from the start ----------------------------------------------------------------------
   const umbrella = await mk("Umbrella");
@@ -325,6 +329,161 @@ async function main() {
   check("commencement: the same as the start, it follows the start", r.data.lease.commencementDate === "2024-01-01" && moved.commencementDate === "2024-02-01");
   check("commencement: not after the end", (await manager.put(`/api/leases/${umbrellaLease.id}`, { endDate: "2024-12-31", commencementDate: "2025-01-15" })).status === 400);
   check("leases: one without a commencement date commences on its start", (await manager.get(`/api/leases/${initechLease.id}`)).data.lease.commencementDate === "2024-01-01");
+
+  // --- a base rate on the lease, for one that began years ago ---------------------------------------------------------
+  const pad = (n) => String(n).padStart(2, "0");
+  const nowDate = new Date();
+  const todayText = `${nowDate.getFullYear()}-${pad(nowDate.getMonth() + 1)}-${pad(nowDate.getDate())}`;
+  const passedSince = (start) => Number(todayText.slice(0, 4)) - Number(start.slice(0, 4)) - (todayText.slice(5) < start.slice(5) ? 1 : 0);
+  const cents = (n) => Math.round(n * 100) / 100;
+  const tenths = (n) => Math.round(n * 10000) / 10000;
+  const stark = await mk("Stark");
+  await manager.put(`/api/facilities/company-rates/${stark.id}`, { rate: 9 });
+  const o401 = await office("401", 1000);
+  const o402 = await office("402", 500);
+  r = await manager.post("/api/leases", { companyId: stark.id, officeIds: [o401.id, o402.id], startDate: "2020-12-01", baseRate: 3, escalationPct: 2.75 });
+  const stark1 = r.data.lease;
+  const years = passedSince("2020-12-01");
+  const k = 1.0275 ** years;
+  // As finance's tracker works it: ROUND(rent * (1 + %), 2), year after year, in whole cents.
+  const chain = (amount, pct, n) => { let c = Math.round(amount * 100); for (let i = 0; i < n; i += 1) c = Math.floor((c * (10000 + Math.round(pct * 100)) + 5000) / 10000); return c / 100; };
+  const starkRent = (n) => cents(chain(3000, 2.75, n) + chain(1500, 2.75, n));
+  check("base rate: kept on the lease", r.status === 200 && stark1.baseRate === 3, JSON.stringify(r.data));
+  check("base rate: wins over the company's rate", stark1.offices.every((o) => o.rate === 3 && o.rateSource === "lease"));
+  check("base rate: first year as entered", await rentOf(stark1.id, "2020-12") === 4500 && await rentOf(stark1.id, "2021-11") === 4500);
+  check("base rate: up on each anniversary", await rentOf(stark1.id, "2021-12") === 4623.75 && await rentOf(stark1.id, "2026-11") === starkRent(5) && await rentOf(stark1.id, "2026-12") === starkRent(6));
+  check("base rate: the lease shows today's rent and rate", stark1.increases === years && stark1.currentMonthly === starkRent(years) && stark1.currentYearly === cents(starkRent(years) * 12) && stark1.currentRate === tenths(3 * k), JSON.stringify([stark1.increases, stark1.currentMonthly, stark1.currentRate]));
+  check("base rate: each office has its rent now", stark1.offices.find((o) => o.officeId === o401.id).currentMonthly === chain(3000, 2.75, years) && stark1.offices.find((o) => o.officeId === o401.id).currentYearly === cents(chain(3000, 2.75, years) * 12) && stark1.offices.find((o) => o.officeId === o401.id).monthly === 3000);
+  const yearNow = stark1.schedule.find((y) => y.when === "now");
+  const yearNext = stark1.schedule.find((y) => y.when === "next");
+  check("schedule: from its first year", stark1.schedule[0].from === "2020-12-01" && stark1.schedule[0].monthly === 4500 && stark1.schedule[0].yearly === 54000 && stark1.schedule[0].rate === 3 && stark1.schedule[1].monthly === 4623.75 && stark1.schedule[1].yearly === 55485);
+  check("schedule: this year matches today's rent", yearNow.monthly === stark1.currentMonthly && yearNow.rate === stark1.currentRate && yearNow.increases === years);
+  check("schedule: and ends with the next one", stark1.schedule.at(-1) === yearNext && yearNext.increases === years + 1 && yearNext.from === `${2020 + years + 1}-12-01`);
+  let seen = (await manager.get(`/api/offices/${o401.id}`)).data.office;
+  check("rooms: an office shows what its lease charges now", seen.monthly === chain(3000, 2.75, years) && seen.effectiveRate === tenths(3 * k) && seen.baseRate === 3 && seen.baseMonthly === 3000 && seen.rateSource === "lease", JSON.stringify(seen));
+  check("rooms: in the list too", (await manager.get(`/api/offices?companyId=${stark.id}`)).data.offices.find((o) => o.id === o401.id).monthly === chain(3000, 2.75, years));
+  const starkPage = (await manager.get(`/api/companies/${stark.id}/facilities`)).data;
+  check("company page: its offices and total at today's rent", starkPage.offices.find((o) => o.officeId === o401.id).monthly === chain(3000, 2.75, years) && starkPage.offices.find((o) => o.officeId === o401.id).baseRate === 3 && starkPage.totals.monthly === starkRent(years), JSON.stringify(starkPage.totals));
+  check("base rate: a bad one is refused", (await manager.put(`/api/leases/${stark1.id}`, { baseRate: -1 })).status === 400);
+  check("base rate: four decimal places, as a yearly rate over twelve needs", (await manager.put(`/api/leases/${stark1.id}`, { baseRate: 3.20833 })).data.lease.baseRate === 3.2083);
+  const assignmentOf = async (officeId) => (await manager.get(`/api/offices/${officeId}`)).data.office.assignments[0].id;
+  r = await manager.put(`/api/office-assignments/${await assignmentOf(o402.id)}`, { startDate: "2021-02-01" });
+  check("leaving a lease: the office keeps its base rate and increase", r.status === 200, JSON.stringify(r.data));
+  const split = (await manager.get(`/api/leases?companyId=${stark.id}`)).data.leases.find((l) => l.id !== stark1.id);
+  check("leaving a lease: counted from the same day", split.baseRate === 3.2083 && split.escalationPct === 2.75 && split.commencementDate === "2020-12-01" && split.startDate === "2021-02-01" && split.increases === years, JSON.stringify(split));
+  await manager.put(`/api/leases/${stark1.id}`, { baseRate: null });
+  check("base rate: empty goes back to the rates", (await manager.get(`/api/leases/${stark1.id}`)).data.lease.offices[0].rate === 9 && (await manager.get(`/api/leases/${stark1.id}`)).data.lease.offices[0].rateSource === "company");
+  const o403 = await office("403", 100);
+  await manager.put(`/api/offices/${o403.id}`, { monthlyRent: 700 });
+  r = await manager.post("/api/leases", { companyId: stark.id, officeIds: [o403.id], startDate: "2024-01-01", baseRate: 3, escalationPct: 10 });
+  const fixedYears = passedSince("2024-01-01");
+  check("base rate: an office let for a fixed amount keeps it, with the increases", r.data.lease.offices[0].monthly === 700 && r.data.lease.currentMonthly === chain(700, 10, fixedYears) && (await manager.get(`/api/offices/${o403.id}`)).data.office.monthly === chain(700, 10, fixedYears));
+  const wayne = await mk("Wayne");
+  const o404 = await office("404", 300);
+  const o405 = await office("405", 100);
+  r = await manager.post("/api/leases", { companyId: wayne.id, rentMode: "fixed", monthlyRent: 10000, baseRate: 5, escalationPct: 2.75, officeIds: [o404.id, o405.id], startDate: "2020-12-01" });
+  check("fixed rent: has no base rate, and is the sum of the example", r.data.lease.baseRate === null && r.data.lease.currentMonthly === chain(10000, 2.75, years), JSON.stringify(r.data.lease));
+  check("fixed rent: no one rate", r.data.lease.currentRate === null && r.data.lease.schedule[0].rate === null);
+  seen = (await manager.get(`/api/offices/${o404.id}`)).data.office;
+  check("fixed rent: an office shows its share, by size", seen.rateSource === "fixedLease" && seen.effectiveRate === null && seen.monthly === cents(chain(10000, 2.75, years) * 0.75), JSON.stringify(seen));
+  r = await manager.post("/api/leases", { companyId: wayne.id, rentMode: "fixed", monthlyRent: 1000, escalationPct: 10, startDate: "2020-01-01", endDate: "2022-06-30" });
+  check("ended: its rent stays as it last was, and the schedule stops there", r.data.lease.currentMonthly === 1210 && r.data.lease.increases === 2 && r.data.lease.schedule.length === 3 && r.data.lease.schedule.at(-1).when === "now", JSON.stringify(r.data.lease));
+  r = await manager.post("/api/leases", { companyId: wayne.id, rentMode: "fixed", monthlyRent: 1000, startDate: "2020-01-01" });
+  check("no yearly increase: no schedule", r.data.lease.schedule.length === 0 && r.data.lease.currentMonthly === 1000);
+
+  // --- agreeing with finance's tracker to the cent ------------------------------------------------------------------
+  const tracker = await mk("Tracker Co");
+  r = await manager.post("/api/leases", { companyId: tracker.id, rentMode: "fixed", monthlyRent: 4500, escalationPct: 2.75, startDate: "2020-12-01" });
+  const trackerLease = r.data.lease;
+  check("tracker: rounds every year, not once", await rentOf(trackerLease.id, "2024-12") === 5015.79 && await rentOf(trackerLease.id, "2025-12") === 5153.72 && await rentOf(trackerLease.id, "2026-12") === 5295.45);
+  check("tracker: the year is twelve times the month", trackerLease.schedule[5].monthly === 5153.72 && trackerLease.schedule[5].yearly === 61844.64, JSON.stringify(trackerLease.schedule[5]));
+  r = await manager.post("/api/leases", { companyId: tracker.id, rentMode: "fixed", monthlyRent: 34, escalationPct: 3.25, startDate: "2021-01-01" });
+  check("tracker: half a cent rounds up", await rentOf(r.data.lease.id, "2022-02") === 35.11, JSON.stringify(r.data.lease.schedule));
+  const o406 = await office("406", 100);
+  const o407 = await office("407", 100);
+  for (const room of [o406, o407]) await manager.put(`/api/offices/${room.id}`, { monthlyRent: 100.2 });
+  r = await manager.post("/api/leases", { companyId: tracker.id, officeIds: [o406.id, o407.id], escalationPct: 2.75, startDate: "2021-01-01" });
+  const twoRooms = r.data.lease;
+  check("tracker: each room is rounded, then added", await rentOf(twoRooms.id, "2022-02") === 205.92 && twoRooms.schedule[1].monthly === 205.92 && twoRooms.schedule[1].yearly === 2471.04, JSON.stringify(twoRooms.schedule[1]));
+  check("tracker: the rooms' rents add up to the lease's", cents(twoRooms.offices.reduce((n, o) => n + o.currentMonthly, 0)) === twoRooms.currentMonthly);
+
+  // --- each room's rent at the start of the lease --------------------------------------------------------------------
+  const rooms = await mk("Room Rates Co");
+  const o408 = await office("408", 1000);
+  const o409 = await office("409", 500);
+  const o410 = await office("410", 100);
+  const o411 = await office("411", 100);
+  await manager.put(`/api/offices/${o411.id}`, { monthlyRent: 900 });
+  r = await manager.post("/api/leases", { companyId: rooms.id, officeIds: [o408.id, o409.id, o410.id, o411.id], officeRents: [{ officeId: o408.id, rate: 3 }, { officeId: o409.id, monthly: 1717.91 }, { officeId: o411.id, rate: 4 }], baseRate: 2, escalationPct: 2.75, startDate: "2020-12-01" });
+  const perRoomLease = r.data.lease;
+  const onLease = (lease, room) => lease.offices.find((o) => o.officeId === room.id);
+  check("room rents: a rate per square foot", r.status === 200 && onLease(perRoomLease, o408).rate === 3 && onLease(perRoomLease, o408).monthly === 3000 && onLease(perRoomLease, o408).rateSource === "leaseRoom" && onLease(perRoomLease, o408).ownRate === 3, JSON.stringify(r.data));
+  check("room rents: or a monthly amount, the rate worked out from it", onLease(perRoomLease, o409).monthly === 1717.91 && onLease(perRoomLease, o409).rate === tenths(1717.91 / 500) && onLease(perRoomLease, o409).ownMonthly === 1717.91 && onLease(perRoomLease, o409).ownRate === null);
+  check("room rents: an office without one takes the lease's base rate", onLease(perRoomLease, o410).rate === 2 && onLease(perRoomLease, o410).monthly === 200 && onLease(perRoomLease, o410).rateSource === "lease");
+  check("room rents: win over an office's fixed amount", onLease(perRoomLease, o411).monthly === 400);
+  const roomRent = (n) => cents(chain(3000, 2.75, n) + chain(1717.91, 2.75, n) + chain(200, 2.75, n) + chain(400, 2.75, n));
+  check("room rents: entered as at the start, the first invoice is as entered", await rentOf(perRoomLease.id, "2020-12") === 5317.91);
+  check("room rents: the increases go on top, room by room", await rentOf(perRoomLease.id, "2021-12") === roomRent(1) && await rentOf(perRoomLease.id, "2026-12") === roomRent(6) && perRoomLease.currentMonthly === roomRent(years));
+  seen = (await manager.get(`/api/offices/${o408.id}`)).data.office;
+  check("room rents: Rooms shows them with the increases", seen.monthly === chain(3000, 2.75, years) && seen.baseRate === 3 && seen.effectiveRate === tenths(3 * k) && seen.rateSource === "leaseRoom", JSON.stringify(seen));
+  check("room rents: the company page's total agrees", (await manager.get(`/api/companies/${rooms.id}/facilities`)).data.totals.monthly === roomRent(years));
+  check("room rents: a bad one is refused", (await manager.put(`/api/leases/${perRoomLease.id}`, { officeRents: [{ officeId: o408.id, rate: -1 }] })).status === 400);
+  check("room rents: a list that isn't one is refused", (await manager.put(`/api/leases/${perRoomLease.id}`, { officeRents: "3" })).status === 400);
+  r = await manager.put(`/api/leases/${perRoomLease.id}`, { notes: "Nothing about rents" });
+  check("room rents: stay when a change leaves them out", onLease(r.data.lease, o408).ownRate === 3);
+  r = await manager.put(`/api/office-assignments/${await assignmentOf(o408.id)}`, { startDate: "2021-03-01" });
+  const leftRoom = (await manager.get(`/api/leases?companyId=${rooms.id}`)).data.leases.find((l) => l.id !== perRoomLease.id);
+  check("room rents: an office leaving the lease keeps its own", r.status === 200 && onLease(leftRoom, o408).ownRate === 3 && leftRoom.commencementDate === "2020-12-01", JSON.stringify(leftRoom));
+  r = await manager.put(`/api/leases/${perRoomLease.id}`, { officeRents: [{ officeId: o409.id, rate: 5 }] });
+  check("room rents: a new list replaces the old", onLease(r.data.lease, o409).ownRate === 5 && onLease(r.data.lease, o409).ownMonthly === null && onLease(r.data.lease, o411).ownRate === null);
+  r = await manager.put(`/api/leases/${perRoomLease.id}`, { rentMode: "fixed", monthlyRent: 1000 });
+  check("room rents: none on a fixed rent", r.data.lease.offices.every((o) => o.ownRate === null && o.ownMonthly === null) && r.data.lease.currentMonthly === chain(1000, 2.75, years));
+
+  // --- a lease's documents ---------------------------------------------------------------------------------------------
+  const pdfBytes = Buffer.from("%PDF-1.4 a made-up lease");
+  const docsLease = (await manager.post("/api/leases", { companyId: tracker.id, rentMode: "fixed", monthlyRent: 100, startDate: "2022-01-01" })).data.lease;
+  const docUrl = (name, kind = "agreement", extra = "") => `/api/leases/${docsLease.id}/documents?name=${encodeURIComponent(name)}&kind=${kind}${extra}`;
+  r = await manager.upload(docUrl("Lease agreement.pdf", "agreement", "&description=Signed"), pdfBytes);
+  const agreementDoc = r.data.document;
+  check("documents: a manager adds the agreement", r.status === 200 && agreementDoc.name === "Lease agreement.pdf" && agreementDoc.kind === "agreement" && agreementDoc.description === "Signed" && agreementDoc.size === pdfBytes.length && !agreementDoc.data, JSON.stringify(r.data));
+  check("documents: on the lease, without its contents", (await manager.get(`/api/leases/${docsLease.id}`)).data.lease.documents.length === 1 && !("data" in (await manager.get(`/api/leases/${docsLease.id}`)).data.lease.documents[0]));
+  r = await finance.raw(`/api/lease-documents/${agreementDoc.ref}`);
+  check("documents: whoever sees the lease opens it, in the browser", r.status === 200 && r.text === pdfBytes.toString() && r.headers.get("content-type") === "application/pdf" && /^inline/.test(r.headers.get("content-disposition")) && r.headers.get("x-content-type-options") === "nosniff" && r.headers.get("cache-control") === "private, no-store");
+  check("documents: not those who can't see leases", (await desk.raw(`/api/lease-documents/${agreementDoc.ref}`)).status === 403);
+  check("documents: only those who change leases add them", (await finance.upload(docUrl("x.pdf"), pdfBytes)).status === 403 && (await desk.upload(docUrl("x.pdf"), pdfBytes)).status === 403);
+  check("documents: only they remove them", (await finance.del(`/api/lease-documents/${agreementDoc.id}`)).status === 403);
+  check("documents: an unknown address finds nothing", (await manager.raw("/api/lease-documents/nothing-here")).status === 404);
+  check("documents: an unknown lease", (await manager.upload("/api/leases/999999/documents?name=x.pdf&kind=agreement", pdfBytes)).status === 404);
+  r = await manager.upload(docUrl("notes.txt"), Buffer.from("just some words"));
+  check("documents: other kinds of file are refused", r.status === 400 && /PDF/.test(r.data.error), JSON.stringify(r.data));
+  check("documents: judged by contents, not the name", (await manager.upload(docUrl("looks-right.pdf"), Buffer.from("<script>alert(1)</script>"))).status === 400);
+  check("documents: nor a zip called a Word file", (await manager.upload(docUrl("fake.docx"), Buffer.from("PK\u0003\u0004 nothing of Word's in here"))).status === 400);
+  check("documents: an empty one is refused", (await manager.upload(docUrl("empty.pdf"), Buffer.alloc(0))).status === 400);
+  check("documents: it must say what it is", (await manager.upload(docUrl("x.pdf", "lunch"), pdfBytes)).status === 400);
+  const wordBytes = Buffer.from("PK\u0003\u0004 ... word/document.xml ...");
+  r = await manager.upload(docUrl("Amendment 1.docx", "amendment"), wordBytes);
+  const amendmentDoc = r.data.document;
+  check("documents: a Word file is taken", r.status === 200 && amendmentDoc.kind === "amendment", JSON.stringify(r.data));
+  r = await finance.raw(`/api/lease-documents/${amendmentDoc.ref}`);
+  check("documents: and saved rather than shown", r.status === 200 && /^attachment/.test(r.headers.get("content-disposition")));
+  const bigBytes = Buffer.alloc(25 * 1024 * 1024 + 1);
+  bigBytes.write("%PDF-1.4");
+  check("documents: past 25 MB is refused", (await manager.upload(docUrl("big.pdf"), bigBytes)).status === 413);
+  r = await manager.upload(docUrl("../..\\Scan<1>.pdf", "supporting"), pdfBytes);
+  check("documents: a name loses any folders and odd characters", r.data.document.name === "Scan1.pdf", JSON.stringify(r.data));
+  const scanDoc = r.data.document;
+  check("documents: the agreement first, then amendments, then the rest", (await manager.get(`/api/leases/${docsLease.id}`)).data.lease.documents.map((d) => d.kind).join() === "agreement,amendment,supporting");
+  r = await manager.del(`/api/lease-documents/${scanDoc.id}`);
+  check("documents: removed, its file goes too", r.status === 200 && (await manager.raw(`/api/lease-documents/${scanDoc.ref}`)).status === 404 && (await manager.get(`/api/leases/${docsLease.id}`)).data.lease.documents.length === 2);
+  r = await manager.del(`/api/leases/${docsLease.id}`);
+  check("documents: go with the lease when it is deleted", r.status === 200 && (await manager.raw(`/api/lease-documents/${agreementDoc.ref}`)).status === 404 && (await manager.raw(`/api/lease-documents/${amendmentDoc.ref}`)).status === 404, JSON.stringify(r.data));
+  const o412 = await office("412", 100);
+  const keptLease = (await manager.post("/api/leases", { companyId: tracker.id, officeIds: [o412.id], startDate: "2022-01-01" })).data.lease;
+  const keptDoc = (await manager.upload(`/api/leases/${keptLease.id}/documents?name=kept.pdf&kind=agreement`, pdfBytes)).data.document;
+  await manager.del(`/api/office-assignments/${await assignmentOf(o412.id)}`);
+  check("documents: a lease losing its last office stays, with them", (await manager.get(`/api/leases/${keptLease.id}`)).status === 200 && (await manager.raw(`/api/lease-documents/${keptDoc.ref}`)).status === 200);
+  const docAudit = (await admin.get("/api/audit?action=lease.document&limit=100")).data.entries;
+  check("documents: each add and removal is in the audit log, by name", docAudit.some((e) => e.action === "lease.document_add" && /Lease agreement.pdf/.test(e.detail)) && docAudit.some((e) => e.action === "lease.document_remove" && /Scan1.pdf/.test(e.detail)), JSON.stringify(docAudit.slice(0, 3)));
 
   // --- tenant badge allotments ---------------------------------------------------------------------------------------
   const hooli = await mk("Hooli");
@@ -464,6 +623,17 @@ async function main() {
   r = await manager.put(`/api/insurance/${cert.id}`, { removeFile: true, notes: "Waiting on the original" });
   check("insurance: its copy taken away, the file is gone", r.data.certificate.file === null && r.data.certificate.notes === "Waiting on the original" && (await finance.raw(`/api/insurance/files/${cert.file.ref}`)).status === 404);
   check("insurance: deleted", (await manager.del(`/api/insurance/${cert.id}`)).status === 200 && (await manager.get(`/api/companies/${hooli.id}/insurance`)).data.certificates.length === 0);
+
+  // --- a lease's documents follow the caller's sites ---------------------------------------------------------------
+  pw.lena = password();
+  await admin.post("/api/users", { username: "lena", password: pw.lena, role: "manager", sites: [elsewhere.id] });
+  const elsewhereManager = await as("lena");
+  const o413 = await office("413", 100);
+  const harborLease = (await manager.post("/api/leases", { companyId: hooli.id, officeIds: [o413.id], startDate: "2022-01-01" })).data.lease;
+  const harborDoc = (await manager.upload(`/api/leases/${harborLease.id}/documents?name=harbor.pdf&kind=agreement`, Buffer.from("%PDF-1.4 harbor"))).data.document;
+  check("documents: not opened from another site", (await elsewhereManager.raw(`/api/lease-documents/${harborDoc.ref}`)).status === 404);
+  check("documents: nor added there", (await elsewhereManager.upload(`/api/leases/${harborLease.id}/documents?name=x.pdf&kind=agreement`, Buffer.from("%PDF-1.4 x"))).status === 404);
+  check("documents: nor removed", (await elsewhereManager.del(`/api/lease-documents/${harborDoc.id}`)).status === 404 && (await manager.raw(`/api/lease-documents/${harborDoc.ref}`)).status === 200);
 }
 
 main()

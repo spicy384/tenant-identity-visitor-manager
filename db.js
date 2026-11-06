@@ -599,7 +599,7 @@ CREATE TABLE IF NOT EXISTS company_rates (
   updated_at INTEGER NOT NULL
 );
 
--- Files people upload (stored-files.js): a company's certificates of insurance so far. Kept in
+-- Files people upload (stored-files.js): certificates of insurance and lease documents. Kept in
 -- here, so they are encrypted and backed up with everything else. ref is random and is the
 -- file's address, which says nothing about what it is.
 CREATE TABLE IF NOT EXISTS stored_files (
@@ -612,6 +612,22 @@ CREATE TABLE IF NOT EXISTS stored_files (
   created_by TEXT,
   created_at INTEGER NOT NULL
 );
+
+-- The papers kept with a lease (leases.js): its agreement, amendments and supporting documents.
+CREATE TABLE IF NOT EXISTS lease_documents (
+  id INTEGER PRIMARY KEY,
+  lease_id INTEGER NOT NULL REFERENCES leases(id) ON DELETE CASCADE,
+  file_id INTEGER NOT NULL REFERENCES stored_files(id),
+  kind TEXT NOT NULL,
+  description TEXT,
+  created_by TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lease_documents_lease ON lease_documents(lease_id);
+-- A document's file goes with it, however it goes (a lease's removal takes its documents).
+CREATE TRIGGER IF NOT EXISTS lease_documents_file AFTER DELETE ON lease_documents BEGIN
+  DELETE FROM stored_files WHERE id = OLD.file_id;
+END;
 
 -- A company's certificates of insurance (insurance.js): the insurer, when the cover starts and
 -- runs out (expires_on: the earliest policy on the certificate, its last day), what it covers,
@@ -772,6 +788,11 @@ const ADDED_COLUMNS = [
   ["offices", "desks", "INTEGER"],
   // When a lease's term commences, when not its start (null: the same); its yearly increases count from it.
   ["leases", "commencement_date", "TEXT"],
+  // A lease's own first-year rate per square foot a month (null: the rates that apply to its offices).
+  ["leases", "base_rate", "REAL"],
+  // An office's own rent at the start of its lease: per square foot, or a monthly amount.
+  ["office_assignments", "base_rate", "REAL"],
+  ["office_assignments", "base_monthly", "REAL"],
   // The site a visitor was added for at the desk: staff there can find them, whoever they're visiting.
   ["visitors", "added_site_id", "INTEGER REFERENCES sites(id) ON DELETE SET NULL"],
   // A price list item the app itself acts on: tenant_badge adds badges to the company charged.

@@ -19,7 +19,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   alarms and guard reports for Security only) and Settings
   (administrators). The pages of the chosen section are in the bar under the header; a
   section or page the account can't open isn't shown.
-- **Home** is each person's dashboard. **Customize** adds, removes and reorders modules: who
+- **Home** has a search box at the top for those who see the directory: as you type it lists the
+  people and companies that match (at the chosen site), and choosing one opens it. Below it is each
+  person's dashboard. **Customize** adds, removes and reorders modules: who
   is in the building, who is expected today, visitors whose check-in the desk must finish, visitors to
   check, badges out past their time, a quick list of tenants, offices by status with the space
   let and the monthly rent (for those who see facilities), leases ending soon, insurance to renew, COIs expiring or expired, overdue invoices
@@ -29,8 +31,10 @@ The design and decisions are in [PLAN.md](PLAN.md).
   layout that suits it, and the choice is kept with the account, on any device. The cards
   stand in columns (as many as fit), so a long one only moves the cards below it in its column.
 - **Sites.** The site button in the header switches site at once:
-  every page, count and module follows it, or "All sites". The choice is kept with the
-  account too, so it follows you to another desk.
+  every page, count and module follows it, or "All sites". Signing in starts at All sites, and each
+  person can change that on **Your account**: the site they chose last, or one particular site. That
+  is kept with the account too, so it follows them to another desk. Reloading the page stays on the
+  site in use, and a new tab starts as a sign-in does.
 - **Settings** has a grouped menu down the side: Building, Directory, Security, Accounts and
   Records. **General** sets the app's name, shown at the top left, on the sign-in page and in
   the browser's tab, and the line under it (shown when no single site is chosen; otherwise the
@@ -323,6 +327,12 @@ daily activity report (a PDF). The app brings them in and shows them, to the Sec
 and alarm responders only, as easy-to-read reports under **Security > Alarms** and **Security >
 Guard reports**.
 
+- **Finding them.** Alarms search by account, zone, event or name, and filter by the kind of alarm,
+  dates and unread. Guard reports search by site, officer or what they wrote, and filter by dates,
+  unread, and whether they have incidents, missed checkpoints or questions answered No. The log inside
+  an alarm and the entries inside a guard report have a search of their own. The **Clearance queue**
+  and each panel of **Re-checks and expiry** have a search box and dropdowns too; what's typed there
+  stays in the browser, and the digits of an SSN are never among what's searched.
 - **Alarm responders.** The built-in **Alarm responder** role reads the alarms and guard reports
   and nothing else: no directory, visitors, badges or clearances. Their Home starts with the
   alarms and guard reports no one has opened. Opening one marks it read for everyone, as it does
@@ -450,17 +460,29 @@ Home.
   Roles gives any role finance access (none, read, or read and change).
 - **Leases** (Facilities > Leases): a company's agreement for offices, from a start date to an
   end date (none: month to month), with a reference, a deposit and notes. Rent comes from the
-  rates (each office's size times the rate that applies, or the office's own fixed monthly
-  rent) or is a fixed amount a month; either can go up by a percentage on each anniversary of
-  its **commencement**. A lease commences on its start unless you give another commencement
+  rates or is a fixed amount a month. From the rates, an office's rent is what the lease gives
+  that office (a rate per square foot, or a monthly amount), else its size times the lease's own
+  **base rate**, else its size times the rate that applies, or the office's own fixed monthly rent. Either can go up by a
+  percentage, compounding, on each anniversary of its **commencement**, so a lease that began
+  years ago is entered with the rent it began with: the form works out what that comes to today,
+  and the lease shows its rent and rate now, its next increase and its rent by the month and the
+  year, year by year. Each office's rent is rounded to the cent every year and the lease's rent is
+  their sum, so it agrees to the cent with a spreadsheet that does the same. Rooms,
+  a company's page, Home and invoices all use that same figure. An office let for a fixed amount
+  keeps it (with the increases) unless the lease gives it a rent of its own, and an office in a lease with a fixed rent shows its share of
+  that rent, by size. A lease commences on its start unless you give another commencement
   date; rent is billed from the start either way, and only the yearly increases count from the
   commencement. A commencement left the same as the start moves with it. Making a lease assigns its offices to the
   company for its dates, and changing its dates or offices changes those assignments, so an
   office still has one company at a time. Offices assigned from Rooms or a company's page get
   a lease of their own (the ones assigned together share one); the assignments made before
   leases became leases the same way. Moving one office of several to other dates on Rooms gives
-  it a lease of its own (not for a fixed rent: change that on the lease). A lease that has been
-  invoiced can't be deleted, only ended; Home shows the leases ending within 90 days.
+  it a lease of its own, with the same base rate and yearly increase (not for a fixed rent: change
+  that on the lease). A lease that has been
+  invoiced can't be deleted, only ended; Home shows the leases ending within 90 days. A lease
+  also keeps its **documents**: the agreement, amendments and supporting documents (PDF, Word, Excel,
+  PNG or JPEG, up to 25 MB each), encrypted with the rest of the database. Whoever sees the lease
+  sees them, and whoever changes leases adds and removes them, each in the audit log.
 - **Insurance** (Facilities > Insurance, and the Insurance panel on a company's page): each
   company's certificates of insurance, with the insurer, what it covers, when the cover starts
   and when it expires (the earliest policy on the certificate), and a copy (a PDF, or a PNG or

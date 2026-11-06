@@ -81,6 +81,17 @@ function secMailPager(prefix, view, shown, total) {
   $(`${prefix}-next`).disabled = view.offset + shown >= total;
 }
 
+/** The From and To dates of a list's filters, as instants by this browser's clock and as days. */
+function mailDateQuery(prefix) {
+  const from = $(`${prefix}-from`).value;
+  const to = $(`${prefix}-to`).value;
+  const [y, m, d] = to.split("-").map(Number);
+  return {
+    ...(from ? { from, fromAt: String(new Date(`${from}T00:00:00`).getTime()) } : {}),
+    ...(to ? { to, toAt: String(new Date(y, m - 1, d + 1).getTime()) } : {})
+  };
+}
+
 // --- alarms ----------------------------------------------------------------------------------------
 
 /** What an alarm came to, in a line: who disarmed it, who verified, dispatch. */
@@ -103,11 +114,16 @@ async function loadAlarms() {
   const view = secMailView.alarms;
   let data;
   try {
-    data = await api(`/api/security/alarms?${new URLSearchParams({ limit: String(SECMAIL_PAGE), offset: String(view.offset), q: $("alarms-search").value.trim(), ...($("alarms-unread").checked ? { unread: "1" } : {}), ...siteQuery() })}`);
+    data = await api(`/api/security/alarms?${new URLSearchParams({ limit: String(SECMAIL_PAGE), offset: String(view.offset), q: $("alarms-search").value.trim(), ...($("alarms-event").value ? { event: $("alarms-event").value } : {}), ...mailDateQuery("alarms"), ...($("alarms-unread").checked ? { unread: "1" } : {}), ...siteQuery() })}`);
   } catch (error) {
     clear(table.tBodies[0]).append(emptyRow(head.length, error.message));
     return;
   }
+  // The kinds of alarm that have come in; one chosen stays offered.
+  const eventPick = $("alarms-event");
+  const eventChosen = eventPick.value;
+  eventPick.replaceChildren(h("option", { value: "", text: "Every kind of alarm" }), ...[...new Set([...data.events, ...(eventChosen ? [eventChosen] : [])])].sort().map((e) => h("option", { value: e, text: e })));
+  eventPick.value = eventChosen;
   $("alarms-hint").textContent = state.config.securityMail?.mailbox
     ? "Alarm notices from the monitoring center come in from the shared mailbox every few minutes. Bold ones haven't been opened yet."
     : !isSecurity() ? "Alarm notices from the monitoring center, as Security adds them. Bold ones haven't been opened yet."
@@ -119,7 +135,7 @@ async function loadAlarms() {
     h("td", {}, h("span", { text: a.accountName || "" }), h("div", { class: "muted small-text mono", text: a.account || "" })),
     h("td", { class: "small-text", text: alarmOutcomeText(a) }),
     multiSite() ? h("td", { class: a.siteName ? "small-text" : "small-text muted", text: a.siteName || "Not placed" }) : null));
-  clear(table.tBodies[0]).append(...(rows.length ? rows : [emptyRow(head.length, $("alarms-unread").checked ? "Every alarm has been opened." : "No alarms yet.")]));
+  clear(table.tBodies[0]).append(...(rows.length ? rows : [emptyRow(head.length, $("alarms-search").value.trim() || eventChosen || $("alarms-from").value || $("alarms-to").value ? "No alarms match." : $("alarms-unread").checked ? "Every alarm has been opened." : "No alarms yet.")]));
   secMailPager("alarms", view, data.alarms.length, data.total);
 }
 
@@ -167,6 +183,19 @@ async function openAlarm(id) {
   const a = alarm.alarm;
   const fact = (label, value) => (value ? [h("dt", { text: label }), h("dd", { text: value })] : null);
   const steps = alarmSteps(a);
+  const logFilter = rowFilter({
+    list: a.log || [],
+    placeholder: "Search time, action, phone, person or notes",
+    words: (e) => [e.time, e.action, e.phone, e.who, e.disposition, e.comment],
+    render: (rows) => h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+      h("thead", {}, h("tr", {}, ["Time", "Event or action", "Phone", "Point or person", "Notes"].map((t) => h("th", { text: t })))),
+      h("tbody", {}, rows.map((e) => h("tr", {},
+        h("td", { class: "mono nowrap", text: e.time }),
+        h("td", { text: e.action }),
+        h("td", { class: "mono", text: e.phone || "" }),
+        h("td", { text: e.who || "" }),
+        h("td", { class: "small-text", text: [e.disposition, e.comment].filter(Boolean).join(" · ") }))))))
+  });
   const body = h("div", { class: "stack" },
     h("div", { class: "mail-banner" },
       h("div", { class: "mail-banner-title", text: a.event || "Alarm" }),
@@ -188,14 +217,8 @@ async function openAlarm(id) {
         : h("p", { class: "muted", text: "The log has nothing to sum up; every step is below." })),
     h("details", { class: "mail-more" },
       h("summary", { text: `Every step the monitoring center logged (${(a.log || []).length})` }),
-      h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-        h("thead", {}, h("tr", {}, ["Time", "Event or action", "Phone", "Point or person", "Notes"].map((t) => h("th", { text: t })))),
-        h("tbody", {}, (a.log || []).map((e) => h("tr", {},
-          h("td", { class: "mono nowrap", text: e.time }),
-          h("td", { text: e.action }),
-          h("td", { class: "mono", text: e.phone || "" }),
-          h("td", { text: e.who || "" }),
-          h("td", { class: "small-text", text: [e.disposition, e.comment].filter(Boolean).join(" · ") }))))))),
+      logFilter.tools,
+      logFilter.body),
     a.link ? h("p", { class: "muted small-text" }, "More detail is in the monitoring center's own site: ", h("a", { href: a.link, target: "_blank", rel: "noopener noreferrer", text: a.link })) : null);
   await openDialog({
     title: [a.event || "Alarm", a.accountName].filter(Boolean).join(": "),
@@ -210,7 +233,7 @@ async function openAlarm(id) {
 }
 
 $("alarms-search").addEventListener("input", debounce(() => { secMailView.alarms.offset = 0; loadAlarms(); }, 250));
-$("alarms-unread").addEventListener("change", () => { secMailView.alarms.offset = 0; loadAlarms(); });
+for (const id of ["alarms-unread", "alarms-event", "alarms-from", "alarms-to"]) $(id).addEventListener("change", () => { secMailView.alarms.offset = 0; loadAlarms(); });
 $("alarms-prev").addEventListener("click", () => { secMailView.alarms.offset = Math.max(0, secMailView.alarms.offset - SECMAIL_PAGE); loadAlarms(); });
 $("alarms-next").addEventListener("click", () => { secMailView.alarms.offset += SECMAIL_PAGE; loadAlarms(); });
 $("alarms-add").addEventListener("click", addSecurityMailFiles);
@@ -238,7 +261,7 @@ async function loadGuardReports() {
   const view = secMailView.guard;
   let data;
   try {
-    data = await api(`/api/security/guard-reports?${new URLSearchParams({ limit: String(SECMAIL_PAGE), offset: String(view.offset), q: $("guard-search").value.trim(), ...($("guard-unread").checked ? { unread: "1" } : {}), ...siteQuery() })}`);
+    data = await api(`/api/security/guard-reports?${new URLSearchParams({ limit: String(SECMAIL_PAGE), offset: String(view.offset), q: $("guard-search").value.trim(), ...($("guard-needs").value ? { needs: $("guard-needs").value } : {}), ...mailDateQuery("guard"), ...($("guard-unread").checked ? { unread: "1" } : {}), ...siteQuery() })}`);
   } catch (error) {
     clear(table.tBodies[0]).append(emptyRow(head.length, error.message));
     return;
@@ -254,7 +277,7 @@ async function loadGuardReports() {
       r.missed ? h("span", { class: "badge warn", text: `${r.missed} missed` }) : null,
       r.answeredNo ? h("span", { class: "badge muted", text: `${r.answeredNo} answered No` }) : null),
     multiSite() ? h("td", { class: r.siteName ? "small-text" : "small-text muted", text: r.siteName || "Not placed" }) : null));
-  clear(table.tBodies[0]).append(...(rows.length ? rows : [emptyRow(head.length, $("guard-unread").checked ? "Every report has been opened." : "No guard reports yet.")]));
+  clear(table.tBodies[0]).append(...(rows.length ? rows : [emptyRow(head.length, $("guard-search").value.trim() || $("guard-needs").value || $("guard-from").value || $("guard-to").value ? "No guard reports match." : $("guard-unread").checked ? "Every report has been opened." : "No guard reports yet.")]));
   secMailPager("guard", view, data.reports.length, data.total);
 }
 
@@ -281,6 +304,22 @@ async function openGuardReport(id) {
     h("div", { class: "guard-card-head" }, h("strong", { text: e.headline || e.type }), h("span", { class: "muted small-text", text: `${e.time}${e.officer ? ` · ${e.officer}` : ""}` })),
     e.body ? h("p", { text: e.body }) : null,
     Object.keys(e.fields || {}).length ? h("p", { class: "muted small-text", text: Object.entries(e.fields).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(" · ") }) : null);
+  const entryFilter = rowFilter({
+    list: entries,
+    placeholder: "Search time, officer or what it says",
+    words: (e) => [e.time, e.type, e.status, e.officer, guardEntryText(e), (e.answers || []).map((x) => `${x.question} ${x.answer}`), e.fields?.Location, e.fields?.Summary],
+    filters: [{ key: "type", label: "Every kind of entry", value: (e) => e.type }, { key: "officer", label: "Every officer", value: (e) => e.officer }],
+    render: (rows) => h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+      h("thead", {}, h("tr", {}, ["Time", "Entry", "Officer", "Details"].map((t) => h("th", { text: t })))),
+      h("tbody", {}, rows.map((e) => h("tr", { class: e.flagged ? "is-flagged" : null },
+        h("td", { class: "nowrap small-text", text: e.time }),
+        h("td", { class: "small-text", text: [e.type, e.status].filter(Boolean).join(" · ") }),
+        h("td", { class: "small-text", text: e.officer || "" }),
+        h("td", { class: "small-text" }, h("div", { text: guardEntryText(e) }),
+          e.answers?.length ? h("div", { class: "muted", text: e.answers.map((x) => `${x.question}: ${x.answer}`).join(" · ") }) : null,
+          e.fields?.Location ? h("div", { class: "muted", text: `Location: ${e.fields.Location}` }) : null,
+          e.fields?.Summary ? h("div", { class: "muted", text: `Summary: ${e.fields.Summary}` }) : null))))))
+  });
   const stat = (label, n) => h("div", { class: "dash-stat" }, h("strong", { text: String(n) }), h("span", { class: "muted small-text", text: label }));
   const body = h("div", { class: "stack" },
     h("div", { class: "row-between" },
@@ -309,16 +348,8 @@ async function openGuardReport(id) {
       }))) : null,
     h("details", { class: "mail-more" },
       h("summary", { text: `Everything in the report (${entries.length} entries)` }),
-      h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-        h("thead", {}, h("tr", {}, ["Time", "Entry", "Officer", "Details"].map((t) => h("th", { text: t })))),
-        h("tbody", {}, entries.map((e) => h("tr", { class: e.flagged ? "is-flagged" : null },
-          h("td", { class: "nowrap small-text", text: e.time }),
-          h("td", { class: "small-text", text: [e.type, e.status].filter(Boolean).join(" · ") }),
-          h("td", { class: "small-text", text: e.officer || "" }),
-          h("td", { class: "small-text" }, h("div", { text: guardEntryText(e) }),
-            e.answers?.length ? h("div", { class: "muted", text: e.answers.map((x) => `${x.question}: ${x.answer}`).join(" · ") }) : null,
-            e.fields?.Location ? h("div", { class: "muted", text: `Location: ${e.fields.Location}` }) : null,
-            e.fields?.Summary ? h("div", { class: "muted", text: `Summary: ${e.fields.Summary}` }) : null))))))));
+      entryFilter.tools,
+      entryFilter.body));
   await openDialog({
     title: `Guard report${r.site ? `: ${r.site}` : ""}`,
     body,
@@ -332,7 +363,7 @@ async function openGuardReport(id) {
 }
 
 $("guard-search").addEventListener("input", debounce(() => { secMailView.guard.offset = 0; loadGuardReports(); }, 250));
-$("guard-unread").addEventListener("change", () => { secMailView.guard.offset = 0; loadGuardReports(); });
+for (const id of ["guard-unread", "guard-needs", "guard-from", "guard-to"]) $(id).addEventListener("change", () => { secMailView.guard.offset = 0; loadGuardReports(); });
 $("guard-prev").addEventListener("click", () => { secMailView.guard.offset = Math.max(0, secMailView.guard.offset - SECMAIL_PAGE); loadGuardReports(); });
 $("guard-next").addEventListener("click", () => { secMailView.guard.offset += SECMAIL_PAGE; loadGuardReports(); });
 $("guard-add").addEventListener("click", addSecurityMailFiles);

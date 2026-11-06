@@ -1,8 +1,8 @@
 /**
  * Routes for leases, charges, invoices, payments, the billing settings and QuickBooks.
  *
- * Leases: seen with facilities or finance access (read), changed with facilities edit
- * (Managers). The price list and charges: seen likewise, kept by those who change facilities or
+ * Leases, and the documents kept with them: seen with facilities or finance access (read), changed
+ * with facilities edit (Managers). The price list and charges: seen likewise, kept by those who change facilities or
  * keep the books (Managers and Finance). Invoices, payments and balances: seen with finance
  * read (Managers), made and changed with finance edit (Finance, administrators), as are the
  * billing settings and the QuickBooks connection. Everything follows the caller's sites: the
@@ -10,6 +10,7 @@
  */
 const express = require("express");
 const { PAYMENT_METHODS } = require("./billing");
+const { readDocument, shownInBrowser, MAX_DOCUMENT_BYTES } = require("./stored-files");
 
 function fail(status, message) {
   const error = new Error(message);
@@ -84,7 +85,7 @@ function createFinanceRoutes({ access, leases, billing, allotments, quickbooks, 
     res.json({ rent: leases.rentFor(lease.id, str(req.query.period, 7) || leases.today().slice(0, 7)) });
   });
 
-  const leaseWords = (l) => `${l.companyName}: ${l.offices.map((o) => o.name).join(", ") || "no offices"}, ${l.startDate} to ${l.endDate || "no end date"}${l.rentMode === "fixed" ? `, $${l.monthlyRent}/month` : ", rent from the rates"}`;
+  const leaseWords = (l) => `${l.companyName}: ${l.offices.map((o) => o.name).join(", ") || "no offices"}, ${l.startDate} to ${l.endDate || "no end date"}${l.rentMode === "fixed" ? `, $${l.monthlyRent}/month` : l.baseRate !== null ? `, base rate $${l.baseRate}/sq ft` : ", rent from the rates"}${l.offices.filter((o) => o.ownRate !== null || o.ownMonthly !== null).map((o) => `, ${o.name} at $${o.ownMonthly !== null ? `${o.ownMonthly}/month` : `${o.ownRate}/sq ft`}`).join("")}${l.escalationPct ? `, up ${l.escalationPct}% a year` : ""}`;
 
   router.post("/api/leases", editLeases, (req, res) => {
     const lease = leases.create(req.body || {}, { scope: scope(req), by: staffName(req) });
@@ -101,6 +102,41 @@ function createFinanceRoutes({ access, leases, billing, allotments, quickbooks, 
   router.delete("/api/leases/:id", editLeases, (req, res) => {
     const lease = leases.remove(idOf(req), { scope: scope(req) });
     auditFrom(req, "lease.remove", lease.reference || `#${lease.id}`, leaseWords(lease));
+    res.json({ ok: true });
+  });
+
+  // --- a lease's documents ----------------------------------------------------------------------------
+
+  /** Adds a document, sent as the file itself: ?name=, ?kind= (agreement, amendment, supporting) and ?description=. */
+  router.post("/api/leases/:id/documents", editLeases, express.raw({ type: () => true, limit: MAX_DOCUMENT_BYTES }), (req, res) => {
+    const lease = leases.get(idOf(req), { scope: scope(req) });
+    if (!lease) throw fail(404, "No such lease, or not at your sites.");
+    const file = readDocument(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), str(req.query.name, 200));
+    const document = leases.addDocument(lease.id, file, { kind: str(req.query.kind, 20), description: str(req.query.description, 200) }, { by: staffName(req) });
+    auditFrom(req, "lease.document_add", lease.reference || `#${lease.id}`, `${lease.companyName}: ${document.name} (${document.kind})`);
+    res.json({ ok: true, document });
+  });
+
+  /** A document, shown in the browser when it is a PDF or an image (checked when it came in), otherwise saved. */
+  router.get("/api/lease-documents/:ref", seesLeases, (req, res) => {
+    const file = leases.documentFile(str(req.params.ref, 64));
+    if (!file || !leases.get(file.leaseId, { scope: scope(req) })) throw fail(404, "No such document.");
+    res.set({
+      "Content-Type": file.type,
+      "Content-Length": String(file.data.length),
+      "Content-Disposition": `${shownInBrowser(file.type) && !req.query.download ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "private, no-store"
+    });
+    res.end(file.data);
+  });
+
+  router.delete("/api/lease-documents/:id", editLeases, (req, res) => {
+    const document = leases.getDocument(idOf(req));
+    const lease = document && leases.get(document.leaseId, { scope: scope(req) });
+    if (!lease) throw fail(404, "No such document.");
+    leases.removeDocument(document.id);
+    auditFrom(req, "lease.document_remove", lease.reference || `#${lease.id}`, `${lease.companyName}: ${document.name} (${document.kind})`);
     res.json({ ok: true });
   });
 

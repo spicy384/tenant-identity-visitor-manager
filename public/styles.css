@@ -266,6 +266,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 18px max(16px, env(safe-area-
 .toolbar input[type="search"] { flex: 1 1 220px; width: auto; }
 .toolbar select { width: auto; flex: 0 1 auto; }
 .toolbar.tight { margin-bottom: 8px; flex-wrap: nowrap; }
+.toolbar-date { margin: 0; white-space: nowrap; }
 .toolbar.tight input[type="search"] { flex: 1 1 0; min-width: 0; }
 .placeholder { padding: 40px 20px; text-align: center; color: var(--text-muted); border: 2px dashed var(--border); border-radius: var(--radius-lg); }
 .stack { display: flex; flex-direction: column; gap: 12px; }
@@ -532,6 +533,12 @@ a.brand:hover { text-decoration: none; }
 /* Home */
 .page-title { margin: 0 0 6px; font-size: 1.3rem; }
 .dashboard-head { align-items: flex-end; }
+.home-search { position: relative; z-index: 20; margin-bottom: 14px; }
+.home-search input { width: 100%; }
+.home-search-results { position: absolute; top: 100%; left: 0; right: 0; margin-top: 4px; padding: 6px; max-height: 60vh; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); }
+.home-search-group { padding: 8px 6px 4px; }
+.home-search-results .dash-row.is-active { background: var(--surface-3); }
+.home-search-results .dash-more { display: block; padding: 6px; }
 .dashboard-edit-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 14px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
 /* Columns of cards (19-dashboard.js sets how many): each stacks its own, so a long card only
    moves the cards below it in its column. */
@@ -813,11 +820,16 @@ a.button-link:hover { text-decoration: none; }
 .badge-code-input { font-size: 1.2rem; width: 9.5em; }
 
 /* --- leases, charges and invoices (24-leases.js, 25-finance.js) --- */
-.lease-offices { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 14px; max-height: 260px; overflow-y: auto; padding: 4px 2px; }
+.lease-offices { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px 14px; max-height: 260px; overflow-y: auto; padding: 4px 2px; }
 .total-row td { border-top: 2px solid var(--border-strong); }
 .invoice-lines td:nth-child(n+2) { white-space: nowrap; }
 .lease-offices .check-row { flex-direction: row; align-items: flex-start; gap: 8px; }
 .lease-offices .check-row input { margin-top: 3px; }
+.lease-office-rent { display: flex; align-items: flex-end; gap: 8px; padding: 0 0 6px 28px; }
+.lease-office-rent[hidden], .no-office-rents .lease-office-rent, .no-office-rents .lease-office-rents-note { display: none; }
+.lease-office-rent label { flex: 1; min-width: 0; gap: 2px; }
+.lease-office-rent input { width: 100%; min-width: 0; }
+.lease-office-rent > span { padding-bottom: 10px; }
 
 /* ============================================================
    Motion, materials and type (00-motion.js does the gestures)

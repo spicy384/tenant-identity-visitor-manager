@@ -102,13 +102,31 @@ function createSecurityReports({ db, now = Date.now }) {
     guard: "coalesce(x.site_name, '') || ' ' || coalesce(x.company, '') || ' ' || x.data"
   };
 
-  function where(kind, { q = "", unread = false, siteId = null, sites = null } = {}) {
+  // What a guard report can need a look for.
+  const NEEDS = { incidents: "$.summary.incidents", missed: "$.summary.missed", answeredNo: "$.summary.answeredNo" };
+
+  /**
+   * The rows asked for. From and to: fromAt and toAt are instants (toAt not included), as the caller's
+   * clock has its days; an alarm goes by them. A guard report goes by the day it covers, fromDate and
+   * toDate (both included), or by the instants when it says no day. event: an alarm's. needs: a guard
+   * report's incidents, missed or answeredNo.
+   */
+  function where(kind, { q = "", unread = false, siteId = null, sites = null, fromAt = null, toAt = null, fromDate = null, toDate = null, event = null, needs = null } = {}) {
     const parts = [];
     const params = [];
     const sc = scope(sites);
     if (sc.sql) { parts.push(sc.sql); params.push(...sc.params); }
     if (siteId) { parts.push("s.site_id = ?"); params.push(Number(siteId)); }
     if (unread) parts.push("x.read_at IS NULL");
+    if (kind === "guard") {
+      if (fromDate) { parts.push("(x.report_date >= ? OR (x.report_date IS NULL AND x.received_at >= ?))"); params.push(fromDate, Number(fromAt) || 0); }
+      if (toDate) { parts.push("(x.report_date <= ? OR (x.report_date IS NULL AND x.received_at < ?))"); params.push(toDate, Number(toAt) || Number.MAX_SAFE_INTEGER); }
+      if (Object.hasOwn(NEEDS, String(needs))) parts.push(`json_array_length(x.data, '${NEEDS[needs]}') > 0`);
+    } else {
+      if (fromAt) { parts.push("x.received_at >= ?"); params.push(Number(fromAt)); }
+      if (toAt) { parts.push("x.received_at < ?"); params.push(Number(toAt)); }
+      if (event) { parts.push("x.event = ?"); params.push(String(event)); }
+    }
     for (const word of String(q || "").trim().split(/\s+/).filter(Boolean).slice(0, 6)) {
       parts.push(`(${SEARCH[kind]}) LIKE ? ESCAPE '\\'`);
       params.push(`%${word.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
@@ -187,6 +205,12 @@ function createSecurityReports({ db, now = Date.now }) {
     const rows = raw.prepare(`SELECT ${cols}, s.site_id FROM ${table} x ${join(kind)} ${w.sql} ORDER BY x.received_at DESC, x.id DESC LIMIT ? OFFSET ?`)
       .all(...w.params, Math.min(Math.max(Number(limit) || 50, 1), 500), Math.max(Number(offset) || 0, 0));
     return { items: rows.map((r) => (kind === "alarm" ? alarmRow(r) : reportRow(r))), total };
+  }
+
+  /** The kinds of alarm that have come in, among those the caller sees, to choose from. */
+  function alarmEvents(filters = {}) {
+    const w = where("alarm", filters);
+    return raw.prepare(`SELECT DISTINCT x.event FROM security_alarms x ${join("alarm")} ${w.sql ? `${w.sql} AND` : "WHERE"} x.event IS NOT NULL AND x.event <> '' ORDER BY x.event`).all(...w.params).map((r) => r.event);
   }
 
   /** One alarm or report, whole, if the caller may see it (null otherwise). */
@@ -297,7 +321,7 @@ function createSecurityReports({ db, now = Date.now }) {
     };
   }
 
-  return { ingest, list, get, pdf, setRead, unread, sources, addSource, updateSource, placeSource, removeSource, sweep, messageKey };
+  return { ingest, list, alarmEvents, get, pdf, setRead, unread, sources, addSource, updateSource, placeSource, removeSource, sweep, messageKey };
 }
 
 module.exports = { createSecurityReports };

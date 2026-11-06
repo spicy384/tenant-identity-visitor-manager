@@ -20,13 +20,17 @@
  * (Unclassified, SCAR, SCIF, ...). The company's rate for the room's classification wins; otherwise
  * the office's own, otherwise its site's for that classification. An office's monthly cost is its
  * square feet times that rate, unless it is let for a fixed amount a month (monthly_rent), which
- * then wins over every rate.
+ * then wins over every rate. A lease can have a base rate of its own, which wins over the others
+ * for its offices, and can give an office its own rate or monthly amount, which wins over all of
+ * them. Those are what they were at the start of the lease; what an office costs now also has the
+ * lease's yearly increases (rent-terms.js).
  *
  * Plans are PNG or JPEG, checked by their first bytes. Each has a random `ref` that changes
  * with every upload, so a browser may cache one for as long as it lasts.
  */
 const crypto = require("crypto");
 const { localParts } = require("./visit-clock");
+const { increasesOn, factorAfter, escalate } = require("./rent-terms");
 
 const MAX_PLAN_BYTES = 2.75 * 1024 * 1024;
 const REF_RE = /^[A-Za-z0-9_-]{16}$/;
@@ -316,13 +320,50 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
 
   /**
    * What an office costs a company a month (with no company: what it is offered at): its fixed
-   * monthly rent when it has one, else its size times the rate that applies. { rate, source, monthly };
-   * source "monthly" for a fixed amount.
+   * monthly rent when it has one, else its size times the rate that applies: the base rate of
+   * `lease` when it has one, else the company's, the office's or the site's. What `room` (its
+   * assignment under that lease) gives of its own wins over all of those. Before any yearly
+   * increase. { rate, source, monthly }; source "monthly" for a fixed amount.
    */
-  function rentOf(office, siteId, companyId) {
+  function rentOf(office, siteId, companyId, lease = null, room = null) {
+    const given = (v) => v !== null && v !== undefined;
+    if (given(room?.baseMonthly)) return { rate: office.sqft ? Math.round((room.baseMonthly / office.sqft) * 10000) / 10000 : null, source: "leaseRoom", monthly: money(room.baseMonthly) };
+    if (given(room?.baseRate)) return { rate: room.baseRate, source: "leaseRoom", monthly: given(office.sqft) ? money(office.sqft * room.baseRate) : null };
     if (office.monthlyRent !== null && office.monthlyRent !== undefined) return { rate: null, source: "monthly", monthly: money(office.monthlyRent) };
-    const { rate, source } = effectiveRate(office, siteId, companyId);
+    const { rate, source } = lease?.base_rate !== null && lease?.base_rate !== undefined ? { rate: lease.base_rate, source: "lease" } : effectiveRate(office, siteId, companyId);
     return { rate, source, monthly: rate !== null && office.sqft !== null && office.sqft !== undefined ? money(office.sqft * rate) : null };
+  }
+
+  /** The terms of a lease that rent depends on, by its id. */
+  const leaseTerms = (id) => (id ? raw.prepare("SELECT id, rent_mode, monthly_rent, base_rate, escalation_pct, start_date, commencement_date FROM leases WHERE id = ?").get(id) : null);
+
+  /** The part of its lease's fixed rent an office makes up: by size, or evenly when an office has no size. */
+  function fixedLeaseShare(office, lease) {
+    const held = raw.prepare("SELECT o.sqft FROM office_assignments a JOIN offices o ON o.id = a.office_id WHERE a.lease_id = ?").all(lease.id);
+    const total = held.reduce((n, o) => n + (o.sqft || 0), 0);
+    return held.every((o) => o.sqft) ? (office.sqft || 0) / total : 1 / (held.length || 1);
+  }
+
+  /**
+   * What an office costs a company on `day` under its lease, with the yearly increases it has had.
+   * { rate, source, monthly, baseRate, baseMonthly }: the last two before any increase.
+   */
+  function rentUnder(office, siteId, companyId, lease, day, room = null) {
+    const terms = lease || {};
+    const n = lease ? increasesOn(lease, day) : 0;
+    if (lease?.rent_mode === "fixed") {
+      const share = fixedLeaseShare(office, lease);
+      const first = lease.monthly_rent || 0;
+      return { rate: null, source: "fixedLease", monthly: money(escalate(first, lease, n) * share), baseRate: null, baseMonthly: money(first * share) };
+    }
+    const base = rentOf(office, siteId, companyId, lease, room);
+    return {
+      rate: base.rate === null ? null : Math.round(base.rate * factorAfter(terms, n) * 10000) / 10000,
+      source: base.source,
+      monthly: base.monthly === null ? null : escalate(base.monthly, terms, n),
+      baseRate: base.rate,
+      baseMonthly: base.monthly
+    };
   }
 
   /** The classifications, every site's rates and every company that has its own, for the caller's sites. */
@@ -475,6 +516,10 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return r && {
       id: r.id,
       officeId: r.office_id,
+      leaseId: r.lease_id || null,
+      // Its own rent at the start of its lease, when the lease gives one.
+      baseRate: r.base_rate ?? null,
+      baseMonthly: r.base_monthly ?? null,
       companyId: r.company_id,
       // The company's name now; once it has been deleted, the name it had.
       companyName: r.live_name || r.company_name,
@@ -539,7 +584,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     const status = r.unavailable ? "unavailable" : current ? "occupied" : next ? "upcoming" : assignable ? "available" : "shared";
     // Occupied: what its company pays. Otherwise what it would cost (its fixed rent, or the office's or site's rate); a shared room costs nothing.
     const priced = { rate: r.rate, sqft: r.sqft, monthlyRent: r.monthly_rent, classId: r.class_id };
-    const { rate, source, monthly } = assignable || current ? rentOf(priced, r.site_id, current?.companyId ?? null) : { rate: null, source: null, monthly: null };
+    const { rate, source, monthly, baseRate, baseMonthly } = assignable || current ? rentUnder(priced, r.site_id, current?.companyId ?? null, leaseTerms(current?.leaseId), today, current) : { rate: null, source: null, monthly: null, baseRate: null, baseMonthly: null };
     // What it costs a company without a rate of its own: its fixed rent, else the office's rate, else the site's.
     const asking = assignable ? rentOf(priced, r.site_id, null) : { rate: null, monthly: null };
     const askingRate = asking.rate;
@@ -582,6 +627,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       ...freeAfter(list, today),
       effectiveRate: rate,
       rateSource: source,
+      baseRate,
+      baseMonthly,
       askingRate,
       askingMonthly: asking.monthly,
       monthly,
@@ -820,10 +867,10 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       for (const a of full.assignments.filter((x) => x.companyId === companyId)) {
         const day = today(o.siteId);
         const when = a.startDate > day ? "upcoming" : a.endDate && a.endDate < day ? "ended" : "current";
-        const { rate, source, monthly } = rentOf(full, full.siteId, companyId);
+        const { rate, source, monthly, baseRate } = rentUnder(full, full.siteId, companyId, leaseTerms(a.leaseId), when === "upcoming" ? a.startDate : day, a);
         rows.push({
           assignment: a, when, officeId: o.id, officeName: o.name, floorId: o.floorId, floorName: o.floorName, siteId: o.siteId, siteName: o.siteName,
-          sqft: o.sqft, desks: o.desks, rate, rateSource: source, monthly
+          sqft: o.sqft, desks: o.desks, rate, baseRate, rateSource: source, monthly
         });
       }
     }
