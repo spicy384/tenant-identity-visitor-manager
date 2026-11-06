@@ -29,15 +29,16 @@ function createAllotments({ db, billing, today, now = Date.now }) {
 
   /**
    * Credits each company the desks of the offices it has now or later (not ones it had before
-   * desks were counted): an office's desks once, topped up if it gains more.
+   * desks were counted): an office's desks once, topped up if it gains more. A company with part
+   * of a room has that part of its desks in whole desks, rounded down; anything more is added by hand.
    */
   function syncDesks() {
     const day = today();
-    const owed = raw.prepare(`SELECT a.company_id, o.id AS office_id, o.name AS office_name, o.desks,
+    const owed = raw.prepare(`SELECT a.company_id, o.id AS office_id, o.name AS office_name, o.desks, max(coalesce(a.share_pct, 100)) AS share_pct,
         coalesce((SELECT sum(b.quantity) FROM badge_allotments b WHERE b.kind = 'desks' AND b.company_id = a.company_id AND b.office_id = o.id), 0) AS credited
       FROM office_assignments a JOIN offices o ON o.id = a.office_id JOIN companies c ON c.id = a.company_id
       WHERE o.desks > 0 AND c.building_staff = 0 AND (a.end_date IS NULL OR a.end_date >= ?)
-      GROUP BY a.company_id, o.id`).all(day).filter((r) => r.desks > r.credited);
+      GROUP BY a.company_id, o.id`).all(day).map((r) => ({ ...r, desks: Math.floor((r.desks * r.share_pct) / 100 + 1e-9) })).filter((r) => r.desks > r.credited);
     if (!owed.length) return 0;
     const add = raw.prepare("INSERT INTO badge_allotments (company_id, kind, quantity, office_id, office_name, note, created_at) VALUES (?, 'desks', ?, ?, ?, ?, ?)");
     db.transaction(() => {

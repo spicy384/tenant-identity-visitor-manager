@@ -420,8 +420,8 @@ Home.
   or **unavailable** (marked so, e.g. under renovation, and can't be assigned). The key beside
   the plan counts them, with the floor's space, the space let and free, and the rent.
 - **Assigning.** Click an office to see it and **Assign to a company** from a date, to an end
-  date (its last day) or with no end. An office has one company at a time, so dates can't
-  overlap. **End** sets the last day, and ended assignments stay as the office's history.
+  date (its last day) or with no end. Companies can **share a room**: each has a share of it, and
+  on any day their shares can't come to more than 100%. **End** sets the last day, and ended assignments stay as the office's history.
   **Remove** is for one made by mistake. Dates are days at the site.
 - **Size and cost.** Each office has its size in square feet. Rates are dollars per square
   foot a month, one for each classification (Unclassified, SCAR, SCIF, and any added under Room
@@ -474,13 +474,20 @@ Home.
   that rent, by size. A lease commences on its start unless you give another commencement
   date; rent is billed from the start either way, and only the yearly increases count from the
   commencement. A commencement left the same as the start moves with it. Making a lease assigns its offices to the
-  company for its dates, and changing its dates or offices changes those assignments, so an
-  office still has one company at a time. Offices assigned from Rooms or a company's page get
+  company for its dates, and changing its dates or offices changes those assignments. Offices assigned from Rooms or a company's page get
   a lease of their own (the ones assigned together share one); the assignments made before
   leases became leases the same way. Moving one office of several to other dates on Rooms gives
   it a lease of its own, with the same rates and yearly increase (not for a fixed rent: change
   that on the lease). A lease that has been
-  invoiced can't be deleted, only ended; Home shows the leases ending within 90 days. A lease
+  invoiced can't be deleted, only ended; Home shows the leases ending within 90 days. **A room shared
+  between companies** has a lease for each, giving its **share of the room** (50%, say). Each company
+  pays that part of the room's rent, with its own rates and yearly increase, and is invoiced for it
+  alone, rounded to the cent every year, so two shares can come to a cent or so more or less than the
+  whole room would. A custom monthly amount is for the whole room. A fixed rent is the company's own
+  and isn't divided. Rooms and the floor plan show who shares it and any part still free, the space
+  let counts only the part let, and each company has its share of the room's desks, rounded down to
+  whole desks (3 desks at 50% is 1 each; add any more by hand to suit the agreement). To split a room a company already has, lower its share on its lease, then add the
+  other company's lease. A lease
   also keeps its **documents**: the agreement, mods and amendments, and supporting documents (PDF, Word, Excel,
   PNG or JPEG, up to 25 MB each), encrypted with the rest of the database. Whoever sees the lease
   sees them, and whoever changes leases adds and removes them, each in the audit log.

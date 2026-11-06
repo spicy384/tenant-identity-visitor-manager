@@ -344,26 +344,28 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
    * monthly rent when it has one, else its size times the rate that applies: the base rate of
    * `lease` for its classification when it has one, else the company's, the office's or the site's. What `room` (its
    * assignment under that lease) gives of its own wins over all of those. Before any yearly
-   * increase. { rate, source, monthly }; source "monthly" for a fixed amount.
+   * increase. { rate, source, monthly }; source "monthly" for a fixed amount. The rate is the whole
+   * room's; a company holding part of the room (room.sharePct) pays that part of the monthly amount.
    */
   function rentOf(office, siteId, companyId, lease = null, room = null) {
     const given = (v) => v !== null && v !== undefined;
-    if (given(room?.baseMonthly)) return { rate: office.sqft ? Math.round((room.baseMonthly / office.sqft) * 10000) / 10000 : null, source: "leaseRoom", monthly: money(room.baseMonthly) };
-    if (given(room?.baseRate)) return { rate: room.baseRate, source: "leaseRoom", monthly: given(office.sqft) ? money(office.sqft * room.baseRate) : null };
-    if (office.monthlyRent !== null && office.monthlyRent !== undefined) return { rate: null, source: "monthly", monthly: money(office.monthlyRent) };
+    const part = (monthly) => money((money(monthly) * (room?.sharePct ?? 100)) / 100);
+    if (given(room?.baseMonthly)) return { rate: office.sqft ? Math.round((room.baseMonthly / office.sqft) * 10000) / 10000 : null, source: "leaseRoom", monthly: part(room.baseMonthly) };
+    if (given(room?.baseRate)) return { rate: room.baseRate, source: "leaseRoom", monthly: given(office.sqft) ? part(office.sqft * room.baseRate) : null };
+    if (office.monthlyRent !== null && office.monthlyRent !== undefined) return { rate: null, source: "monthly", monthly: part(office.monthlyRent) };
     const onLease = lease?.id ? leaseRateStmt.get(lease.id, office.classId || UNCLASSIFIED_KEY)?.rate ?? null : null;
     const { rate, source } = onLease !== null ? { rate: onLease, source: "lease" } : effectiveRate(office, siteId, companyId);
-    return { rate, source, monthly: rate !== null && office.sqft !== null && office.sqft !== undefined ? money(office.sqft * rate) : null };
+    return { rate, source, monthly: rate !== null && office.sqft !== null && office.sqft !== undefined ? part(office.sqft * rate) : null };
   }
 
   /** The terms of a lease that rent depends on, by its id. */
   const leaseTerms = (id) => (id ? raw.prepare("SELECT id, rent_mode, monthly_rent, escalation_pct, start_date, commencement_date FROM leases WHERE id = ?").get(id) : null);
 
-  /** The part of its lease's fixed rent an office makes up: by size, or evenly when an office has no size. */
-  function fixedLeaseShare(office, lease) {
-    const held = raw.prepare("SELECT o.sqft FROM office_assignments a JOIN offices o ON o.id = a.office_id WHERE a.lease_id = ?").all(lease.id);
-    const total = held.reduce((n, o) => n + (o.sqft || 0), 0);
-    return held.every((o) => o.sqft) ? (office.sqft || 0) / total : 1 / (held.length || 1);
+  /** The part of its lease's fixed rent an office makes up: by the space the lease has of it, or evenly when an office has no size. */
+  function fixedLeaseShare(office, lease, room = null) {
+    const held = raw.prepare("SELECT o.sqft, a.share_pct FROM office_assignments a JOIN offices o ON o.id = a.office_id WHERE a.lease_id = ?").all(lease.id);
+    const total = held.reduce((n, o) => n + ((o.sqft || 0) * (o.share_pct ?? 100)) / 100, 0);
+    return held.every((o) => o.sqft) ? ((office.sqft || 0) * (room?.sharePct ?? 100)) / 100 / total : 1 / (held.length || 1);
   }
 
   /**
@@ -374,7 +376,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     const terms = lease || {};
     const n = lease ? increasesOn(lease, day) : 0;
     if (lease?.rent_mode === "fixed") {
-      const share = fixedLeaseShare(office, lease);
+      const share = fixedLeaseShare(office, lease, room);
       const first = lease.monthly_rent || 0;
       return { rate: null, source: "fixedLease", monthly: money(escalate(first, lease, n) * share), baseRate: null, baseMonthly: money(first * share) };
     }
@@ -542,6 +544,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       // Its own rent at the start of its lease, when the lease gives one.
       baseRate: r.base_rate ?? null,
       baseMonthly: r.base_monthly ?? null,
+      // How much of the room its company holds, as a percentage.
+      sharePct: r.share_pct ?? 100,
       companyId: r.company_id,
       // The company's name now; once it has been deleted, the name it had.
       companyName: r.live_name || r.company_name,
@@ -566,29 +570,57 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return out;
   };
 
-  /** Which of an office's assignments is on `today`, and the next one after it. */
+  const percent = (n) => Math.round(n * 100) / 100;
+
+  /** Which of an office's assignments are on `today` (holders: the largest share first; current: that one), and the next one after them. */
   function placeOf(list, today) {
-    const current = list.find((a) => a.startDate <= today && (!a.endDate || a.endDate >= today)) || null;
+    const holders = list.filter((a) => a.startDate <= today && (!a.endDate || a.endDate >= today))
+      .sort((a, b) => b.sharePct - a.sharePct || String(a.companyName).localeCompare(String(b.companyName)));
     const next = list.filter((a) => a.startDate > today).sort((a, b) => a.startDate.localeCompare(b.startDate))[0] || null;
-    return { current, next };
+    return { holders, current: holders[0] || null, next };
+  }
+
+  /** Of `list`, the assignments with any day between two dates (to: null for no end). */
+  const heldBetween = (list, from, to) => list.filter((a) => a.startDate <= (to || "9999-12-31") && (!a.endDate || a.endDate >= from));
+
+  /** The most of a room that `held` (from heldBetween) have on any one day from `from`: it can only rise on a day one of them starts. */
+  function peakShare(held, from) {
+    const days = [from, ...held.map((a) => a.startDate).filter((d) => d > from)];
+    return percent(Math.max(0, ...days.map((day) => held.filter((a) => a.startDate <= day && (!a.endDate || a.endDate >= day)).reduce((n, a) => n + a.sharePct, 0))));
+  }
+
+  /** A company's share of a room as entered: a percentage above 0, up to 100, to two decimals. Empty: the whole room. */
+  function shareInput(value) {
+    if (value === undefined || value === null || value === "") return 100;
+    const share = percent(Number(value));
+    if (!Number.isFinite(share) || share <= 0 || share > 100) throw fail(400, "A company's share of a room is a percentage above 0, up to 100.");
+    return share;
+  }
+
+  /** What several companies holding a room pay together; a rate only when they all have the same one. */
+  function togetherRent(rents) {
+    if (rents.length === 1) return rents[0];
+    const sum = (key) => (rents.some((r) => r[key] === null) ? null : money(rents.reduce((n, r) => n + r[key], 0)));
+    const same = (key) => (rents.every((r) => r[key] === rents[0][key]) ? rents[0][key] : null);
+    return { rate: same("rate"), source: same("source"), monthly: sum("monthly"), baseRate: same("baseRate"), baseMonthly: sum("baseMonthly") };
   }
 
   /**
-   * When a let room comes free if its tenant doesn't renew: the day after the current lease (or,
-   * free now, the coming one), past any lease that already follows straight on. { availableFrom,
+   * When a let room comes free if its tenants don't renew: the day after the last of the current
+   * leases (or, free now, the coming one), past any lease that already follows straight on. { availableFrom,
    * availableUntil (the day a later lease starts), openEnded (a lease with no end date: no such day) }.
    */
   function freeAfter(list, today) {
     const { current, next } = placeOf(list, today);
-    let held = current || next;
-    if (!held) return { availableFrom: null, availableUntil: null, openEnded: false };
-    while (held.endDate) {
-      const day = new Date(Date.parse(`${held.endDate}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
-      const follows = list.find((a) => a.startDate === day);
-      if (!follows) return { availableFrom: day, availableUntil: list.map((a) => a.startDate).filter((d) => d > day).sort()[0] || null, openEnded: false };
-      held = follows;
+    if (!current && !next) return { availableFrom: null, availableUntil: null, openEnded: false };
+    let day = current ? today : next.startDate;
+    for (;;) {
+      const on = list.filter((a) => a.startDate <= day && (!a.endDate || a.endDate >= day));
+      if (!on.length) return { availableFrom: day, availableUntil: list.map((a) => a.startDate).filter((d) => d > day).sort()[0] || null, openEnded: false };
+      if (on.some((a) => !a.endDate)) return { availableFrom: null, availableUntil: null, openEnded: true };
+      const last = on.map((a) => a.endDate).sort().at(-1);
+      day = new Date(Date.parse(`${last}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
     }
-    return { availableFrom: null, availableUntil: null, openEnded: true };
   }
 
   // --- offices ----------------------------------------------------------------------------------
@@ -600,13 +632,18 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
 
   /** An office as shown: where it is, its status today, who has it, and what it costs. */
   function officeOut(r, list, today, { history = false } = {}) {
-    const { current, next } = placeOf(list, today);
+    const { holders, current, next } = placeOf(list, today);
     // A room of a type that isn't assigned to companies (a conference room, say) is shared.
     const assignable = r.room_type_id ? Boolean(r.type_assignable) : true;
     const status = r.unavailable ? "unavailable" : current ? "occupied" : next ? "upcoming" : assignable ? "available" : "shared";
-    // Occupied: what its company pays. Otherwise what it would cost (its fixed rent, or the office's or site's rate); a shared room costs nothing.
+    // Occupied: what its companies pay. Otherwise what it would cost (its fixed rent, or the office's or site's rate); a shared room costs nothing.
     const priced = { rate: r.rate, sqft: r.sqft, monthlyRent: r.monthly_rent, classId: r.class_id };
-    const { rate, source, monthly, baseRate, baseMonthly } = assignable || current ? rentUnder(priced, r.site_id, current?.companyId ?? null, leaseTerms(current?.leaseId), today, current) : { rate: null, source: null, monthly: null, baseRate: null, baseMonthly: null };
+    const rents = holders.map((a) => rentUnder(priced, r.site_id, a.companyId, leaseTerms(a.leaseId), today, a));
+    const { rate, source, monthly, baseRate, baseMonthly } = rents.length ? togetherRent(rents) : assignable ? rentUnder(priced, r.site_id, null, null, today) : { rate: null, source: null, monthly: null, baseRate: null, baseMonthly: null };
+    // How much of a let room is held today, and how much of it isn't yet.
+    const heldPct = percent(holders.reduce((n, a) => n + a.sharePct, 0));
+    const freePct = holders.length ? percent(100 - heldPct) : 0;
+    const space = r.sqft || 0;
     // What it costs a company without a rate of its own: its fixed rent, else the office's rate, else the site's.
     const asking = assignable ? rentOf(priced, r.site_id, null) : { rate: null, monthly: null };
     const askingRate = asking.rate;
@@ -646,6 +683,12 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       status,
       current,
       next,
+      // Everyone holding it today, with what each pays.
+      holders: holders.map((a, i) => ({ ...a, monthly: rents[i].monthly, rate: rents[i].rate })),
+      freePct,
+      // Its space let today, and free to let now or later.
+      letSqft: money((space * heldPct) / 100),
+      openSqft: status === "occupied" ? money((space * freePct) / 100) : status === "available" || status === "upcoming" ? space : 0,
       ...freeAfter(list, today),
       effectiveRate: rate,
       rateSource: source,
@@ -663,10 +706,12 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
   /**
    * Offices at the caller's sites: on one floor, at one site, or held (now or later) by one
    * company; with freeFrom (and freeTo, else no end), only those that can be assigned for those
-   * dates: not unavailable, and no assignment overlapping them.
+   * dates: not unavailable, and with some of the room free all through them (freeShare, as a
+   * percentage; heldDuring: who has the rest).
    */
   function listOffices({ scope = null, siteId = null, floorId = null, companyId = null, status = null, roomTypeId = null, freeFrom = null, freeTo = null } = {}) {
     const { where, params } = siteScope(scope, siteId);
+    let wanted = null;
     if (roomTypeId) { where.push("o.room_type_id = ?"); params.push(Number(roomTypeId)); }
     if (freeFrom) {
       // Only rooms of a type that is assigned to companies.
@@ -674,15 +719,21 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
       const from = dateInput(freeFrom, "start date");
       const to = dateInput(freeTo, "end date", { optional: true });
       if (to && to < from) throw fail(400, "The end date is before the start date.");
-      where.push("o.unavailable = 0 AND NOT EXISTS (SELECT 1 FROM office_assignments a WHERE a.office_id = o.id AND a.start_date <= ? AND (a.end_date IS NULL OR a.end_date >= ?))");
-      params.push(to || "9999-12-31", from);
+      where.push("o.unavailable = 0");
+      wanted = { from, to };
     }
     if (floorId) { where.push("o.floor_id = ?"); params.push(Number(floorId)); }
     if (companyId) { where.push("o.id IN (SELECT office_id FROM office_assignments WHERE company_id = ?)"); params.push(Number(companyId)); }
     const rows = raw.prepare(`${OFFICE_SELECT} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY s.name, f.position, f.name, o.name`).all(...params);
     const lists = assignmentsOf(rows.map((r) => r.id));
     const today = todays();
-    const out = rows.map((r) => officeOut(r, lists.get(r.id), today(r.site_id)));
+    const out = rows.flatMap((r) => {
+      const list = lists.get(r.id);
+      if (!wanted) return [officeOut(r, list, today(r.site_id))];
+      const held = heldBetween(list, wanted.from, wanted.to);
+      const freeShare = percent(100 - peakShare(held, wanted.from));
+      return freeShare > 0 ? [{ ...officeOut(r, list, today(r.site_id)), freeShare, heldDuring: held.map((a) => ({ companyName: a.companyName, sharePct: a.sharePct, leaseId: a.leaseId })) }] : [];
+    });
     return status ? out.filter((o) => o.status === status) : out;
   }
 
@@ -800,14 +851,14 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
 
   // --- assigning --------------------------------------------------------------------------------
 
-  /** Refuses dates that overlap another of the office's assignments. */
-  function checkOverlap(officeId, startDate, endDate, exceptId = null) {
-    const clash = raw.prepare(`${ASSIGNMENT_SELECT} WHERE a.office_id = ? AND a.id IS NOT ? AND a.start_date <= ? AND (a.end_date IS NULL OR a.end_date >= ?) ORDER BY a.start_date LIMIT 1`)
-      .get(officeId, exceptId, endDate || "9999-12-31", startDate);
-    if (clash) {
-      const c = assignmentRow(clash);
-      throw fail(409, `That overlaps ${c.companyName}'s assignment (${c.startDate} to ${c.endDate || "no end date"}). An office has one company at a time.`);
-    }
+  /** Refuses a share of an office that, with its other assignments on those dates, would come to more than the whole room. */
+  function checkOverlap(officeId, startDate, endDate, sharePct, exceptId = null) {
+    const held = raw.prepare(`${ASSIGNMENT_SELECT} WHERE a.office_id = ? AND a.id IS NOT ? AND a.start_date <= ? AND (a.end_date IS NULL OR a.end_date >= ?) ORDER BY a.start_date`)
+      .all(officeId, exceptId, endDate || "9999-12-31", startDate).map(assignmentRow);
+    const peak = peakShare(held, startDate);
+    if (percent(peak + sharePct) <= 100) return;
+    const words = held.map((c) => `${c.companyName}'s assignment (${c.sharePct < 100 ? `${c.sharePct}%, ` : ""}${c.startDate} to ${c.endDate || "no end date"})`).join(" and ");
+    throw fail(409, `That overlaps ${words}. ${peak >= 100 ? "The room is fully let for those dates." : `Only ${percent(100 - peak)}% of the room is free then, not ${sharePct}%.`}`);
   }
 
   function getAssignment(id, { scope = null } = {}) {
@@ -816,7 +867,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return getOffice(a.officeId, { scope }) ? a : null;
   }
 
-  /** Gives an office to a company from startDate, to endDate (its last day) or with no end. */
+  /** Gives an office, or sharePct of it, to a company from startDate, to endDate (its last day) or with no end. */
   function assign(officeId, input = {}, { scope = null, by = null } = {}) {
     const office = mustOffice(officeId, scope);
     if (office.unavailable) throw fail(409, `${office.name} is marked unavailable.`);
@@ -826,16 +877,17 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     const startDate = dateInput(input.startDate, "start date");
     const endDate = dateInput(input.endDate, "end date", { optional: true });
     if (endDate && endDate < startDate) throw fail(400, "The end date is before the start date.");
-    checkOverlap(officeId, startDate, endDate);
+    const sharePct = shareInput(input.sharePct);
+    checkOverlap(officeId, startDate, endDate, sharePct);
     const t = now();
-    const id = raw.prepare("INSERT INTO office_assignments (office_id, company_id, company_name, start_date, end_date, notes, created_by, created_at, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(officeId, company.id, company.name, startDate, endDate, text(input.notes, 1000), by, t, by, t).lastInsertRowid;
+    const id = raw.prepare("INSERT INTO office_assignments (office_id, company_id, company_name, start_date, end_date, share_pct, notes, created_by, created_at, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(officeId, company.id, company.name, startDate, endDate, sharePct < 100 ? sharePct : null, text(input.notes, 1000), by, t, by, t).lastInsertRowid;
     return { office: getOffice(officeId), assignment: getAssignment(Number(id)) };
   }
 
   /**
    * Gives several offices to one company for the same dates, all or none: if any can't be
-   * assigned, none is, and the error names that office.
+   * assigned, none is, and the error names that office. input.shares: part of an office, by its id.
    */
   function assignMany(companyId, officeIds, input = {}, { scope = null, by = null } = {}) {
     const ids = [...new Set((Array.isArray(officeIds) ? officeIds : []).map(Number))];
@@ -845,7 +897,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     db.transaction(() => {
       for (const id of ids) {
         try {
-          done.push(assign(id, { ...input, companyId }, { scope, by }));
+          done.push(assign(id, { ...input, companyId, sharePct: input.shares?.[id] }, { scope, by }));
         } catch (error) {
           const office = getOffice(id, { scope });
           if (office) error.message = `Office ${office.name} (${office.floorName}): ${error.message}`;
@@ -856,16 +908,17 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return done;
   }
 
-  /** Changes an assignment's dates or notes (setting its end date ends it). */
+  /** Changes an assignment's dates, share or notes (setting its end date ends it). */
   function updateAssignment(id, input = {}, { scope = null, by = null } = {}) {
     const existing = getAssignment(id, { scope });
     if (!existing) throw fail(404, "No such assignment, or not at your sites.");
     const startDate = input.startDate !== undefined ? dateInput(input.startDate, "start date") : existing.startDate;
     const endDate = input.endDate !== undefined ? dateInput(input.endDate, "end date", { optional: true }) : existing.endDate;
     if (endDate && endDate < startDate) throw fail(400, "The end date is before the start date.");
-    checkOverlap(existing.officeId, startDate, endDate, id);
+    const sharePct = input.sharePct !== undefined ? shareInput(input.sharePct) : existing.sharePct;
+    checkOverlap(existing.officeId, startDate, endDate, sharePct, id);
     const notes = input.notes !== undefined ? text(input.notes, 1000) : existing.notes;
-    raw.prepare("UPDATE office_assignments SET start_date = ?, end_date = ?, notes = ?, updated_by = ?, updated_at = ? WHERE id = ?").run(startDate, endDate, notes, by, now(), id);
+    raw.prepare("UPDATE office_assignments SET start_date = ?, end_date = ?, share_pct = ?, notes = ?, updated_by = ?, updated_at = ? WHERE id = ?").run(startDate, endDate, sharePct < 100 ? sharePct : null, notes, by, now(), id);
     return { office: getOffice(existing.officeId), assignment: getAssignment(id) };
   }
 
@@ -892,7 +945,8 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
         const { rate, source, monthly, baseRate } = rentUnder(full, full.siteId, companyId, leaseTerms(a.leaseId), when === "upcoming" ? a.startDate : day, a);
         rows.push({
           assignment: a, when, officeId: o.id, officeName: o.name, floorId: o.floorId, floorName: o.floorName, siteId: o.siteId, siteName: o.siteName,
-          sqft: o.sqft, desks: o.desks, rate, baseRate, rateSource: source, monthly
+          // Its part of the room's space and desks (whole desks only; anything more is added by hand).
+          sharePct: a.sharePct, sqft: o.sqft === null ? null : money((o.sqft * a.sharePct) / 100), desks: o.desks === null ? null : Math.floor((o.desks * a.sharePct) / 100 + 1e-9), rate, baseRate, rateSource: source, monthly
         });
       }
     }
@@ -915,11 +969,12 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     for (const o of list) {
       out[o.status] += 1;
       out.sqft.total += o.sqft || 0;
+      out.sqft.occupied += o.letSqft;
+      out.sqft.available += o.openSqft;
       if (o.status === "occupied") {
-        out.sqft.occupied += o.sqft || 0;
         out.monthly += o.monthly || 0;
+        out.asking += ((o.askingMonthly || 0) * o.freePct) / 100;
       } else if (o.status === "available" || o.status === "upcoming") {
-        out.sqft.available += o.sqft || 0;
         out.asking += o.monthly || 0;
       }
     }

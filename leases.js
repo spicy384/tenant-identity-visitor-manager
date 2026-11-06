@@ -126,17 +126,23 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
 
   const LEASE_SELECT = "SELECT l.*, c.name AS live_name FROM leases l LEFT JOIN companies c ON c.id = l.company_id";
 
-  /** A lease's offices (with their rents from the rates), and the sites they are at. */
+  /** A lease's offices (with their rents from the rates, for its share of each), and the sites they are at. */
   function officesOf(lease) {
-    return raw.prepare("SELECT id, office_id, base_rate, base_monthly FROM office_assignments WHERE lease_id = ? ORDER BY id").all(lease.id).map((a) => {
+    const until = lease.end_date || "9999-12-31";
+    return raw.prepare("SELECT id, office_id, base_rate, base_monthly, share_pct FROM office_assignments WHERE lease_id = ? ORDER BY id").all(lease.id).map((a) => {
       const o = facilities.getOffice(a.office_id);
       if (!o) return null;
-      const { rate, source, monthly } = facilities.rentOf(o, o.siteId, lease.company_id, lease, { baseRate: a.base_rate, baseMonthly: a.base_monthly });
+      const sharePct = a.share_pct ?? 100;
+      const { rate, source, monthly } = facilities.rentOf(o, o.siteId, lease.company_id, lease, { baseRate: a.base_rate, baseMonthly: a.base_monthly, sharePct });
       return {
         assignmentId: a.id, officeId: o.id, name: o.name, floorId: o.floorId, floorName: o.floorName, siteId: o.siteId, siteName: o.siteName,
         sqft: o.sqft, classKey: o.classId || 0, className: o.classification?.name || "Unclassified", rate, rateSource: source, monthly,
         // The custom rate or monthly amount the lease gives this office, at its start.
-        ownRate: a.base_rate ?? null, ownMonthly: a.base_monthly ?? null
+        ownRate: a.base_rate ?? null, ownMonthly: a.base_monthly ?? null,
+        // How much of the room this lease has, and who else has some of it during the lease.
+        sharePct,
+        sharedWith: o.assignments.filter((x) => x.id !== a.id && x.startDate <= until && (!x.endDate || x.endDate >= lease.start_date))
+          .map((x) => ({ companyId: x.companyId, companyName: x.companyName, sharePct: x.sharePct, leaseId: x.leaseId }))
       };
     }).filter(Boolean);
   }
@@ -238,7 +244,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
         return { ...o, currentRate: o.rate === null ? null : rate4(o.rate * k), currentMonthly: monthly, currentYearly: yearlyOf(monthly) };
       }),
       sites: [...new Map(offices.map((o) => [o.siteId, { id: o.siteId, name: o.siteName }])).values()],
-      sqft: money(offices.reduce((n, o) => n + (o.sqft || 0), 0)),
+      sqft: money(offices.reduce((n, o) => n + ((o.sqft || 0) * o.sharePct) / 100, 0)),
       // Months already invoiced (rent lines on invoices that aren't void).
       invoiced: raw.prepare(`SELECT DISTINCT l.period FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id WHERE l.lease_id = ? AND i.status <> 'void' ORDER BY l.period`).all(r.id).map((x) => x.period),
       documents: documentsOf(r.id),
@@ -347,6 +353,13 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
     }));
   }
 
+  /** How much of each office a lease has, as a Map of office id to the percentage as given; checked when it is assigned. */
+  function officeSharesInput(value) {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value)) throw fail(400, "Give each office's share as a list.");
+    return new Map(value.map((r) => [Number(r?.officeId), r?.sharePct]));
+  }
+
   /** Saves what a lease gives each of its offices (those not listed have none). A fixed rent has none; with no list they stay as they are. */
   function saveOfficeRents(leaseId, rents, mode) {
     if (mode !== "fixed" && !rents) return;
@@ -369,13 +382,15 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
   }
 
   /**
-   * A new lease for a company: its offices (assigned to it for the lease's dates; none only for
-   * a fixed rent), dates, rent, deposit and notes. All or nothing.
+   * A new lease for a company: its offices (assigned to it for the lease's dates, the whole of each
+   * unless officeShares says otherwise; none only for a fixed rent), dates, rent, deposit and notes.
+   * All or nothing.
    */
   function create(input = {}, { scope = null, by = null } = {}) {
     const v = clean(input);
     const officeIds = officeIdsInput(input.officeIds) || [];
     const officeRents = officeRentsInput(input.officeRents);
+    const officeShares = officeSharesInput(input.officeShares);
     if (!officeIds.length && v.rentMode !== "fixed") throw fail(400, "Choose the offices the lease covers (a lease without offices needs a fixed rent).");
     let id;
     db.transaction(() => {
@@ -384,7 +399,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.reference ?? null, v.company.id, v.company.name, v.startDate, v.commencementDate ?? null, v.endDate ?? null, v.rentMode,
         v.monthlyRent ?? null, v.deposit ?? null, v.escalationPct ?? null, v.notes ?? null, by, t, by, t).lastInsertRowid;
       for (const officeId of officeIds) {
-        const { assignment } = assignNamed(officeId, { companyId: v.company.id, startDate: v.startDate, endDate: v.endDate ?? null }, { scope, by });
+        const { assignment } = assignNamed(officeId, { companyId: v.company.id, startDate: v.startDate, endDate: v.endDate ?? null, sharePct: officeShares?.get(officeId) }, { scope, by });
         raw.prepare("UPDATE office_assignments SET lease_id = ? WHERE id = ?").run(id, assignment.id);
       }
       saveOfficeRents(id, officeRents, v.rentMode);
@@ -395,8 +410,8 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
 
   /**
    * Changes a lease: its company, dates and rent; and with officeIds, which offices it covers
-   * (new ones are assigned for its dates, ones left out are taken off it). Its offices' assignments
-   * follow its company and dates. All or nothing.
+   * (new ones are assigned for its dates, ones left out are taken off it); with officeShares, how
+   * much of them it has. Its offices' assignments follow its company and dates. All or nothing.
    */
   function update(id, input = {}, { scope = null, by = null } = {}) {
     const existing = get(id, { scope });
@@ -404,6 +419,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
     const v = clean(input, existing);
     const officeIds = officeIdsInput(input.officeIds);
     const officeRents = officeRentsInput(input.officeRents);
+    const officeShares = officeSharesInput(input.officeShares);
     const next = {
       companyId: v.company ? v.company.id : existing.companyId,
       companyName: v.company ? v.company.name : existing.companyName,
@@ -426,7 +442,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
           continue;
         }
         try {
-          facilities.updateAssignment(o.assignmentId, { startDate: next.startDate, endDate: next.endDate }, { by });
+          facilities.updateAssignment(o.assignmentId, { startDate: next.startDate, endDate: next.endDate, ...(officeShares?.has(o.officeId) ? { sharePct: officeShares.get(o.officeId) } : {}) }, { by });
         } catch (error) {
           error.message = `Office ${o.name} (${o.floorName}): ${error.message}`;
           throw error;
@@ -436,7 +452,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
       if (keep) {
         const had = new Set(existing.offices.map((o) => o.officeId));
         for (const officeId of officeIds.filter((x) => !had.has(x))) {
-          const { assignment } = assignNamed(officeId, { companyId: next.companyId, startDate: next.startDate, endDate: next.endDate }, { scope, by });
+          const { assignment } = assignNamed(officeId, { companyId: next.companyId, startDate: next.startDate, endDate: next.endDate, sharePct: officeShares?.get(officeId) }, { scope, by });
           raw.prepare("UPDATE office_assignments SET lease_id = ? WHERE id = ?").run(id, assignment.id);
         }
       }
@@ -547,7 +563,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
     const covered = dayNumber(to) - dayNumber(from) + 1;
     const part = covered < days;
     const amount = money(part ? (full * covered) / days : full);
-    const where = offices.length ? `: ${offices.map((o) => o.name).join(", ")}${[...new Set(offices.map((o) => o.siteName))].length === 1 ? ` (${offices[0].siteName})` : ""}` : "";
+    const where = offices.length ? `: ${offices.map((o) => (o.sharePct < 100 ? `${o.name} (${o.sharePct}% share)` : o.name)).join(", ")}${[...new Set(offices.map((o) => o.siteName))].length === 1 ? ` (${offices[0].siteName})` : ""}` : "";
     return {
       leaseId: r.id,
       period,

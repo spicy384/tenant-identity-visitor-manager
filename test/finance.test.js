@@ -671,6 +671,65 @@ async function main() {
   check("company leases: not for a role that can't see leases", (await desk.get(`/api/leases?companyId=${hooli.id}`)).status === 403);
   check("documents: not opened from another site", (await elsewhereManager.raw(`/api/lease-documents/${harborDoc.ref}`)).status === 404);
   check("documents: nor added there", (await elsewhereManager.upload(`/api/leases/${harborLease.id}/documents?name=x.pdf&kind=agreement`, Buffer.from("%PDF-1.4 x"))).status === 404);
+  // --- a room shared between companies -----------------------------------------------------------------
+  {
+  const { escalate } = require("../rent-terms");
+  const money2 = (n) => Math.round(n * 100) / 100;
+  const rentLine = async (id, period) => (await manager.get("/api/leases/" + id + "/rent?period=" + period)).data.rent;
+  const pied = await mk("Pied Piper");
+  const aviato = await mk("Aviato");
+  const raviga = await mk("Raviga");
+  const sharedRoom = await office("510", 1000);
+  await manager.put(`/api/offices/${sharedRoom.id}`, { desks: 3 });
+  const half = (companyId, extra = {}) => manager.post("/api/leases", { companyId, officeIds: [sharedRoom.id], officeShares: [{ officeId: sharedRoom.id, sharePct: 50 }], startDate: "2020-12-01", escalationPct: 2.75, classRates: { 0: 3 }, ...extra });
+  r = await half(pied.id);
+  const piedLease = r.data.lease;
+  check("shared room: a lease has its share of the room", r.status === 200 && piedLease.offices[0].sharePct === 50 && piedLease.sqft === 500, JSON.stringify(r.data));
+  check("shared room: the rate is the whole room's, the rent its share", piedLease.offices[0].rate === 3 && piedLease.offices[0].monthly === 1500 && piedLease.baseMonthly === 1500);
+  check("shared room: yearly increases on its share", piedLease.currentMonthly === escalate(1500, { escalation_pct: 2.75 }, piedLease.increases));
+  let free = (await manager.get("/api/offices?freeFrom=2021-01-01")).data.offices.find((o) => o.id === sharedRoom.id);
+  check("shared room: the rest of it is still free", free?.freeShare === 50 && free.heldDuring[0].companyName === "Pied Piper", JSON.stringify(free));
+  check("shared room: only what's free can be taken", (r = await half(aviato.id, { officeShares: [{ officeId: sharedRoom.id, sharePct: 60 }] })).status === 409 && /Only 50% of the room is free/.test(r.data.error), JSON.stringify(r.data));
+  check("shared room: a share is a percentage", (await half(aviato.id, { officeShares: [{ officeId: sharedRoom.id, sharePct: 0 }] })).status === 400 && (await half(aviato.id, { officeShares: [{ officeId: sharedRoom.id, sharePct: 101 }] })).status === 400);
+  r = await half(aviato.id);
+  const aviatoLease = r.data.lease;
+  check("shared room: the second company's lease", r.status === 200 && aviatoLease.offices[0].sharedWith[0].companyName === "Pied Piper" && aviatoLease.currentMonthly === piedLease.currentMonthly, JSON.stringify(r.data));
+  check("shared room: a third can't join a full room", (r = await half(raviga.id)).status === 409 && /fully let/.test(r.data.error));
+  check("shared room: and it's no longer offered", !(await manager.get("/api/offices?freeFrom=2021-01-01")).data.offices.some((o) => o.id === sharedRoom.id));
+  const roomNow = (await manager.get(`/api/offices/${sharedRoom.id}`)).data.office;
+  check("shared room: both hold it, and it counts once", roomNow.status === "occupied" && roomNow.holders.map((a) => a.companyName).join() === "Aviato,Pied Piper" && roomNow.freePct === 0 && roomNow.letSqft === 1000 && roomNow.sqft === 1000, JSON.stringify(roomNow.holders));
+  check("shared room: its rent is what they pay together", roomNow.monthly === money2(piedLease.currentMonthly + aviatoLease.currentMonthly) && roomNow.holders[0].monthly === aviatoLease.currentMonthly);
+  const piedOffices = (await manager.get(`/api/companies/${pied.id}/facilities`)).data;
+  check("shared room: a company's page counts its part", piedOffices.totals.sqft === 500 && piedOffices.totals.monthly === piedLease.currentMonthly && piedOffices.offices[0].sharePct === 50);
+  check("shared room: desks are split, rounded down", piedOffices.totals.desks === 1);
+  check("shared room: the badges credited follow them", (await manager.get(`/api/companies/${pied.id}/badge-allotment`)).data.allotment.allowed === 1);
+  check("shared room: each is invoiced its own part", await rentOf(piedLease.id, "2021-01") === 1500 && await rentOf(aviatoLease.id, "2021-01") === 1500);
+  check("shared room: the invoice line says so", /510 \(50% share\)/.test((await rentLine(piedLease.id, "2021-01")).description));
+  check("shared room: a share can't grow over the other's", (r = await manager.put(`/api/leases/${piedLease.id}`, { officeShares: [{ officeId: sharedRoom.id, sharePct: 60 }] })).status === 409 && /Only 50%/.test(r.data.error), JSON.stringify(r.data));
+  check("shared room: lowering one leaves room for the other", (await manager.put(`/api/leases/${aviatoLease.id}`, { officeShares: [{ officeId: sharedRoom.id, sharePct: 40 }] })).data.lease.offices[0].sharePct === 40);
+  r = await manager.put(`/api/leases/${piedLease.id}`, { officeShares: [{ officeId: sharedRoom.id, sharePct: 60 }] });
+  check("shared room: shares can change, one at a time", r.status === 200 && r.data.lease.offices[0].monthly === 1800 && r.data.lease.sqft === 600);
+  const editedDates = (await manager.put(`/api/leases/${aviatoLease.id}`, { endDate: "2021-12-31" })).data.lease;
+  check("shared room: a lease edited without shares keeps its own", editedDates.offices[0].sharePct === 40);
+  const later = (await manager.get("/api/offices?freeFrom=2022-01-01")).data.offices.find((o) => o.id === sharedRoom.id);
+  check("shared room: free when one has left", later?.freeShare === 40 && (await manager.get(`/api/offices/${sharedRoom.id}`)).data.office.freePct === 40, JSON.stringify(later));
+  const halfLet = (await manager.get(`/api/offices/${sharedRoom.id}`)).data.office;
+  check("shared room: the part left is counted as free", halfLet.letSqft === 600 && halfLet.openSqft === 400 && halfLet.holders.length === 1);
+  const fixedHalf = await office("511", 1000);
+  r = await manager.post("/api/leases", { companyId: raviga.id, officeIds: [fixedHalf.id], officeShares: [{ officeId: fixedHalf.id, sharePct: 50 }], startDate: "2024-01-01", rentMode: "fixed", monthlyRent: 2000 });
+  check("shared room: a fixed rent is the company's own, not divided", r.status === 200 && r.data.lease.currentMonthly === 2000 && r.data.lease.offices[0].sharePct === 50);
+  const whole = await office("512", 100);
+  r = await manager.post(`/api/offices/${whole.id}/assignments`, { companyId: raviga.id, startDate: "2024-01-01", sharePct: 25 });
+  check("shared room: from Rooms too", r.status === 200 && r.data.assignment.sharePct === 25 && r.data.office.freePct === 75);
+  const wholeHeld = r.data.assignment;
+  r = await manager.put(`/api/office-assignments/${wholeHeld.id}`, { startDate: wholeHeld.startDate, endDate: null, sharePct: 75 });
+  check("shared room: changed from Rooms", r.status === 200 && r.data.assignment.sharePct === 75);
+  r = await manager.post(`/api/companies/${pied.id}/offices`, { officeIds: [whole.id], startDate: "2024-01-01", shares: { [whole.id]: 25 } });
+  check("shared room: from a company's page, for the part that's free", r.status === 200 && (await manager.get(`/api/offices/${whole.id}`)).data.office.freePct === 0, JSON.stringify(r.data));
+  r = await finance.post("/api/invoices/generate", { period: "2021-06", issueDate: "2021-06-01" });
+  const sharedDraft = (company) => r.data.invoices.find((d) => d.companyId === company.id);
+  check("shared room: each company gets its own invoice for its part", sharedDraft(pied)?.total === 1800 && sharedDraft(aviato)?.total === 1200, JSON.stringify(r.data.invoices));
+  }
   check("documents: nor removed", (await elsewhereManager.del(`/api/lease-documents/${harborDoc.id}`)).status === 404 && (await manager.raw(`/api/lease-documents/${harborDoc.ref}`)).status === 200);
 }
 

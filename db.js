@@ -802,6 +802,8 @@ const ADDED_COLUMNS = [
   // An office's own rent at the start of its lease: per square foot, or a monthly amount.
   ["office_assignments", "base_rate", "REAL"],
   ["office_assignments", "base_monthly", "REAL"],
+  // The part of a room its company holds and pays for, as a percentage (empty: all of it).
+  ["office_assignments", "share_pct", "REAL"],
   // The site a visitor was added for at the desk: staff there can find them, whoever they're visiting.
   ["visitors", "added_site_id", "INTEGER REFERENCES sites(id) ON DELETE SET NULL"],
   // A price list item the app itself acts on: tenant_badge adds badges to the company charged.

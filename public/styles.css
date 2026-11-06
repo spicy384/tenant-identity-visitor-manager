@@ -830,6 +830,8 @@ a.button-link:hover { text-decoration: none; }
 .lease-offices .lease-office-extra .check-row { min-height: 0; font-size: 0.85rem; }
 .lease-office-rent { display: flex; align-items: flex-end; gap: 8px; }
 .no-office-rents .lease-office-extra, .no-office-rents .lease-office-rents-note { display: none; }
+.lease-offices .lease-office-share { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; padding: 0 0 4px 28px; font-size: 0.85rem; }
+.lease-office-share input { width: 6rem; min-width: 0; }
 .lease-office-rent label { flex: 1; min-width: 0; gap: 2px; }
 .lease-office-rent input { width: 100%; min-width: 0; }
 .lease-office-rent > span { padding-bottom: 10px; }

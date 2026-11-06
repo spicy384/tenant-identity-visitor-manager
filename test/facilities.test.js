@@ -269,7 +269,7 @@ async function main() {
   check("assign: an office to a company", r.status === 200 && r.data.office.status === "occupied" && r.data.office.current.companyName === "Acme" && lease.createdBy === "manny");
   check("assign: the company's rate wins", r.data.office.effectiveRate === 2 && r.data.office.rateSource === "company" && r.data.office.monthly === 2400);
   r = await manager.post(`/api/offices/${o101.id}/assignments`, { companyId: globex.id, startDate: "2030-01-01" });
-  check("assign: one company at a time", r.status === 409 && /overlaps Acme/.test(r.data.error));
+  check("assign: a room let whole can't take another company", r.status === 409 && /overlaps Acme/.test(r.data.error) && /fully let/.test(r.data.error));
   r = await manager.post(`/api/offices/${o102.id}/assignments`, { companyId: globex.id, startDate: "2099-01-01", endDate: "2099-12-31" });
   check("assign: from a later date shows as upcoming", r.status === 200 && r.data.office.status === "upcoming" && r.data.office.next.companyName === "Globex" && r.data.office.current === null);
   check("assign: before it, someone else may have it", (await manager.post(`/api/offices/${o102.id}/assignments`, { companyId: acme.id, startDate: "2098-01-01", endDate: "2098-12-31" })).status === 200);

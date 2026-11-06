@@ -172,23 +172,26 @@ function createFacilityRoutes({ access, facilities, leases, directory, sites, au
 
   // --- assignments ----------------------------------------------------------------------------
 
+  const shareWords = (a) => (a.sharePct < 100 ? ` (${a.sharePct}%)` : "");
+
   router.post("/api/offices/:id/assignments", editFacilities, (req, res) => {
     const { office, assignment } = facilities.assign(idOf(req), req.body || {}, { ...scoped(req), by: staffName(req) });
     leases.adoptAssignments({ by: staffName(req) });
-    auditFrom(req, "office.assign", `${office.floorName}: ${office.name}`, `${assignment.companyName} from ${assignment.startDate}${assignment.endDate ? ` to ${assignment.endDate}` : ""}`);
+    auditFrom(req, "office.assign", `${office.floorName}: ${office.name}`, `${assignment.companyName}${shareWords(assignment)} from ${assignment.startDate}${assignment.endDate ? ` to ${assignment.endDate}` : ""}`);
     res.json({ ok: true, office, assignment });
   });
 
   router.put("/api/office-assignments/:id", editFacilities, (req, res) => {
     const held = leases.leaseOfAssignment(idOf(req));
     // New dates for one office of a lease of several: it leaves that lease for one of its own.
-    const changesDates = req.body?.startDate !== undefined || req.body?.endDate !== undefined;
+    const before = facilities.getAssignment(idOf(req), scoped(req));
+    const changesDates = before && ((req.body?.startDate !== undefined && req.body.startDate !== before.startDate) || (req.body?.endDate !== undefined && (req.body.endDate || null) !== before.endDate));
     const splitting = held?.leaseId && held.offices > 1 && changesDates;
     if (splitting) leases.mayLeave(held.leaseId);
     const { office, assignment } = facilities.updateAssignment(idOf(req), req.body || {}, { ...scoped(req), by: staffName(req) });
     if (splitting) leases.leave(assignment.id, { by: staffName(req) });
     else if (held?.leaseId) leases.syncAfterAssignment(assignment.id, held.leaseId);
-    auditFrom(req, "office.assignment_update", `${office.floorName}: ${office.name}`, `${assignment.companyName}: ${assignment.startDate} to ${assignment.endDate || "no end date"}`);
+    auditFrom(req, "office.assignment_update", `${office.floorName}: ${office.name}`, `${assignment.companyName}${shareWords(assignment)}: ${assignment.startDate} to ${assignment.endDate || "no end date"}`);
     res.json({ ok: true, office, assignment });
   });
 
@@ -270,7 +273,7 @@ function createFacilityRoutes({ access, facilities, leases, directory, sites, au
     res.json({ ok: true, rates });
   });
 
-  /** Assigns several offices to a company for the same dates (all or none): { officeIds, startDate, endDate, notes }. */
+  /** Assigns several offices to a company for the same dates (all or none): { officeIds, startDate, endDate, notes, shares: { officeId: percentage } }. */
   router.post("/api/companies/:id/offices", editFacilities, (req, res) => {
     const company = directory.getCompany(idOf(req), { sites: req.ctx.sites });
     if (!company) throw fail(404, "No such company, or not at your sites.");

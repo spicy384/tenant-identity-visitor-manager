@@ -26,6 +26,9 @@ async function financeCompanies() {
   return financeCompanyList;
 }
 
+/** A lease's offices by name, with its share of any it doesn't have all of. */
+const leaseOfficeNames = (l) => l.offices.map((o) => (o.sharePct < 100 ? `${o.name} (${o.sharePct}%)` : o.name)).join(", ");
+
 const rentText = (l) => (l.currentMonthly === null ? (l.rentMode === "fixed" ? "No rent set" : "Office size or rate missing") : `${fmtMoney(l.currentMonthly)}/month`);
 
 // --- leases --------------------------------------------------------------------------------------------
@@ -65,7 +68,7 @@ async function loadLeases() {
     const row = h("tr", { class: "clickable" },
       h("td", {}, h("strong", { text: l.companyName })),
       h("td", { class: "small-text", text: l.reference || "" }),
-      h("td", { class: "small-text", text: l.offices.length ? `${l.offices.map((o) => o.name).join(", ")}${multiSite() && l.sites.length ? ` · ${l.sites.map((s) => s.name).join(", ")}` : ""}` : "None" }),
+      h("td", { class: "small-text", text: l.offices.length ? `${leaseOfficeNames(l)}${multiSite() && l.sites.length ? ` · ${l.sites.map((s) => s.name).join(", ")}` : ""}` : "None" }),
       h("td", { class: "nowrap small-text", text: dateText(l.startDate) }),
       h("td", { class: "nowrap small-text", text: l.endDate ? dateText(l.endDate) : "Runs on" }),
       h("td", { class: "nowrap", text: rentText(l) }),
@@ -115,7 +118,7 @@ async function openLease(id, onChange = () => {}) {
       ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
         h("thead", {}, h("tr", {}, ["Office", "Floor", ...(multiSite() ? ["Site"] : []), "Size", ...(fixed ? [] : raised ? ["Base rate", "Base a month", "Rate now", "A month now", "A year now"] : ["Rate", "A month", "A year"])].map((t) => h("th", { text: t })))),
         h("tbody", {}, lease.offices.map((o) => h("tr", {},
-          h("td", {}, h("strong", { text: o.name }), fixed ? null : h("div", { class: "muted small-text", text: `${o.className}${o.rateSource === "leaseRoom" ? " · custom rate" : ""}` })),
+          h("td", {}, h("strong", { text: o.name }), h("div", { class: "muted small-text", text: [fixed ? null : o.className, !fixed && o.rateSource === "leaseRoom" ? "custom rate" : null, o.sharePct < 100 ? `${o.sharePct}% of the room` : null, o.sharedWith.length ? `shared with ${o.sharedWith.map((x) => `${x.companyName} ${x.sharePct}%`).join(", ")}` : null].filter(Boolean).join(" · ") })),
           h("td", { class: "small-text", text: o.floorName }),
           multiSite() ? h("td", { class: "small-text", text: o.siteName }) : null,
           h("td", { class: "small-text", text: fmtSqft(o.sqft) }),
@@ -287,8 +290,9 @@ const monthText = (period) => new Date(`${period}-15T12:00:00`).toLocaleDateStri
 /**
  * Ticks for the offices a lease covers: those free for its dates, and its own. A ticked office goes
  * by the lease's rate for its classification, or has a custom rate at the start of the lease when
- * that is ticked too. Reloads when the dates change. { node, value() (office ids), rents() ({ officeId,
- * rate, monthly }; throws for a custom rate not given), setFixed(a fixed rent: no such rents),
+ * that is ticked too. Each has a share of the room, for one shared with another company, which starts
+ * at whatever is free of it. Reloads when the dates change. { node, value() (office ids), rents() ({ officeId,
+ * rate, monthly }; throws for a custom rate not given), shares() ({ officeId, sharePct }), setFixed(a fixed rent: no such rents),
  * setClassRate(fn: a classification's rate in the form), showRates() (after one changes), reload(start, end) }.
  */
 function leaseOfficePicker(lease) {
@@ -296,11 +300,13 @@ function leaseOfficePicker(lease) {
   const chosen = new Set(own);
   // As typed, kept while the offices reload.
   const rents = new Map((lease?.offices || []).map((o) => [o.officeId, { name: o.name, custom: o.ownRate !== null || o.ownMonthly !== null, rate: o.ownRate ?? "", monthly: o.ownMonthly ?? "" }]));
+  // As typed, like those.
+  const shares = new Map((lease?.offices || []).map((o) => [o.officeId, o.sharePct]));
   let classRate = () => null;
   let rateNotes = [];
   const list = h("div", { class: "lease-offices" });
   const note = h("p", { class: "muted small-text" });
-  const node = h("div", { class: "full-row stack" }, h("span", { class: "label", text: "Offices" }), note, h("p", { class: "hint lease-office-rents-note", text: "A ticked office goes by the rate below for its classification. Tick Custom rate on a room with its own, and give it as it was at the start of the lease, not today's: the yearly increases are added." }), list);
+  const node = h("div", { class: "full-row stack" }, h("span", { class: "label", text: "Offices" }), note, h("p", { class: "hint lease-office-rents-note", text: "A ticked office goes by the rate below for its classification. Tick Custom rate on a room with its own, and give it as it was at the start of the lease, not today's: the yearly increases are added." }), h("p", { class: "hint", text: "Sharing a room with another company? Give each company its own lease with its share of the room: it pays that part of the room's rent. A room a company has all of must have its share lowered on that company's lease first." }), list);
   async function reload(start, end) {
     if (!start) {
       note.textContent = "Give the start date to see the offices free for these dates.";
@@ -316,13 +322,19 @@ function leaseOfficePicker(lease) {
       return;
     }
     // Its own offices are busy only with this lease.
-    for (const o of lease?.offices || []) if (!offices.some((x) => x.id === o.officeId)) offices.push({ id: o.officeId, name: o.name, floorName: o.floorName, siteName: o.siteName, sqft: o.sqft, classId: o.classKey || null, classification: { name: o.className }, askingRate: o.rateSource === "lease" || o.rateSource === "leaseRoom" ? undefined : o.rate, monthlyRent: o.rateSource === "monthly" ? o.monthly : null });
+    for (const o of lease?.offices || []) if (!offices.some((x) => x.id === o.officeId)) offices.push({ id: o.officeId, name: o.name, floorName: o.floorName, siteName: o.siteName, sqft: o.sqft, classId: o.classKey || null, classification: { name: o.className }, askingRate: o.rateSource === "lease" || o.rateSource === "leaseRoom" ? undefined : o.rate, monthlyRent: o.rateSource === "monthly" ? (o.monthly * 100) / o.sharePct : null, freeShare: 0, heldDuring: o.sharedWith });
     offices.sort((a, b) => `${a.siteName} ${a.floorName} ${a.name}`.localeCompare(`${b.siteName} ${b.floorName} ${b.name}`, undefined, { numeric: true }));
     note.textContent = offices.length ? `Free from ${dateText(start)}${end ? ` to ${dateText(end)}` : " on"}:` : "No office is free for those dates.";
     rateNotes = [];
     list.replaceChildren(...offices.map((o) => {
       const box = h("input", { type: "checkbox" });
       box.checked = chosen.has(o.id);
+      // What this lease could have of it: what's free, and what it has already.
+      const others = (o.heldDuring || []).filter((x) => !lease || x.leaseId !== lease.id);
+      const open = Math.min(100, Math.round(((o.freeShare ?? 100) + (own.has(o.id) ? lease.offices.find((x) => x.officeId === o.id).sharePct : 0)) * 100) / 100);
+      const share = h("input", { type: "number", step: "0.01", min: "0.01", max: "100" });
+      share.value = shares.get(o.id) ?? open;
+      if (box.checked) shares.set(o.id, share.value);
       const typed = rents.get(o.id) || { custom: false, rate: "", monthly: "" };
       const custom = h("input", { type: "checkbox" });
       custom.checked = typed.custom;
@@ -345,16 +357,28 @@ function leaseOfficePicker(lease) {
         h("label", {}, h("span", { class: "hint", text: "Start $/month" }), monthly));
       // What it goes by without a custom rate.
       const rateNote = h("span", { class: "muted small-text" });
+      const customShare = h("span", { class: "hint", text: "For the whole room: this lease pays its share of it." });
       const showRate = () => {
         const onLease = classRate(o.classId || 0);
+        const part = Number(share.value) || 100;
+        const hasMonthly = o.monthlyRent !== null && o.monthlyRent !== undefined;
+        const rate = onLease || o.askingRate;
+        // The first year's rent, for this lease's part of the room.
+        const whole = hasMonthly ? o.monthlyRent : rate && o.sqft ? rate * o.sqft : null;
         rateNote.hidden = custom.checked;
-        rateNote.textContent = o.monthlyRent !== null && o.monthlyRent !== undefined ? `Its own ${fmtMoney(o.monthlyRent)} a month, fixed`
+        customShare.hidden = !custom.checked || part >= 100;
+        rateNote.textContent = `${hasMonthly ? `Its own ${fmtMoney(o.monthlyRent)} a month, fixed`
           : onLease ? `${fmtRate(onLease)} a month, from this lease`
-          : o.askingRate === undefined ? "Its rate from Rates" : o.askingRate === null ? "No rate on Rates yet" : `${fmtRate(o.askingRate)} a month, from Rates`;
+          : o.askingRate === undefined ? "Its rate from Rates" : o.askingRate === null ? "No rate on Rates yet" : `${fmtRate(o.askingRate)} a month, from Rates`}${part < 100 && whole ? `. ${part}% of the room: ${fmtMoney((whole * part) / 100)} a month at the start` : ""}`;
       };
       rateNotes.push(showRate);
       showRate();
-      const extra = h("div", { class: "lease-office-extra", hidden: !box.checked }, rateNote, h("label", { class: "check-row" }, custom, h("span", { text: "Custom rate" })), rentFields);
+      const extra = h("div", { class: "lease-office-extra", hidden: !box.checked }, rateNote, h("label", { class: "check-row" }, custom, h("span", { text: "Custom rate" })), rentFields, customShare);
+      const shareRow = h("label", { class: "lease-office-share", hidden: !box.checked }, h("span", { text: "Share of the room (%)" }), share);
+      share.addEventListener("input", () => {
+        shares.set(o.id, share.value);
+        showRate();
+      });
       custom.addEventListener("change", () => {
         rentFields.hidden = !custom.checked;
         save();
@@ -362,10 +386,12 @@ function leaseOfficePicker(lease) {
       });
       box.addEventListener("change", () => {
         if (box.checked) chosen.add(o.id); else chosen.delete(o.id);
+        shares.set(o.id, share.value);
         extra.hidden = !box.checked;
+        shareRow.hidden = !box.checked;
       });
       return h("div", {}, h("label", { class: "check-row" }, box, h("span", {}, h("strong", { text: o.name }),
-        h("span", { class: "muted small-text", text: ` ${[o.floorName, multiSite() ? o.siteName : null, o.classification?.name || "Unclassified", o.sqft ? fmtSqft(o.sqft) : null].filter(Boolean).join(" · ")}` }))), extra);
+        h("span", { class: "muted small-text", text: ` ${[o.floorName, multiSite() ? o.siteName : null, o.classification?.name || "Unclassified", o.sqft ? fmtSqft(o.sqft) : null, others.length ? `shared with ${others.map((x) => `${x.companyName} ${x.sharePct}%`).join(", ")}` : null].filter(Boolean).join(" · ")}` }))), shareRow, extra);
     }));
   }
   return {
@@ -378,6 +404,7 @@ function leaseOfficePicker(lease) {
       if (!r.rate && !r.monthly) throw new Error(`Give ${r.name} its custom rate or monthly rent, or untick Custom rate.`);
       return { officeId, rate: r.rate, monthly: r.monthly };
     }),
+    shares: () => [...chosen].map((officeId) => ({ officeId, sharePct: shares.get(officeId) })),
     setClassRate: (fn) => { classRate = fn; },
     showRates: () => rateNotes.forEach((show) => show()),
     setFixed: (fixed) => node.classList.toggle("no-office-rents", fixed)
@@ -450,7 +477,7 @@ async function editLease(lease, { companyId = null } = {}) {
     submitLabel: lease ? "Save" : "Add lease",
     onSubmit: async (v) => {
       const body = {
-        companyId: Number(v.companyId), reference: v.reference, startDate: v.startDate, commencementDate: v.commencementDate || null, endDate: v.endDate || null, officeIds: picker.value(), officeRents: v.rentMode === "fixed" ? [] : picker.rents(),
+        companyId: Number(v.companyId), reference: v.reference, startDate: v.startDate, commencementDate: v.commencementDate || null, endDate: v.endDate || null, officeIds: picker.value(), officeShares: picker.shares(), officeRents: v.rentMode === "fixed" ? [] : picker.rents(),
         rentMode: v.rentMode, monthlyRent: v.rentMode === "fixed" ? v.monthlyRent : null, classRates: v.rentMode === "fixed" ? {} : Object.fromEntries([...rateInputs].map(([key, input]) => [key, input.value])), escalationPct: v.escalationPct, deposit: v.deposit, notes: v.notes
       };
       return (lease ? await api(`/api/leases/${lease.id}`, { method: "PUT", body }) : await api("/api/leases", { method: "POST", body })).lease;
@@ -470,7 +497,7 @@ function companyLeasesPanel(company) {
     const standing = { active: 0, ending: 0, upcoming: 1, ended: 2 };
     const rows = [...leases].sort((a, b) => standing[a.status] - standing[b.status]).map((l) => h("tr", { class: `clickable${l.status === "ended" ? " inactive" : ""}`, onclick: () => openLease(l.id, changed) },
       h("td", {}, h("strong", { text: l.reference || "Lease" })),
-      h("td", { class: "small-text", text: l.offices.length ? `${l.offices.map((o) => o.name).join(", ")}${multiSite() && l.sites.length ? ` · ${l.sites.map((s) => s.name).join(", ")}` : ""}` : "None" }),
+      h("td", { class: "small-text", text: l.offices.length ? `${leaseOfficeNames(l)}${multiSite() && l.sites.length ? ` · ${l.sites.map((s) => s.name).join(", ")}` : ""}` : "None" }),
       h("td", { class: "nowrap small-text", text: `${dateText(l.startDate)} – ${l.endDate ? dateText(l.endDate) : "runs on"}` }),
       h("td", { class: "nowrap", text: rentText(l) }),
       h("td", { class: "small-text", text: l.documents.length ? `${l.documents.length} ${l.documents.length === 1 ? "document" : "documents"}` : "None" }),

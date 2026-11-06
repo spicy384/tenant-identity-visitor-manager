@@ -66,9 +66,11 @@ function fmtDay(iso) {
 
 const statusBadge = (status) => h("span", { class: `badge ${OFFICE_STATUS[status].badge}`, text: OFFICE_STATUS[status].label, title: OFFICE_STATUS[status].hint || null });
 
-/** Who has an office, in a few words: "Acme since Jan 1, 2026", "Globex from Mar 1, 2026". */
+/** Who has an office, in a few words: "Acme since Jan 1, 2026", "Globex from Mar 1, 2026", "Shared: Acme 50%, Globex 50%". */
 function officeHolder(o) {
-  if (o.current) return `${o.current.companyName} since ${fmtDay(o.current.startDate)}${o.current.endDate ? `, to ${fmtDay(o.current.endDate)}` : ""}`;
+  const rest = o.freePct ? `; ${o.freePct}% free` : "";
+  if (o.holders?.length > 1) return `Shared: ${o.holders.map((a) => `${a.companyName} ${a.sharePct}%`).join(", ")}${rest}`;
+  if (o.current) return `${o.current.companyName}${o.current.sharePct < 100 ? ` ${o.current.sharePct}%` : ""} since ${fmtDay(o.current.startDate)}${o.current.endDate ? `, to ${fmtDay(o.current.endDate)}` : ""}${rest}`;
   if (o.next) return `${o.next.companyName} from ${fmtDay(o.next.startDate)}`;
   return null;
 }
@@ -515,7 +517,7 @@ window.addEventListener("blur", () => {
 });
 
 function drawOffice(plan, o) {
-  const who = o.current?.companyName || o.next?.companyName || null;
+  const who = o.holders?.length ? o.holders.map((a) => a.companyName).join(", ") : o.next?.companyName || null;
   const shape = svgEl("polygon", { class: `plan-shape status-${o.status}${facilitiesView.selected === o.id ? " is-selected" : ""}${facilitiesView.picked.has(o.id) ? " is-chosen" : ""}`, points: pointsAttr(o.points), "data-id": String(o.id) });
   const color = roomColor(o);
   if (color) shape.style.setProperty("--office", color);
@@ -901,7 +903,6 @@ function planLegend(offices) {
 function floorSide(floor, offices) {
   const sum = (list, key) => list.reduce((n, o) => n + (o[key] || 0), 0);
   const occupied = offices.filter((o) => o.status === "occupied");
-  const free = offices.filter((o) => o.status === "available" || o.status === "upcoming");
   const editor = canEditFacilities();
   const swatchFor = (o) => {
     const el = h("span", { class: `plan-swatch status-${o.status}`, "aria-hidden": "true" });
@@ -925,8 +926,8 @@ function floorSide(floor, offices) {
       planLegend(offices),
       h("dl", { class: "facts small-facts" },
         h("dt", { text: "Space" }), h("dd", { text: fmtSqft(sum(offices, "sqft")) }),
-        h("dt", { text: "Let" }), h("dd", { text: fmtSqft(sum(occupied, "sqft")) }),
-        h("dt", { text: "Free" }), h("dd", { text: fmtSqft(sum(free, "sqft")) }),
+        h("dt", { text: "Let" }), h("dd", { text: fmtSqft(sum(offices, "letSqft")) }),
+        h("dt", { text: "Free" }), h("dd", { text: fmtSqft(sum(offices, "openSqft")) }),
         h("dt", { text: "Rent" }), h("dd", { text: `${fmtMoney(sum(occupied, "monthly"))} a month` }),
         floor.planRef ? [h("dt", { text: "Scale" }), h("dd", {},
           floor.scale ? `The plan is ${Math.round(floor.scale.feet).toLocaleString("en-US")} ft across` : "Not set",
@@ -1128,6 +1129,7 @@ async function openOffice(id, onChange = () => {}) {
         const ended = a.endDate && a.endDate < today;
         return h("tr", {},
           h("td", {}, a.companyId ? h("a", { href: `#company/${a.companyId}`, text: a.companyName, onclick: () => pick(null) }) : a.companyName,
+            a.sharePct < 100 ? h("span", { class: "muted small-text", text: ` ${a.sharePct}%` }) : null,
             upcoming ? h("span", { class: "badge warn", text: "Upcoming" }) : ended ? null : h("span", { class: "badge", text: "Now" })),
           h("td", { text: fmtDay(a.startDate) }),
           h("td", { text: a.endDate ? fmtDay(a.endDate) : "No end date" }),
@@ -1138,7 +1140,7 @@ async function openOffice(id, onChange = () => {}) {
             h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: () => pick({ do: "remove", a }) })) : null));
       }))))
     : h("p", { class: "muted small-text", text: "Never assigned." });
-  const rateText = office.rateSource === "monthly" ? "A fixed amount a month" : office.rateSource === "fixedLease" ? "A share of its lease's fixed rent" : office.effectiveRate === null ? "No rate set"
+  const rateText = office.holders.length > 1 && office.rateSource === null ? "Each company has its own" : office.rateSource === "monthly" ? "A fixed amount a month" : office.rateSource === "fixedLease" ? "A share of its lease's fixed rent" : office.effectiveRate === null ? "No rate set"
     : `${fmtRate(office.effectiveRate)} a month, ${office.baseRate !== office.effectiveRate ? `with its lease's yearly increases on ${fmtRate(office.baseRate)}, ` : ""}${RATE_SOURCES[office.rateSource]}`;
   const body = h("div", { class: "stack" },
     h("dl", { class: "facts" },
@@ -1154,7 +1156,9 @@ async function openOffice(id, onChange = () => {}) {
       availableText(office) ? [h("dt", { text: "Available" }), h("dd", { title: availableWhy(office), text: availableText(office) })] : null,
       h("dt", { text: "Rate" }), h("dd", { text: rateText }),
       office.rate !== null && office.monthlyRent === null && office.rateSource !== "office" ? [h("dt", { text: "Office's own rate" }), h("dd", { text: `${fmtRate(office.rate)} a month` })] : null,
-      h("dt", { text: office.status === "occupied" ? "Monthly" : "Asking" }), h("dd", {}, h("strong", { text: office.monthly === null ? "—" : `${fmtMoney(office.monthly)} a month` })),
+      h("dt", { text: office.status === "occupied" ? "Monthly" : "Asking" }), h("dd", {}, h("strong", { text: office.monthly === null ? "—" : `${fmtMoney(office.monthly)} a month` }),
+        office.freePct ? h("span", { class: "muted small-text", text: ` for the ${100 - office.freePct}% let` }) : null,
+        office.holders.length > 1 ? h("div", { class: "muted small-text", text: office.holders.map((a) => `${a.companyName} ${a.sharePct}%: ${a.monthly === null ? "—" : fmtMoney(a.monthly)}`).join(" · ") }) : null),
       office.notes ? [h("dt", { text: "Notes" }), h("dd", { class: "pre", text: office.notes })] : null),
     h("h4", { class: "form-heading", text: "Assignments" }),
     history);
@@ -1206,24 +1210,25 @@ async function facilityCompanyOptions() {
 
 async function assignOffice(office, { companyId = null } = {}) {
   const options = await facilityCompanyOptions();
-  // From the day after the current company's last day, when it has one; else today.
+  // From the day after the current company's last day, when it has one and has the whole room; else today.
   let start = todayISO();
-  if (office.current?.endDate) {
+  if (office.current?.endDate && !office.freePct) {
     const [y, m, d] = office.current.endDate.split("-").map(Number);
     const next = new Date(y, m - 1, d + 1);
     start = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`;
   }
   const saved = await formDialog({
     title: `Assign office ${office.name}`,
-    intro: office.current || office.next ? h("p", { class: "muted small-text", text: `${officeHolder(office)}. An office has one company at a time, so the dates can't overlap.` }) : null,
+    intro: office.current || office.next ? h("p", { class: "muted small-text", text: `${officeHolder(office)}. Companies can share a room, up to 100% between them on any day.` }) : null,
     fields: [
       { name: "companyId", label: "Company", type: "select", value: companyId ? String(companyId) : "", options: [{ value: "", label: "Choose a company" }, ...options], required: true },
       { name: "startDate", label: "From", type: "date", value: start, required: true, half: true },
       { name: "endDate", label: "To (the last day)", type: "date", half: true, hint: "Empty for no end date." },
+      { name: "sharePct", label: "Share of the room (%)", type: "number", value: office.freePct || 100, half: true, step: "0.01", min: 0.01, max: 100, hint: "100 unless companies share it: they pay this part of its rent." },
       { name: "notes", label: "Notes", type: "textarea", rows: 2, placeholder: "Lease reference, terms…" }
     ],
     submitLabel: "Assign",
-    onSubmit: async (v) => api(`/api/offices/${office.id}/assignments`, { method: "POST", body: { companyId: Number(v.companyId), startDate: v.startDate, endDate: v.endDate || null, notes: v.notes } })
+    onSubmit: async (v) => api(`/api/offices/${office.id}/assignments`, { method: "POST", body: { companyId: Number(v.companyId), startDate: v.startDate, endDate: v.endDate || null, sharePct: v.sharePct, notes: v.notes } })
   });
   if (saved) toast(`${office.name} assigned to ${saved.assignment.companyName}.`);
   return saved;
@@ -1247,9 +1252,10 @@ async function changeAssignment(a) {
     fields: [
       { name: "startDate", label: "From", type: "date", value: a.startDate, required: true, half: true },
       { name: "endDate", label: "To (the last day)", type: "date", value: a.endDate || "", half: true, hint: "Empty for no end date." },
+      { name: "sharePct", label: "Share of the room (%)", type: "number", value: a.sharePct, half: true, step: "0.01", min: 0.01, max: 100, hint: "100 unless companies share it: they pay this part of its rent." },
       { name: "notes", label: "Notes", type: "textarea", value: a.notes || "", rows: 2 }
     ],
-    onSubmit: async (v) => api(`/api/office-assignments/${a.id}`, { method: "PUT", body: { startDate: v.startDate, endDate: v.endDate || null, notes: v.notes } })
+    onSubmit: async (v) => api(`/api/office-assignments/${a.id}`, { method: "PUT", body: { startDate: v.startDate, endDate: v.endDate || null, sharePct: v.sharePct, notes: v.notes } })
   });
   if (saved) toast("Saved.");
   return saved;
@@ -1292,7 +1298,7 @@ async function loadOffices() {
     return;
   }
   const q = $("offices-search").value.trim().toLowerCase();
-  if (q) offices = offices.filter((o) => [o.name, o.floorName, o.siteName, o.roomType?.name, o.classification?.name, o.current?.companyName, o.next?.companyName].some((s) => String(s || "").toLowerCase().includes(q)));
+  if (q) offices = offices.filter((o) => [o.name, o.floorName, o.siteName, o.roomType?.name, o.classification?.name, ...o.holders.map((a) => a.companyName), o.next?.companyName].some((s) => String(s || "").toLowerCase().includes(q)));
   $("offices-add").hidden = !canEditFacilities();
   const table = $("offices-table");
   const picking = canEditFacilities();
@@ -1329,11 +1335,11 @@ async function loadOffices() {
     return row;
   }) : [emptyRow(picking ? 11 : 10, q || $("offices-status").value || typePick.value ? "No rooms match." : "No rooms yet. Add floors and draw their rooms under Floor plans.")]));
   const occupied = offices.filter((o) => o.status === "occupied");
-  const sqft = (list) => list.reduce((n, o) => n + (o.sqft || 0), 0);
+  const sqft = (list, key = "sqft") => list.reduce((n, o) => n + (o[key] || 0), 0);
   table.tFoot.replaceChildren(offices.length ? h("tr", {},
     h("td", { colspan: picking ? 5 : 4, text: `${offices.length} ${offices.length === 1 ? "room" : "rooms"}` }),
     h("td", { class: "num", text: Number(sqft(offices)).toLocaleString("en-US") }),
-    h("td", { colspan: 4, class: "muted small-text", text: `${occupied.length} occupied, ${Number(sqft(occupied)).toLocaleString("en-US")} sq ft let` }),
+    h("td", { colspan: 4, class: "muted small-text", text: `${occupied.length} occupied, ${Number(sqft(offices, "letSqft")).toLocaleString("en-US")} sq ft let` }),
     h("td", { class: "num" }, h("strong", { text: fmtMoney(occupied.reduce((n, o) => n + (o.monthly || 0), 0)) }))) : "");
   all.checked = boxes.length > 0 && boxes.every((b) => b.checked);
   all.addEventListener("change", () => {
@@ -1347,15 +1353,16 @@ $("offices-status").addEventListener("change", loadOffices);
 $("offices-type").addEventListener("change", loadOffices);
 $("offices-add").addEventListener("click", async () => { if (await editOffice(null)) loadOffices(); });
 
-/** When a room can next be let: the day it comes free if its tenant doesn't renew, or now. */
+/** When a room can next be let: the part of it not let, the day it comes free if its tenants don't renew, or now. */
 function availableText(o) {
+  if (o.freePct) return `${o.freePct}% now`;
   if (o.availableFrom) return `${fmtDay(o.availableFrom)}${o.availableUntil ? ` until ${fmtDay(o.availableUntil)}` : ""}`;
   if (o.openEnded) return "No end date";
   return o.status === "available" ? "Now" : "";
 }
 
 function availableWhy(o) {
-  const tenant = (o.current || o.next)?.companyName;
+  const tenant = o.holders?.length ? o.holders.map((a) => a.companyName).join(" and ") : o.next?.companyName;
   if (o.availableFrom) return `If ${tenant} doesn't renew${o.availableUntil ? "; another lease starts on the later date" : ""}`;
   return o.openEnded ? `${tenant}'s lease has no end date` : null;
 }
@@ -1566,7 +1573,7 @@ function companyOfficesPanel(company) {
     const WHEN = { current: ["Now", ""], upcoming: ["Upcoming", "warn"], ended: ["Ended", "muted"] };
     const rows = data.offices.map((o) => {
       const row = h("tr", { class: `clickable${o.when === "ended" ? " inactive" : ""}` },
-        h("td", {}, h("strong", { text: o.officeName }), h("span", { class: `badge ${WHEN[o.when][1]}`, text: WHEN[o.when][0] })),
+        h("td", {}, h("strong", { text: o.officeName }), o.sharePct < 100 ? h("span", { class: "muted small-text", text: ` ${o.sharePct}%` }) : null, h("span", { class: `badge ${WHEN[o.when][1]}`, text: WHEN[o.when][0] })),
         h("td", { text: multiSite() ? `${o.siteName}, ${o.floorName}` : o.floorName }),
         h("td", { text: `${fmtDay(o.assignment.startDate)} – ${o.assignment.endDate ? fmtDay(o.assignment.endDate) : "no end date"}` }),
         h("td", { class: "num", text: o.sqft === null ? "—" : Number(o.sqft).toLocaleString("en-US") }),
@@ -1624,7 +1631,9 @@ async function assignOfficesToCompany(company, companyRates) {
   // A room let for a fixed amount a month costs that, whatever the company's rate.
   const fixed = (o) => o.monthlyRent !== null && o.monthlyRent !== undefined;
   const rateOf = (o) => (fixed(o) ? null : companyRates[o.classId || 0] ?? o.askingRate);
-  const monthlyOf = (o) => (fixed(o) ? o.monthlyRent : rateOf(o) !== null && o.sqft !== null ? o.sqft * rateOf(o) : null);
+  // A room partly let is offered for the part that's free.
+  const partOf = (o) => (o.freeShare ?? 100) / 100;
+  const monthlyOf = (o) => (fixed(o) ? o.monthlyRent * partOf(o) : rateOf(o) !== null && o.sqft !== null ? o.sqft * rateOf(o) * partOf(o) : null);
   const floorLabel = (f) => (multiSite() && !state.site ? `${f.siteName}: ${f.name}` : f.name);
 
   // The shapes on the plan shown, by office id, to recolor as offices are chosen; zoom per floor.
@@ -1653,7 +1662,7 @@ async function assignOfficesToCompany(company, companyRates) {
       summary.textContent = "No offices chosen yet.";
       return;
     }
-    const sqft = chosen.reduce((n, o) => n + (o.sqft || 0), 0);
+    const sqft = chosen.reduce((n, o) => n + (o.sqft || 0) * partOf(o), 0);
     const monthly = chosen.reduce((n, o) => n + (monthlyOf(o) || 0), 0);
     const unknown = chosen.some((o) => monthlyOf(o) === null);
     summary.replaceChildren(h("strong", { text: `${chosen.length} ${chosen.length === 1 ? "office" : "offices"}` }),
@@ -1676,8 +1685,9 @@ async function assignOfficesToCompany(company, companyRates) {
         lastFloor = o.floorId;
       }
       const box = h("input", { type: "checkbox", checked: picked.has(o.id), onchange: () => toggle(o) });
-      const facts = [o.sqft !== null ? fmtSqft(o.sqft) : "no size", fixed(o) ? `${fmtMoney(o.monthlyRent)} a month, fixed` : rateOf(o) !== null ? `${fmtRate(rateOf(o))}, ${fmtMoney(monthlyOf(o))} a month` : "no rate",
-        o.current ? `${o.current.companyName} until ${fmtDay(o.current.endDate)}` : null].filter(Boolean).join(" · ");
+      const shared = o.freeShare < 100;
+      const facts = [o.sqft !== null ? fmtSqft(o.sqft) : "no size", fixed(o) ? `${fmtMoney(monthlyOf(o))} a month, fixed` : rateOf(o) !== null ? `${fmtRate(rateOf(o))}, ${fmtMoney(monthlyOf(o))} a month` : "no rate",
+        shared ? `${o.freeShare}% free, shared with ${o.heldDuring.map((a) => `${a.companyName} ${a.sharePct}%`).join(", ")}` : o.current ? `${o.current.companyName} until ${fmtDay(o.current.endDate)}` : null].filter(Boolean).join(" · ");
       rows.push(h("label", { class: `check-row pick-office${picked.has(o.id) ? " is-picked" : ""}` }, box, h("span", {}, h("strong", { text: o.name }), h("span", { class: "muted small-text", text: ` ${facts}` }))));
     }
     list.replaceChildren(...rows);
@@ -1739,7 +1749,11 @@ async function assignOfficesToCompany(company, companyRates) {
       return;
     }
     // Offices no longer free for the new dates drop out of the choice.
-    for (const id of [...picked.keys()]) if (!free.some((o) => o.id === id)) picked.delete(id);
+    for (const id of [...picked.keys()]) {
+      const still = free.find((o) => o.id === id);
+      if (still) picked.set(id, still);
+      else picked.delete(id);
+    }
     const count = (f) => free.filter((o) => o.floorId === f.id).length;
     const before = floorPick.value;
     floorPick.replaceChildren(h("option", { value: "", text: `Every floor (${free.length} free)` }), ...floors.map((f) => h("option", { value: String(f.id), text: `${floorLabel(f)} (${count(f)} free)` })));
@@ -1774,7 +1788,7 @@ async function assignOfficesToCompany(company, companyRates) {
         onClick: async () => {
           if (!from.value) throw new Error("Give the start date.");
           if (!picked.size) throw new Error("Choose at least one office: click it on the plan or tick it in the list.");
-          return api(`/api/companies/${company.id}/offices`, { method: "POST", body: { officeIds: [...picked.keys()], startDate: from.value, endDate: to.value || null, notes: notes.value } });
+          return api(`/api/companies/${company.id}/offices`, { method: "POST", body: { officeIds: [...picked.keys()], startDate: from.value, endDate: to.value || null, notes: notes.value, shares: Object.fromEntries([...picked.values()].map((o) => [o.id, o.freeShare])) } });
         }
       }
     ]
