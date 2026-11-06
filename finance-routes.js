@@ -85,7 +85,7 @@ function createFinanceRoutes({ access, leases, billing, allotments, quickbooks, 
     res.json({ rent: leases.rentFor(lease.id, str(req.query.period, 7) || leases.today().slice(0, 7)) });
   });
 
-  const leaseWords = (l) => `${l.companyName}: ${l.offices.map((o) => o.name).join(", ") || "no offices"}, ${l.startDate} to ${l.endDate || "no end date"}${l.rentMode === "fixed" ? `, $${l.monthlyRent}/month` : l.baseRate !== null ? `, base rate $${l.baseRate}/sq ft` : ", rent from the rates"}${l.offices.filter((o) => o.ownRate !== null || o.ownMonthly !== null).map((o) => `, ${o.name} at $${o.ownMonthly !== null ? `${o.ownMonthly}/month` : `${o.ownRate}/sq ft`}`).join("")}${l.escalationPct ? `, up ${l.escalationPct}% a year` : ""}`;
+  const leaseWords = (l) => `${l.companyName}: ${l.offices.map((o) => o.name).join(", ") || "no offices"}, ${l.startDate} to ${l.endDate || "no end date"}${l.rentMode === "fixed" ? `, $${l.monthlyRent}/month` : l.classRates.length ? `, rates ${l.classRates.map((c) => `${c.name} $${c.rate}`).join(", ")}` : ", rent from the rates"}${l.offices.filter((o) => o.ownRate !== null || o.ownMonthly !== null).map((o) => `, ${o.name} at $${o.ownMonthly !== null ? `${o.ownMonthly}/month` : `${o.ownRate}/sq ft`}`).join("")}${l.escalationPct ? `, up ${l.escalationPct}% a year` : ""}`;
 
   router.post("/api/leases", editLeases, (req, res) => {
     const lease = leases.create(req.body || {}, { scope: scope(req), by: staffName(req) });

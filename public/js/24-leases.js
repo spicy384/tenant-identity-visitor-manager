@@ -10,7 +10,7 @@ const LEASE_STATUS = {
   ended: { label: "Ended", cls: "" }
 };
 
-const LEASE_DOCUMENT_KINDS = { agreement: "Lease agreement", amendment: "Amendment", supporting: "Supporting document" };
+const LEASE_DOCUMENT_KINDS = { agreement: "Lease agreement", amendment: "Mod/Amendments", supporting: "Supporting document" };
 
 let financeCompanyList = null;
 
@@ -76,7 +76,8 @@ async function loadLeases() {
   }));
 }
 
-async function openLease(id) {
+/** A lease's dialog. onChange: called after the lease or its documents change, for the page behind it. */
+async function openLease(id, onChange = () => {}) {
   let lease;
   try {
     ({ lease } = await api(`/api/leases/${id}`));
@@ -88,10 +89,11 @@ async function openLease(id) {
   const fact = (label, value) => (value === null || value === undefined || value === "" ? null : [h("dt", { text: label }), h("dd", {}, value)]);
   const fixed = lease.rentMode === "fixed";
   const raised = lease.increases > 0;
+  const customRooms = lease.offices.filter((o) => o.rateSource === "leaseRoom").length;
   const nextYear = lease.schedule.find((y) => y.when === "next");
   const rentBasis = fixed ? `${fmtMoney(lease.monthlyRent)} a month${lease.escalationPct ? " in the first year" : ", fixed"}`
-    : lease.offices.some((o) => o.ownRate !== null || o.ownMonthly !== null) ? "Starting rents set for its offices on this lease"
-    : lease.baseRate !== null ? `Base rate of ${fmtRate(lease.baseRate)} a month for each office` : "From the rates: each office's size times its rate (or its fixed monthly rent)";
+    : lease.classRates.length || customRooms ? [lease.classRates.length ? `Rates at the start: ${lease.classRates.map((c) => `${c.name} ${fmtRate(c.rate)}`).join(", ")} a month` : null, customRooms ? `${customRooms} ${customRooms === 1 ? "room" : "rooms"} at a custom rate` : null].filter(Boolean).join("; ")
+    : "From the rates: each office's size times its rate (or its fixed monthly rent)";
   const asOfWord = lease.status === "upcoming" ? "when it starts" : lease.status === "ended" ? null : "now";
   const body = h("div", { class: "detail" },
     h("p", {}, h("span", { class: `badge ${LEASE_STATUS[lease.status].cls}`, text: LEASE_STATUS[lease.status].label })),
@@ -113,7 +115,7 @@ async function openLease(id) {
       ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
         h("thead", {}, h("tr", {}, ["Office", "Floor", ...(multiSite() ? ["Site"] : []), "Size", ...(fixed ? [] : raised ? ["Base rate", "Base a month", "Rate now", "A month now", "A year now"] : ["Rate", "A month", "A year"])].map((t) => h("th", { text: t })))),
         h("tbody", {}, lease.offices.map((o) => h("tr", {},
-          h("td", {}, h("strong", { text: o.name })),
+          h("td", {}, h("strong", { text: o.name }), fixed ? null : h("div", { class: "muted small-text", text: `${o.className}${o.rateSource === "leaseRoom" ? " · custom rate" : ""}` })),
           h("td", { class: "small-text", text: o.floorName }),
           multiSite() ? h("td", { class: "small-text", text: o.siteName }) : null,
           h("td", { class: "small-text", text: fmtSqft(o.sqft) }),
@@ -135,7 +137,7 @@ async function openLease(id) {
           h("td", { class: "nowrap small-text", text: fileSizeText(d.size) }),
           h("td", { class: "small-text", text: `${fmtDateTime(d.createdAt)}${d.createdBy ? ` by ${d.createdBy}` : ""}` }),
           h("td", {}, canEditFacilities() ? h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: () => leaseDialog?.finish({ removeDocument: d }) }) : null))))))
-      : h("p", { class: "muted small-text", text: canEditFacilities() ? "No documents yet. Add the lease agreement, its amendments and anything that supports them." : "No documents yet." }),
+      : h("p", { class: "muted small-text", text: canEditFacilities() ? "No documents yet. Add the lease agreement, its mods and amendments, and anything that supports them." : "No documents yet." }),
     h("p", { class: "muted small-text", text: `Added ${fmtDateTime(lease.createdAt)}${lease.createdBy ? ` by ${lease.createdBy}` : ""}${lease.updatedAt !== lease.createdAt ? `; changed ${fmtDateTime(lease.updatedAt)}${lease.updatedBy ? ` by ${lease.updatedBy}` : ""}` : ""}.` }));
   let leaseDialog = null;
   const actions = [];
@@ -145,30 +147,35 @@ async function openLease(id) {
   const result = await openDialog({ title: `${lease.companyName}${lease.reference ? `: lease ${lease.reference}` : "'s lease"}`, body, wide: true, actions, onOpen: (d) => { leaseDialog = d; } });
   try {
     if (result === "add-documents") {
-      await addLeaseDocuments(lease);
-      return openLease(id);
+      if (await addLeaseDocuments(lease)) onChange();
+      return openLease(id, onChange);
     }
     if (result?.removeDocument) {
       const d = result.removeDocument;
       if (await confirmDialog(`Remove ${d.name} from this lease? Its file is deleted.`, { danger: true, confirmLabel: "Remove" })) {
         await api(`/api/lease-documents/${d.id}`, { method: "DELETE" });
         toast("Document removed.");
+        onChange();
       }
-      return openLease(id);
+      return openLease(id, onChange);
     }
     if (result === "edit") {
-      if (await editLease(lease)) loadLeases();
-      return openLease(id);
+      if (await editLease(lease)) {
+        loadLeases();
+        onChange();
+      }
+      return openLease(id, onChange);
     }
     if (result === "delete") {
-      if (!(await confirmDialog(`Delete this lease? Its offices are no longer assigned to ${lease.companyName}. ${lease.documents.length ? ` Its ${lease.documents.length === 1 ? "document is" : `${lease.documents.length} documents are`} deleted too.` : ""} Only for a lease entered by mistake: to end one, give it an end date.`, { danger: true, confirmLabel: "Delete" }))) return openLease(id);
+      if (!(await confirmDialog(`Delete this lease? Its offices are no longer assigned to ${lease.companyName}. ${lease.documents.length ? ` Its ${lease.documents.length === 1 ? "document is" : `${lease.documents.length} documents are`} deleted too.` : ""} Only for a lease entered by mistake: to end one, give it an end date.`, { danger: true, confirmLabel: "Delete" }))) return openLease(id, onChange);
       await api(`/api/leases/${lease.id}`, { method: "DELETE" });
       toast("Lease deleted.");
       loadLeases();
+      onChange();
     }
   } catch (error) {
     toast(error.message, "error");
-    return openLease(id);
+    return openLease(id, onChange);
   }
   if (location.hash.startsWith("#lease/")) history.back();
   return null;
@@ -198,7 +205,7 @@ function anniversaryOf(start, n) {
 }
 
 /** In the lease form, what the rent comes to with its yearly increases; empty without one. */
-function leaseRentPreview(inputs) {
+function leaseRentPreview(inputs, classRates) {
   const pct = Number(inputs.escalationPct.value);
   const start = inputs.startDate.value;
   const end = inputs.endDate.value;
@@ -216,12 +223,13 @@ function leaseRentPreview(inputs) {
     for (let i = 0; i < count; i += 1) cents = Math.floor((cents * (10000 + Math.round(pct * 100)) + 5000) / 10000);
     return cents / 100;
   };
-  const base = Number(fixed ? inputs.monthlyRent.value : inputs.baseRate.value) || null;
+  const base = fixed ? Number(inputs.monthlyRent.value) || null : null;
   const show = (x) => (fixed ? `${fmtMoney(x)}/month` : `${fmtRate(Math.round(x * 10000) / 10000)} a month`);
   const when = start > today ? "When it starts" : end && end < today ? "When it ended" : "Today";
   const increases = `${n} yearly ${n === 1 ? "increase" : "increases"} of ${pct}%`;
   const nextDay = anniversaryOf(commences, n + 1);
   const next = end && nextDay > end ? "" : ` ${n ? "Next increase" : `First increase of ${pct}%`} ${dateText(n ? nextDay : anniversaryOf(commences, 1))}${base ? `, to ${show(up(base, n + 1))}` : ""}.`;
+  if (!fixed && classRates.length) return `${when}: ${classRates.map((c) => `${c.name} ${show(up(c.rate, n))}`).join(", ")}${n ? `, after ${increases}` : ""}.${next}`;
   if (!base) return fixed ? "" : `${when}: ${n ? `each office's rate times ${up(1, n).toFixed(4)}, after ${increases}.` : "each office's rate as it is."}${next}`;
   return `${when}: ${show(up(base, n))}${fixed ? ` (${fmtMoney(up(base, n) * 12)} a year)` : ""}${n ? `, from ${show(base)} with ${increases}` : ""}.${next}`;
 }
@@ -248,7 +256,7 @@ async function addLeaseDocuments(lease) {
     fields: [
       { node: h("label", { class: "full-row" }, h("span", { text: "Files" }), fileInput, h("span", { class: "hint", text: "PDF, Word (.docx), Excel (.xlsx), PNG or JPEG, up to 25 MB each. You can choose several." })) },
       { name: "kind", label: "What they are", type: "select", value: hasAgreement ? "amendment" : "agreement", options: Object.entries(LEASE_DOCUMENT_KINDS).map(([value, label]) => ({ value, label })) },
-      { name: "description", label: "Description (optional)", value: "", placeholder: "First amendment, adds suite 204" }
+      { name: "description", label: "Description (optional)", value: "", placeholder: "Mod 1, adds suite 204" }
     ],
     submitLabel: "Add",
     onSubmit: async (v) => {
@@ -277,18 +285,22 @@ async function addLeaseDocuments(lease) {
 const monthText = (period) => new Date(`${period}-15T12:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
 /**
- * Ticks for the offices a lease covers: those free for its dates, and its own, each ticked one
- * with its own rent at the start of the lease. Reloads when the dates change. { node, value()
- * (office ids), rents() ({ officeId, rate, monthly }), setFixed(a fixed rent: no such rents), reload(start, end) }.
+ * Ticks for the offices a lease covers: those free for its dates, and its own. A ticked office goes
+ * by the lease's rate for its classification, or has a custom rate at the start of the lease when
+ * that is ticked too. Reloads when the dates change. { node, value() (office ids), rents() ({ officeId,
+ * rate, monthly }; throws for a custom rate not given), setFixed(a fixed rent: no such rents),
+ * setClassRate(fn: a classification's rate in the form), showRates() (after one changes), reload(start, end) }.
  */
 function leaseOfficePicker(lease) {
   const own = new Set((lease?.offices || []).map((o) => o.officeId));
   const chosen = new Set(own);
   // As typed, kept while the offices reload.
-  const rents = new Map((lease?.offices || []).map((o) => [o.officeId, { rate: o.ownRate ?? "", monthly: o.ownMonthly ?? "" }]));
+  const rents = new Map((lease?.offices || []).map((o) => [o.officeId, { name: o.name, custom: o.ownRate !== null || o.ownMonthly !== null, rate: o.ownRate ?? "", monthly: o.ownMonthly ?? "" }]));
+  let classRate = () => null;
+  let rateNotes = [];
   const list = h("div", { class: "lease-offices" });
   const note = h("p", { class: "muted small-text" });
-  const node = h("div", { class: "full-row stack" }, h("span", { class: "label", text: "Offices" }), note, h("p", { class: "hint lease-office-rents-note", text: "Give a ticked office its rate or monthly rent as it was at the start of the lease, not today's: the yearly increases are added. Empty: the base rate below, or its rate from Rates." }), list);
+  const node = h("div", { class: "full-row stack" }, h("span", { class: "label", text: "Offices" }), note, h("p", { class: "hint lease-office-rents-note", text: "A ticked office goes by the rate below for its classification. Tick Custom rate on a room with its own, and give it as it was at the start of the lease, not today's: the yearly increases are added." }), list);
   async function reload(start, end) {
     if (!start) {
       note.textContent = "Give the start date to see the offices free for these dates.";
@@ -304,68 +316,108 @@ function leaseOfficePicker(lease) {
       return;
     }
     // Its own offices are busy only with this lease.
-    for (const o of lease?.offices || []) if (!offices.some((x) => x.id === o.officeId)) offices.push({ id: o.officeId, name: o.name, floorName: o.floorName, siteName: o.siteName, sqft: o.sqft, askingRate: o.rate, monthlyRent: o.rateSource === "monthly" ? o.monthly : null });
+    for (const o of lease?.offices || []) if (!offices.some((x) => x.id === o.officeId)) offices.push({ id: o.officeId, name: o.name, floorName: o.floorName, siteName: o.siteName, sqft: o.sqft, classId: o.classKey || null, classification: { name: o.className }, askingRate: o.rateSource === "lease" || o.rateSource === "leaseRoom" ? undefined : o.rate, monthlyRent: o.rateSource === "monthly" ? o.monthly : null });
     offices.sort((a, b) => `${a.siteName} ${a.floorName} ${a.name}`.localeCompare(`${b.siteName} ${b.floorName} ${b.name}`, undefined, { numeric: true }));
     note.textContent = offices.length ? `Free from ${dateText(start)}${end ? ` to ${dateText(end)}` : " on"}:` : "No office is free for those dates.";
+    rateNotes = [];
     list.replaceChildren(...offices.map((o) => {
       const box = h("input", { type: "checkbox" });
       box.checked = chosen.has(o.id);
-      const typed = rents.get(o.id) || { rate: "", monthly: "" };
+      const typed = rents.get(o.id) || { custom: false, rate: "", monthly: "" };
+      const custom = h("input", { type: "checkbox" });
+      custom.checked = typed.custom;
       const rate = h("input", { type: "number", step: "0.0001", min: "0" });
       const monthly = h("input", { type: "number", step: "0.01", min: "0" });
       rate.value = typed.rate;
       monthly.value = typed.monthly;
+      const save = () => rents.set(o.id, { name: o.name, custom: custom.checked, rate: rate.value, monthly: monthly.value });
       // One or the other.
       const keep = (other) => {
         if (other === monthly && rate.value) monthly.value = "";
         if (other === rate && monthly.value) rate.value = "";
-        rents.set(o.id, { rate: rate.value, monthly: monthly.value });
+        save();
       };
       rate.addEventListener("input", () => keep(monthly));
       monthly.addEventListener("input", () => keep(rate));
-      const rentFields = h("div", { class: "lease-office-rent", hidden: !box.checked },
+      const rentFields = h("div", { class: "lease-office-rent", hidden: !custom.checked },
         h("label", {}, h("span", { class: "hint", text: "Start rate, $/sq ft" }), rate),
         h("span", { class: "muted small-text", text: "or" }),
         h("label", {}, h("span", { class: "hint", text: "Start $/month" }), monthly));
+      // What it goes by without a custom rate.
+      const rateNote = h("span", { class: "muted small-text" });
+      const showRate = () => {
+        const onLease = classRate(o.classId || 0);
+        rateNote.hidden = custom.checked;
+        rateNote.textContent = o.monthlyRent !== null && o.monthlyRent !== undefined ? `Its own ${fmtMoney(o.monthlyRent)} a month, fixed`
+          : onLease ? `${fmtRate(onLease)} a month, from this lease`
+          : o.askingRate === undefined ? "Its rate from Rates" : o.askingRate === null ? "No rate on Rates yet" : `${fmtRate(o.askingRate)} a month, from Rates`;
+      };
+      rateNotes.push(showRate);
+      showRate();
+      const extra = h("div", { class: "lease-office-extra", hidden: !box.checked }, rateNote, h("label", { class: "check-row" }, custom, h("span", { text: "Custom rate" })), rentFields);
+      custom.addEventListener("change", () => {
+        rentFields.hidden = !custom.checked;
+        save();
+        showRate();
+      });
       box.addEventListener("change", () => {
         if (box.checked) chosen.add(o.id); else chosen.delete(o.id);
-        rentFields.hidden = !box.checked;
+        extra.hidden = !box.checked;
       });
       return h("div", {}, h("label", { class: "check-row" }, box, h("span", {}, h("strong", { text: o.name }),
-        h("span", { class: "muted small-text", text: ` ${[o.floorName, multiSite() ? o.siteName : null, o.sqft ? fmtSqft(o.sqft) : null, o.monthlyRent !== null && o.monthlyRent !== undefined ? `${fmtMoney(o.monthlyRent)} a month, fixed` : o.askingRate !== null && o.askingRate !== undefined ? fmtRate(o.askingRate) : null].filter(Boolean).join(" · ")}` }))), rentFields);
+        h("span", { class: "muted small-text", text: ` ${[o.floorName, multiSite() ? o.siteName : null, o.classification?.name || "Unclassified", o.sqft ? fmtSqft(o.sqft) : null].filter(Boolean).join(" · ")}` }))), extra);
     }));
   }
   return {
     node,
     reload,
     value: () => [...chosen],
-    rents: () => [...chosen].map((officeId) => ({ officeId, ...(rents.get(officeId) || {}) })),
+    rents: () => [...chosen].map((officeId) => {
+      const r = rents.get(officeId);
+      if (!r?.custom) return { officeId };
+      if (!r.rate && !r.monthly) throw new Error(`Give ${r.name} its custom rate or monthly rent, or untick Custom rate.`);
+      return { officeId, rate: r.rate, monthly: r.monthly };
+    }),
+    setClassRate: (fn) => { classRate = fn; },
+    showRates: () => rateNotes.forEach((show) => show()),
     setFixed: (fixed) => node.classList.toggle("no-office-rents", fixed)
   };
 }
 
-/** The lease form: company, reference, dates, offices, rent, deposit, notes. Resolves to the saved lease. */
-async function editLease(lease) {
-  const companies = await financeCompanies();
+/** The lease form: company (companyId: chosen already, for a new one), reference, dates, offices, rent, deposit, notes. Resolves to the saved lease. */
+async function editLease(lease, { companyId = null } = {}) {
+  const [companies, { classes }] = await Promise.all([financeCompanies(), api("/api/facilities/rates")]);
   const picker = leaseOfficePicker(lease);
   let start = lease?.startDate || "";
   let end = lease?.endDate || "";
   const reloadOffices = debounce(() => picker.reload(start, end), 300);
+  // A rate for each classification, as it was at the start of the lease.
+  const rateInputs = new Map(classes.map((c) => {
+    const input = h("input", { type: "number", step: "0.0001", min: "0" });
+    input.value = lease?.classRates.find((x) => x.key === c.key)?.rate ?? "";
+    return [c.key, input];
+  }));
+  const classRate = (key) => Number(rateInputs.get(key)?.value) || null;
+  picker.setClassRate(classRate);
+  const rateBlock = h("div", { class: "full-row stack" },
+    h("span", { class: "label", text: "Rates at the start of the lease" }),
+    h("p", { class: "hint", text: "Dollars per square foot a month, by classification, as they were when the lease began: the yearly increases are added. Empty: the rate from Rates." }),
+    h("div", { class: "lease-class-rates" }, classes.map((c) => h("label", {}, h("span", { text: c.name }), rateInputs.get(c.key)))));
   const fixedOnly = (inputs, mode) => {
     inputs.monthlyRent.closest("label").hidden = mode !== "fixed";
-    inputs.baseRate.closest("label").hidden = mode === "fixed";
+    rateBlock.hidden = mode === "fixed";
     picker.setFixed(mode === "fixed");
   };
   const rentPreview = h("p", { class: "message full-row small-text", hidden: true });
   const showRent = (inputs) => {
-    rentPreview.textContent = leaseRentPreview(inputs);
+    rentPreview.textContent = leaseRentPreview(inputs, classes.filter((c) => classRate(c.key)).map((c) => ({ name: c.name, rate: classRate(c.key) })));
     rentPreview.hidden = !rentPreview.textContent;
   };
   const saved = await formDialog({
     title: lease ? `Edit ${lease.companyName}'s lease` : "New lease",
     wide: true,
     fields: [
-      { name: "companyId", label: "Company", type: "select", required: true, value: String(lease?.companyId || ""), half: true, options: [{ value: "", label: "Choose a company" }, ...companies.map((c) => ({ value: String(c.id), label: c.name }))] },
+      { name: "companyId", label: "Company", type: "select", required: true, value: String(lease?.companyId || companyId || ""), half: true, options: [{ value: "", label: "Choose a company" }, ...companies.map((c) => ({ value: String(c.id), label: c.name }))] },
       { name: "reference", label: "Reference (optional)", value: lease?.reference || "", half: true, placeholder: "Your lease number" },
       { name: "startDate", label: "Starts", type: "date", required: true, value: start, half: true, onChange: (input, inputs) => {
         // A commencement that was the start (or empty) moves with it.
@@ -381,10 +433,13 @@ async function editLease(lease) {
         fixedOnly(inputs, input.value);
         showRent(inputs);
         // As the form opens: the sum follows the figures as they are typed.
-        if (dlg) for (const name of ["monthlyRent", "baseRate", "commencementDate", "escalationPct", "endDate"]) inputs[name].addEventListener("input", () => showRent(inputs));
+        if (dlg) {
+          for (const name of ["monthlyRent", "commencementDate", "escalationPct", "endDate"]) inputs[name].addEventListener("input", () => showRent(inputs));
+          for (const input of rateInputs.values()) input.addEventListener("input", () => { showRent(inputs); picker.showRates(); });
+        }
       } },
       { name: "monthlyRent", label: "Monthly rent in the first year ($)", type: "number", value: lease?.monthlyRent ?? "", half: true, step: "0.01", min: 0, hint: "As it was when the lease began; the yearly increases are added." },
-      { name: "baseRate", label: "Base rate ($ per sq ft a month, optional)", type: "number", value: lease?.baseRate ?? "", half: true, step: "0.0001", min: 0, hint: "As it was when the lease began, for offices without their own above; the yearly increases are added. Empty: each office's rate from Rates." },
+      { node: rateBlock },
       { name: "commencementDate", label: "Commences", type: "date", value: lease?.commencementDate || "", half: true, hint: "Usually the start. Rent is billed from the start; the yearly increase counts from here." },
       { name: "escalationPct", label: "Yearly increase (%)", type: "number", value: lease?.escalationPct ?? "", half: true, step: "0.01", min: 0, hint: "On each anniversary of the commencement, whichever way the rent is worked out." },
       { node: rentPreview },
@@ -396,13 +451,46 @@ async function editLease(lease) {
     onSubmit: async (v) => {
       const body = {
         companyId: Number(v.companyId), reference: v.reference, startDate: v.startDate, commencementDate: v.commencementDate || null, endDate: v.endDate || null, officeIds: picker.value(), officeRents: v.rentMode === "fixed" ? [] : picker.rents(),
-        rentMode: v.rentMode, monthlyRent: v.rentMode === "fixed" ? v.monthlyRent : null, baseRate: v.rentMode === "fixed" ? null : v.baseRate, escalationPct: v.escalationPct, deposit: v.deposit, notes: v.notes
+        rentMode: v.rentMode, monthlyRent: v.rentMode === "fixed" ? v.monthlyRent : null, classRates: v.rentMode === "fixed" ? {} : Object.fromEntries([...rateInputs].map(([key, input]) => [key, input.value])), escalationPct: v.escalationPct, deposit: v.deposit, notes: v.notes
       };
       return (lease ? await api(`/api/leases/${lease.id}`, { method: "PUT", body }) : await api("/api/leases", { method: "POST", body })).lease;
     }
   });
   if (saved) toast(lease ? "Lease saved." : "Lease added; its offices are assigned.");
   return saved;
+}
+
+/** The Leases panel on a company's page: those in force first, then those to come, then those that ended. */
+function companyLeasesPanel(company) {
+  const panel = h("div", { class: "panel" }, h("h3", { text: "Leases" }), skeletonLines());
+  // A lease also sets the rent the Offices panel shows, so the whole page is drawn again.
+  const changed = () => showCompanyDetail(company.id);
+  api(`/api/leases?companyId=${company.id}`).then(({ leases }) => {
+    const editor = canEditFacilities();
+    const standing = { active: 0, ending: 0, upcoming: 1, ended: 2 };
+    const rows = [...leases].sort((a, b) => standing[a.status] - standing[b.status]).map((l) => h("tr", { class: `clickable${l.status === "ended" ? " inactive" : ""}`, onclick: () => openLease(l.id, changed) },
+      h("td", {}, h("strong", { text: l.reference || "Lease" })),
+      h("td", { class: "small-text", text: l.offices.length ? `${l.offices.map((o) => o.name).join(", ")}${multiSite() && l.sites.length ? ` · ${l.sites.map((s) => s.name).join(", ")}` : ""}` : "None" }),
+      h("td", { class: "nowrap small-text", text: `${dateText(l.startDate)} – ${l.endDate ? dateText(l.endDate) : "runs on"}` }),
+      h("td", { class: "nowrap", text: rentText(l) }),
+      h("td", { class: "small-text", text: l.documents.length ? `${l.documents.length} ${l.documents.length === 1 ? "document" : "documents"}` : "None" }),
+      h("td", {}, h("span", { class: `badge ${LEASE_STATUS[l.status].cls}`, text: LEASE_STATUS[l.status].label }))));
+    panel.replaceChildren(
+      h("div", { class: "panel-head" },
+        h("h3", { text: "Leases" }),
+        editor ? h("div", { class: "btn-row" }, h("button", { type: "button", class: "primary small", text: "New lease", onclick: async () => {
+          const lease = await editLease(null, { companyId: company.id });
+          if (!lease) return;
+          changed();
+          openLease(lease.id, changed);
+        } })) : null),
+      rows.length
+        ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+          h("thead", {}, h("tr", {}, ["Lease", "Offices", "Term", "Rent", "Documents", "Status"].map((t) => h("th", { text: t })))),
+          h("tbody", {}, rows)))
+        : h("p", { class: "muted small-text", text: editor ? "No leases yet. New lease adds one and assigns its offices." : "No leases yet." }));
+  }).catch((error) => panel.replaceChildren(h("h3", { text: "Leases" }), h("p", { class: "message error", text: error.message })));
+  return panel;
 }
 
 // --- charges --------------------------------------------------------------------------------------------

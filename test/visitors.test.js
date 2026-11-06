@@ -202,6 +202,18 @@ const upgraded = createFacilities({ db, sites, directory }).rates();
 check("upgrade: a site's and a company's old rate go to every classification", upgraded.classes.length === 3
   && upgraded.classes.every((c) => upgraded.sites.find((s) => s.siteId === ny.id).rates[c.key] === 3 && upgraded.companies.find((x) => x.companyId === nyCo.id).rates[c.key] === 2));
 
+// An older database: a lease's one base rate applies to each classification, once.
+const oldFloor = Number(db.raw.prepare("INSERT INTO floors (site_id, name, created_at, updated_at) VALUES (?, 'Old floor', 1, 1)").run(ny.id).lastInsertRowid);
+const oldOffice = Number(db.raw.prepare("INSERT INTO offices (floor_id, name, sqft, created_at, updated_at) VALUES (?, 'Old office', 100, 1, 1)").run(oldFloor).lastInsertRowid);
+const oldLease = Number(db.raw.prepare("INSERT INTO leases (company_id, company_name, start_date, rent_mode, base_rate, created_at, updated_at) VALUES (?, 'Old Co', '2020-01-01', 'rates', 3.5, 1, 1)").run(nyCo.id).lastInsertRowid);
+db.raw.prepare("INSERT INTO office_assignments (office_id, company_id, company_name, start_date, lease_id, created_at, updated_at) VALUES (?, ?, 'Old Co', '2020-01-01', ?, 1, 1)").run(oldOffice, nyCo.id, oldLease);
+const leaseUpgraded = createFacilities({ db, sites, directory });
+check("upgrade: a lease's base rate goes to every classification", leaseUpgraded.leaseRates(oldLease).length === upgraded.classes.length && leaseUpgraded.leaseRates(oldLease).every((c) => c.rate === 3.5));
+check("upgrade: its office's rent doesn't change", leaseUpgraded.rentOf(leaseUpgraded.getOffice(oldOffice), ny.id, nyCo.id, { id: oldLease }).monthly === 350);
+check("upgrade: once", db.raw.prepare("SELECT base_rate FROM leases WHERE id = ?").get(oldLease).base_rate === null);
+db.raw.prepare("UPDATE lease_class_rates SET rate = 4 WHERE lease_id = ?").run(oldLease);
+check("upgrade: a later start leaves what was set since", createFacilities({ db, sites, directory }).leaseRates(oldLease).every((c) => c.rate === 4));
+
 db.close();
 fs.rmSync(tmp, { recursive: true, force: true });
 process.exit(report() ? 0 : 1);

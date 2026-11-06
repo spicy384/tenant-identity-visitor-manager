@@ -459,6 +459,15 @@ CREATE TABLE IF NOT EXISTS company_class_rates (
   PRIMARY KEY (company_id, class_key)
 );
 
+-- A lease's own rate for each classification, as it was at the start of the lease.
+CREATE TABLE IF NOT EXISTS lease_class_rates (
+  lease_id INTEGER NOT NULL REFERENCES leases(id) ON DELETE CASCADE,
+  class_key INTEGER NOT NULL,
+  rate REAL NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (lease_id, class_key)
+);
+
 -- Kinds of room (Office, Conference Room, ...), each with a color for the plan and whether it
 -- is assigned to companies; and the subcategories of a classified room (SCAR, SCIF). A room with
 -- no subcategory is unclassified (its color is the setting facilities.unclassified_color).
@@ -788,7 +797,7 @@ const ADDED_COLUMNS = [
   ["offices", "desks", "INTEGER"],
   // When a lease's term commences, when not its start (null: the same); its yearly increases count from it.
   ["leases", "commencement_date", "TEXT"],
-  // A lease's own first-year rate per square foot a month (null: the rates that apply to its offices).
+  // No longer used: a lease's rates go by classification now (lease_class_rates), these having been copied to each.
   ["leases", "base_rate", "REAL"],
   // An office's own rent at the start of its lease: per square foot, or a monthly amount.
   ["office_assignments", "base_rate", "REAL"],

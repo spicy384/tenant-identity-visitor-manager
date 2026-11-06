@@ -164,6 +164,7 @@ async function showCompanyDetail(id) {
         canEditDirectory() ? h("button", { type: "button", class: "primary small", text: "Add person", onclick: async () => { if (await newPersonDialog({ companyId: company.id })) showCompanyDetail(id); } }) : null)),
     table);
   pane.append(head, peoplePanel, canReadFacilities() ? companyOfficesPanel(company) : "",
+    canSeeLeases() ? companyLeasesPanel(company) : "",
     canReadBadges() || canSeeLeases() ? companyBadgeAllotmentPanel(company) : "",
     canSeeLeases() ? companyInsurancePanel(company) : "");
   loadCompanies();

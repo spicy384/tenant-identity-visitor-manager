@@ -41,7 +41,7 @@ function roomColor(o, colorBy = planColorBy()) {
 }
 
 const classificationText = (o) => (o.classification ? `Classified: ${o.classification.name}` : "Unclassified");
-const RATE_SOURCES = { company: "the company's rate", office: "the office's rate", site: "the site's default", monthly: "a fixed amount a month", lease: "the lease's base rate", leaseRoom: "the rate on its lease", fixedLease: "a share of the lease's fixed rent" };
+const RATE_SOURCES = { company: "the company's rate", office: "the office's rate", site: "the site's default", monthly: "a fixed amount a month", lease: "the lease's rate for its classification", leaseRoom: "a custom rate on its lease", fixedLease: "a share of the lease's fixed rent" };
 
 const moneyFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const fmtMoney = (n) => (n === null || n === undefined ? "—" : moneyFormat.format(n));
@@ -1483,7 +1483,7 @@ async function showRates() {
   const sites = state.site ? data.sites.filter((s) => String(s.siteId) === String(state.site)) : data.sites;
   const { classes } = data;
   body.replaceChildren(
-    h("p", { class: "muted", text: "Rates are dollars per square foot a month, one for each classification of space. An office uses its company's rate for its classification when the company has one, else its own rate, else its site's rate for its classification. Its monthly cost is its size times that rate. A lease can have a base rate of its own instead, or a rate for each of its rooms, and a lease's yearly increase goes on top of whichever rate it uses, so enter the rate as it was when the lease began." }),
+    h("p", { class: "muted", text: "Rates are dollars per square foot a month, one for each classification of space. An office uses its company's rate for its classification when the company has one, else its own rate, else its site's rate for its classification. Its monthly cost is its size times that rate. A lease can have its own rates by classification instead, or a custom rate for a room, and a lease's yearly increase goes on top of whichever rate it uses, so enter the rate as it was when the lease began." }),
     h("div", { class: "panel" },
       h("h3", { text: "Site rates" }),
       h("div", { class: "table-wrap" }, h("table", { class: "table compact" },

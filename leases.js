@@ -5,8 +5,8 @@
  * company at a time and its history stays. An assignment made outside a lease (Rooms, a
  * company's page) gets a lease of its own: every assignment belongs to one.
  *
- * Rent comes from the rates (each office's own rate or monthly amount on the lease, else its square
- * feet times the lease's base rate, else the rate that applies, or the office's own fixed monthly
+ * Rent comes from the rates (an office's custom rate or monthly amount on the lease, else its square
+ * feet times the lease's rate for its classification, else the rate that applies, or the office's own fixed monthly
  * rent, as facilities.js works it out) or is
  * a fixed monthly amount for the lease. That is the first year's rent: it goes up by escalation_pct
  * on each anniversary of its commencement (the start, unless the lease commences on another day),
@@ -15,7 +15,7 @@
  * commencement. A month the lease covers only part of is charged for the days it covers. Money
  * is in dollars, rounded to cents.
  *
- * A lease also keeps its papers: the agreement, amendments and supporting documents, as stored
+ * A lease also keeps its papers: the agreement, mods and amendments, and supporting documents, as stored
  * files, which go when the lease does.
  */
 const { localParts } = require("./visit-clock");
@@ -134,8 +134,8 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
       const { rate, source, monthly } = facilities.rentOf(o, o.siteId, lease.company_id, lease, { baseRate: a.base_rate, baseMonthly: a.base_monthly });
       return {
         assignmentId: a.id, officeId: o.id, name: o.name, floorId: o.floorId, floorName: o.floorName, siteId: o.siteId, siteName: o.siteName,
-        sqft: o.sqft, rate, rateSource: source, monthly,
-        // What the lease itself gives this office, at its start.
+        sqft: o.sqft, classKey: o.classId || 0, className: o.classification?.name || "Unclassified", rate, rateSource: source, monthly,
+        // The custom rate or monthly amount the lease gives this office, at its start.
         ownRate: a.base_rate ?? null, ownMonthly: a.base_monthly ?? null
       };
     }).filter(Boolean);
@@ -223,7 +223,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
       status: statusOf(r, day),
       rentMode: r.rent_mode,
       monthlyRent: r.monthly_rent ?? null,
-      baseRate: r.base_rate ?? null,
+      classRates: facilities.leaseRates(r.id),
       escalationPct: r.escalation_pct ?? null,
       deposit: r.deposit ?? null,
       baseMonthly: monthlyAfter(r, offices, 0),
@@ -314,7 +314,10 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
     }
     if (input.monthlyRent !== undefined) out.monthlyRent = amountInput(input.monthlyRent, "monthly rent");
     if (input.deposit !== undefined) out.deposit = amountInput(input.deposit, "deposit");
-    if (input.baseRate !== undefined) out.baseRate = amountInput(input.baseRate, "base rate", { max: MAX_RATE, places: 4 });
+    if (input.classRates !== undefined) {
+      if (!input.classRates || typeof input.classRates !== "object" || Array.isArray(input.classRates)) throw fail(400, "Give the rates by classification.");
+      out.classRates = input.classRates;
+    }
     if (input.escalationPct !== undefined) out.escalationPct = amountInput(input.escalationPct, "yearly increase", { max: 100 });
     if (input.reference !== undefined) out.reference = text(input.reference, 80);
     if (input.notes !== undefined) out.notes = text(input.notes, 2000);
@@ -322,7 +325,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
     const rent = out.monthlyRent !== undefined ? out.monthlyRent : existing?.monthlyRent ?? null;
     if (mode === "fixed" && rent === null) throw fail(400, "Give the fixed monthly rent.");
     // A fixed rent has no rate to go by.
-    if (mode === "fixed") out.baseRate = null;
+    if (mode === "fixed") out.classRates = {};
     return out;
   }
 
@@ -377,14 +380,15 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
     let id;
     db.transaction(() => {
       const t = now();
-      id = raw.prepare(`INSERT INTO leases (reference, company_id, company_name, start_date, commencement_date, end_date, rent_mode, monthly_rent, base_rate, deposit, escalation_pct, notes, created_by, created_at, updated_by, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.reference ?? null, v.company.id, v.company.name, v.startDate, v.commencementDate ?? null, v.endDate ?? null, v.rentMode,
-        v.monthlyRent ?? null, v.baseRate ?? null, v.deposit ?? null, v.escalationPct ?? null, v.notes ?? null, by, t, by, t).lastInsertRowid;
+      id = raw.prepare(`INSERT INTO leases (reference, company_id, company_name, start_date, commencement_date, end_date, rent_mode, monthly_rent, deposit, escalation_pct, notes, created_by, created_at, updated_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.reference ?? null, v.company.id, v.company.name, v.startDate, v.commencementDate ?? null, v.endDate ?? null, v.rentMode,
+        v.monthlyRent ?? null, v.deposit ?? null, v.escalationPct ?? null, v.notes ?? null, by, t, by, t).lastInsertRowid;
       for (const officeId of officeIds) {
         const { assignment } = assignNamed(officeId, { companyId: v.company.id, startDate: v.startDate, endDate: v.endDate ?? null }, { scope, by });
         raw.prepare("UPDATE office_assignments SET lease_id = ? WHERE id = ?").run(id, assignment.id);
       }
       saveOfficeRents(id, officeRents, v.rentMode);
+      if (v.classRates !== undefined) facilities.setLeaseRates(id, v.classRates);
     });
     return get(Number(id));
   }
@@ -409,10 +413,10 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
     const mode = v.rentMode ?? existing.rentMode;
     if (officeIds && !officeIds.length && mode !== "fixed") throw fail(400, "A lease without offices needs a fixed rent.");
     db.transaction(() => {
-      raw.prepare(`UPDATE leases SET reference = ?, company_id = ?, company_name = ?, start_date = ?, commencement_date = ?, end_date = ?, rent_mode = ?, monthly_rent = ?, base_rate = ?, deposit = ?, escalation_pct = ?, notes = ?, updated_by = ?, updated_at = ? WHERE id = ?`)
+      raw.prepare(`UPDATE leases SET reference = ?, company_id = ?, company_name = ?, start_date = ?, commencement_date = ?, end_date = ?, rent_mode = ?, monthly_rent = ?, deposit = ?, escalation_pct = ?, notes = ?, updated_by = ?, updated_at = ? WHERE id = ?`)
         .run(v.reference !== undefined ? v.reference : existing.reference, next.companyId, next.companyName, next.startDate,
           v.commencementDate !== undefined ? v.commencementDate : existing.commencementSet ? existing.commencementDate : null, next.endDate, mode,
-          v.monthlyRent !== undefined ? v.monthlyRent : existing.monthlyRent, v.baseRate !== undefined ? v.baseRate : existing.baseRate, v.deposit !== undefined ? v.deposit : existing.deposit,
+          v.monthlyRent !== undefined ? v.monthlyRent : existing.monthlyRent, v.deposit !== undefined ? v.deposit : existing.deposit,
           v.escalationPct !== undefined ? v.escalationPct : existing.escalationPct, v.notes !== undefined ? v.notes : existing.notes, by, now(), id);
       // Offices it no longer covers are taken off it; the rest follow its company and dates.
       const keep = officeIds ? new Set(officeIds) : null;
@@ -437,13 +441,14 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
         }
       }
       saveOfficeRents(id, officeRents, mode);
+      if (v.classRates !== undefined) facilities.setLeaseRates(id, v.classRates);
     });
     return get(id);
   }
 
   /** Keeps a file (from readDocument) with a lease: kind is agreement, amendment or supporting. */
   function addDocument(leaseId, file, { kind, description } = {}, { by = null } = {}) {
-    if (!DOCUMENT_KINDS.includes(kind)) throw fail(400, "Say what the document is: the agreement, an amendment or a supporting document.");
+    if (!DOCUMENT_KINDS.includes(kind)) throw fail(400, "Say what the document is: the agreement, a mod or amendment, or a supporting document.");
     let id;
     db.transaction(() => {
       const stored = files.save(file, { by });
@@ -503,7 +508,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
 
   /**
    * An office's assignment leaves its lease of several for a lease of its own (rent from the rates),
-   * keeping the base rate and yearly increase it had, counted from the same day.
+   * keeping the rates and yearly increase it had, counted from the same day.
    */
   function leave(assignmentId, { by = null } = {}) {
     const had = raw.prepare("SELECT l.* FROM office_assignments a JOIN leases l ON l.id = a.lease_id WHERE a.id = ?").get(Number(assignmentId));
@@ -511,8 +516,10 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
     adoptAssignments({ by });
     if (!had) return;
     const commences = commencementOf(had);
-    raw.prepare(`UPDATE leases SET base_rate = ?, escalation_pct = ?, commencement_date = CASE WHEN start_date = ? THEN NULL ELSE ? END
-      WHERE id = (SELECT lease_id FROM office_assignments WHERE id = ?)`).run(had.base_rate, had.escalation_pct, commences, commences, Number(assignmentId));
+    raw.prepare(`UPDATE leases SET escalation_pct = ?, commencement_date = CASE WHEN start_date = ? THEN NULL ELSE ? END
+      WHERE id = (SELECT lease_id FROM office_assignments WHERE id = ?)`).run(had.escalation_pct, commences, commences, Number(assignmentId));
+    raw.prepare(`INSERT OR REPLACE INTO lease_class_rates (lease_id, class_key, rate, updated_at)
+      SELECT (SELECT lease_id FROM office_assignments WHERE id = ?), class_key, rate, updated_at FROM lease_class_rates WHERE lease_id = ?`).run(Number(assignmentId), had.id);
   }
 
   /** The lease an assignment belongs to, and how many offices it has. */

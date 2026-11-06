@@ -20,9 +20,9 @@
  * (Unclassified, SCAR, SCIF, ...). The company's rate for the room's classification wins; otherwise
  * the office's own, otherwise its site's for that classification. An office's monthly cost is its
  * square feet times that rate, unless it is let for a fixed amount a month (monthly_rent), which
- * then wins over every rate. A lease can have a base rate of its own, which wins over the others
- * for its offices, and can give an office its own rate or monthly amount, which wins over all of
- * them. Those are what they were at the start of the lease; what an office costs now also has the
+ * then wins over every rate. A lease can have rates of its own by classification, which win over
+ * the others for its offices, and can give an office a custom rate or monthly amount, which wins
+ * over all of them. Those are what they were at the start of the lease; what an office costs now also has the
  * lease's yearly increases (rent-terms.js).
  *
  * Plans are PNG or JPEG, checked by their first bytes. Each has a random `ref` that changes
@@ -267,7 +267,17 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     });
   }
 
+  // A lease's one base rate, from before its rates went by classification, applies to each, so
+  // nobody's rent changes.
+  for (const lease of raw.prepare("SELECT id, base_rate FROM leases WHERE base_rate IS NOT NULL").all()) {
+    db.transaction(() => {
+      for (const { key } of rateClasses()) raw.prepare("INSERT OR IGNORE INTO lease_class_rates (lease_id, class_key, rate, updated_at) VALUES (?, ?, ?, ?)").run(lease.id, key, lease.base_rate, now());
+      raw.prepare("UPDATE leases SET base_rate = NULL WHERE id = ?").run(lease.id);
+    });
+  }
+
   const siteRateStmt = raw.prepare("SELECT rate FROM site_class_rates WHERE site_id = ? AND class_key = ?");
+  const leaseRateStmt = raw.prepare("SELECT rate FROM lease_class_rates WHERE lease_id = ? AND class_key = ?");
   const companyRateStmt = raw.prepare("SELECT rate FROM company_class_rates WHERE company_id = ? AND class_key = ?");
   const siteRate = (siteId, key = UNCLASSIFIED_KEY) => siteRateStmt.get(siteId, key)?.rate ?? null;
   const companyRate = (companyId, key = UNCLASSIFIED_KEY) => (companyId ? companyRateStmt.get(companyId, key)?.rate ?? null : null);
@@ -305,6 +315,17 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     return companyRates(companyId);
   }
 
+  /** A lease's own rates, for the classifications it has one for: [{ key, name, rate }]. */
+  function leaseRates(leaseId) {
+    const rates = byClass(raw.prepare("SELECT class_key, rate FROM lease_class_rates WHERE lease_id = ?").all(leaseId));
+    return rateClasses().filter((c) => rates[c.key] !== undefined).map((c) => ({ key: c.key, name: c.name, rate: rates[c.key] }));
+  }
+
+  /** Replaces a lease's rates with these: { classKey: rate }; a classification left out, or empty, has none. */
+  function setLeaseRates(leaseId, rates) {
+    saveRates("lease_class_rates", "lease_id", leaseId, { rates: { ...Object.fromEntries(rateClasses().map((c) => [c.key, null])), ...rates } });
+  }
+
   /** Rates in words, for the audit log. */
   const rateWords = (rates) => rateClasses().filter((c) => rates[c.key] !== undefined).map((c) => `${c.name} $${rates[c.key]}`).join(", ") || "none";
 
@@ -321,7 +342,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
   /**
    * What an office costs a company a month (with no company: what it is offered at): its fixed
    * monthly rent when it has one, else its size times the rate that applies: the base rate of
-   * `lease` when it has one, else the company's, the office's or the site's. What `room` (its
+   * `lease` for its classification when it has one, else the company's, the office's or the site's. What `room` (its
    * assignment under that lease) gives of its own wins over all of those. Before any yearly
    * increase. { rate, source, monthly }; source "monthly" for a fixed amount.
    */
@@ -330,12 +351,13 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     if (given(room?.baseMonthly)) return { rate: office.sqft ? Math.round((room.baseMonthly / office.sqft) * 10000) / 10000 : null, source: "leaseRoom", monthly: money(room.baseMonthly) };
     if (given(room?.baseRate)) return { rate: room.baseRate, source: "leaseRoom", monthly: given(office.sqft) ? money(office.sqft * room.baseRate) : null };
     if (office.monthlyRent !== null && office.monthlyRent !== undefined) return { rate: null, source: "monthly", monthly: money(office.monthlyRent) };
-    const { rate, source } = lease?.base_rate !== null && lease?.base_rate !== undefined ? { rate: lease.base_rate, source: "lease" } : effectiveRate(office, siteId, companyId);
+    const onLease = lease?.id ? leaseRateStmt.get(lease.id, office.classId || UNCLASSIFIED_KEY)?.rate ?? null : null;
+    const { rate, source } = onLease !== null ? { rate: onLease, source: "lease" } : effectiveRate(office, siteId, companyId);
     return { rate, source, monthly: rate !== null && office.sqft !== null && office.sqft !== undefined ? money(office.sqft * rate) : null };
   }
 
   /** The terms of a lease that rent depends on, by its id. */
-  const leaseTerms = (id) => (id ? raw.prepare("SELECT id, rent_mode, monthly_rent, base_rate, escalation_pct, start_date, commencement_date FROM leases WHERE id = ?").get(id) : null);
+  const leaseTerms = (id) => (id ? raw.prepare("SELECT id, rent_mode, monthly_rent, escalation_pct, start_date, commencement_date FROM leases WHERE id = ?").get(id) : null);
 
   /** The part of its lease's fixed rent an office makes up: by size, or evenly when an office has no size. */
   function fixedLeaseShare(office, lease) {
@@ -1000,6 +1022,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
     db.transaction(() => {
       raw.prepare("DELETE FROM site_class_rates WHERE class_key = ?").run(existing.id);
       raw.prepare("DELETE FROM company_class_rates WHERE class_key = ?").run(existing.id);
+      raw.prepare("DELETE FROM lease_class_rates WHERE class_key = ?").run(existing.id);
       raw.prepare("DELETE FROM room_classes WHERE id = ?").run(existing.id);
     });
     return existing;
@@ -1019,7 +1042,7 @@ function createFacilities({ db, sites, directory, now = Date.now }) {
   }
 
   return {
-    todayAt, rates, siteRate, companyRate, effectiveRate, rentOf, setSiteRates, setCompanyRates, rateWords,
+    todayAt, rates, siteRate, companyRate, effectiveRate, rentOf, setSiteRates, setCompanyRates, leaseRates, setLeaseRates, rateWords,
     listFloors, getFloor, createFloor, updateFloor, removeFloor, setPlan, clearPlan, setScale, planImage,
     listOffices, getOffice, createOffice, updateOffice, removeOffice, updateMany, removeMany,
     getAssignment, assign, assignMany, updateAssignment, removeAssignment,
