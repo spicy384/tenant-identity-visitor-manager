@@ -20,18 +20,53 @@ const { pdfText, pdfLines } = require("./pdf-text");
 
 const ENTITIES = { nbsp: " ", amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", "#39": "'" };
 
-/** An HTML body as lines of text, spaces kept as they are (the alarm notice lines up columns with them). */
+/** What is inside an HTML document's body (all of it, when it has none). */
+function bodyOf(html) {
+  const lower = html.toLowerCase();
+  const open = lower.indexOf("<body");
+  const start = open < 0 ? -1 : html.indexOf(">", open);
+  if (start < 0) return html;
+  const end = lower.indexOf("</body>", start + 1);
+  return html.slice(start + 1, end < 0 ? html.length : end);
+}
+
+/**
+ * An HTML body as lines of text, spaces kept as they are (the alarm notice lines up columns with
+ * them). Scripts and styles are left out, a line break or the end of a block starts a new line,
+ * and other tags go. It reads the mail in one pass, so an odd message (thousands of tags that
+ * never close) takes no longer than its size.
+ */
 function htmlLines(html) {
-  const body = /<body[^>]*>([\s\S]*?)(<\/body>|$)/i.exec(String(html || ""))?.[1] ?? String(html || "");
-  return body
-    .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, "")
-    .replace(/\r?\n/g, "")
-    .replace(/<br\s*\/?>|<\/(p|div|tr|li|h\d)>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
+  const body = bodyOf(String(html || ""));
+  const lower = body.toLowerCase();
+  // Whether a closing tag for these may still lie ahead (looked for once, not at every opening).
+  const closes = { script: true, style: true };
+  const text = (s) => s.replace(/\r?\n/g, "");
+  let out = "";
+  let i = 0;
+  while (i < body.length) {
+    const lt = body.indexOf("<", i);
+    const gt = lt < 0 ? -1 : body.indexOf(">", lt + 1);
+    if (gt < 0) { out += text(body.slice(i)); break; }
+    out += text(body.slice(i, lt));
+    const tag = text(lower.slice(lt + 1, gt));
+    const block = /^(script|style)/.exec(tag)?.[1];
+    if (block && closes[block]) {
+      const end = lower.indexOf(`</${block}>`, gt + 1);
+      if (end >= 0) { i = end + block.length + 3; continue; }
+      closes[block] = false;
+    }
+    if (/^br\s*\/?$/.test(tag) || /^\/(p|div|tr|li|h\d)$/.test(tag)) out += "\n";
+    else if (!tag) out += "<>";
+    i = gt + 1;
+  }
+  return out
     .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+\d*);/gi, (m, e) => {
       if (e[0] === "#") {
         const code = e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : Number(e.slice(1));
-        return code === 160 ? " " : String.fromCodePoint(code);
+        if (code === 160) return " ";
+        // A number that is no character (past the last one there is) is shown as the mark for one.
+        return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
       }
       return ENTITIES[e.toLowerCase()] ?? m;
     })

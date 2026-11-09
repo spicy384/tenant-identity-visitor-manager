@@ -113,7 +113,11 @@ function createSecurityMailbox({ store, reports, token, graphBase, fetchImpl = g
     return out;
   };
 
-  /** Checks the mailbox once: { fetched, alarms, reports, duplicates, ignored }. */
+  /**
+   * Checks the mailbox once: { fetched, alarms, reports, duplicates, ignored, failed }. A message
+   * that can't be read (failed) is passed over like any other mail that isn't a report, so the
+   * ones after it still come in and the next check doesn't meet it again.
+   */
   async function checkOnce() {
     const s = read();
     if (!s.mailbox) throw fail(400, "Give the mailbox's address first.");
@@ -126,7 +130,15 @@ function createSecurityMailbox({ store, reports, token, graphBase, fetchImpl = g
       ["$top", String(PAGE)],
       ["$select", "id,internetMessageId,subject,from,receivedDateTime,hasAttachments,body"]
     ].map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
-    const counts = { fetched: 0, alarms: 0, reports: 0, duplicates: 0, ignored: 0 };
+    const counts = { fetched: 0, alarms: 0, reports: 0, duplicates: 0, ignored: 0, failed: 0 };
+    const read1 = (message) => {
+      try {
+        return reports.ingest(message, { source: "mailbox" });
+      } catch (error) {
+        log.warn(`Security mail: a message received ${new Date(message.receivedAt).toISOString()} couldn't be read (${error.message}); passed over.`);
+        return { failed: true };
+      }
+    };
     let url = `${base}?${query}`;
     let latest = s.since || null;
     while (url && counts.fetched < MAX_PER_CHECK) {
@@ -143,13 +155,14 @@ function createSecurityMailbox({ store, reports, token, graphBase, fetchImpl = g
           text: html ? "" : m.body?.content || "",
           attachments: []
         };
-        let result = reports.ingest(message, { source: "mailbox" });
+        let result = read1(message);
         // Not an alarm notice: its attachments may hold a guard report.
-        if (!result.kind && m.hasAttachments) {
+        if (!result.kind && !result.failed && m.hasAttachments) {
           message.attachments = await attachmentsOf(base, m.id, accessToken);
-          result = reports.ingest(message, { source: "mailbox" });
+          result = read1(message);
         }
-        if (!result.kind) counts.ignored += 1;
+        if (result.failed) counts.failed += 1;
+        else if (!result.kind) counts.ignored += 1;
         else if (result.duplicate) counts.duplicates += 1;
         else if (result.kind === "alarm") counts.alarms += 1;
         else counts.reports += 1;

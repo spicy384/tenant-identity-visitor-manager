@@ -41,4 +41,15 @@ function escalate(amount, lease, n) {
   return cents / 100;
 }
 
-module.exports = { commencementOf, yearsBetween, anniversary, increasesOn, factorAfter, escalate };
+/**
+ * An amount to the cent, half a cent going up as it does in a spreadsheet. 101 sq ft at $2.675 is
+ * $270.175, which a computer holds as 270.17499999999995: taken to fifteen figures first (what a
+ * spreadsheet works to), it is $270.18 and not $270.17. null stays null.
+ */
+function roundMoney(n) {
+  if (n === null || n === undefined) return null;
+  const cents = Math.round(Number((Math.abs(n) * 100).toPrecision(15)));
+  return (n < 0 ? -cents : cents) / 100 || 0;
+}
+
+module.exports = { commencementOf, yearsBetween, anniversary, increasesOn, factorAfter, escalate, roundMoney };

@@ -30,7 +30,7 @@
  */
 const crypto = require("crypto");
 const { localParts } = require("./visit-clock");
-const { increasesOn, factorAfter, escalate } = require("./rent-terms");
+const { increasesOn, factorAfter, escalate, roundMoney } = require("./rent-terms");
 
 const MAX_PLAN_BYTES = 2.75 * 1024 * 1024;
 const REF_RE = /^[A-Za-z0-9_-]{16}$/;
@@ -61,7 +61,7 @@ function fail(status, message) {
   return error;
 }
 
-const money = (n) => (n === null || n === undefined ? null : Math.round(n * 100) / 100);
+const money = roundMoney;
 const text = (v, max) => {
   const s = String(v ?? "").trim().slice(0, max);
   return s || null;

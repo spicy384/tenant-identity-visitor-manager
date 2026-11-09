@@ -13,7 +13,7 @@ const { createAccess } = require("../access");
 const { createSites } = require("../sites");
 const { createDirectory } = require("../directory");
 const { createVisitors } = require("../visitors");
-const { createVisitClock, endOfDayFor, zonedTime } = require("../visit-clock");
+const { createVisitClock, endOfDayFor, zonedTime, monthsBefore } = require("../visit-clock");
 const { matchNames, isFullName, normalizeName } = require("../names");
 const { createKiosks, normalizeCode } = require("../kiosks");
 const { createFacilities } = require("../facilities");
@@ -122,6 +122,27 @@ check("retention: a checked visitor stays even with no visits", (() => {
   visitors.applyRetention(Date.parse("2020-01-01T00:00:00Z"));
   return Boolean(visitors.get(old.id));
 })());
+{
+  const before = (y, m, d, months) => new Date(monthsBefore(Date.UTC(y, m - 1, d, 12), months)).toISOString().slice(0, 10);
+  check("retention: a month before the 31st is the last day of a shorter month, not into the next", before(2026, 5, 31, 1) === "2026-04-30" && before(2026, 8, 31, 6) === "2026-02-28" && before(2024, 3, 31, 1) === "2024-02-29" && before(2026, 1, 15, 2) === "2025-11-15" && before(2026, 7, 31, 12) === "2025-07-31");
+  // Someone still expected is kept: a guest of an event to come isn't deleted with their last visit.
+  const old = (first) => {
+    const v = visitors.create({ firstName: first, lastName: "Kiosk" }, { source: "kiosk", verified: false });
+    visitors.checkIn({ visitorId: v.id, siteId: ldn.id, companyId: ldnCo.id, now: Date.parse("2025-01-10T10:00:00Z") });
+    visitors.checkOut(visitors.listVisits({ visitorId: v.id }).visits[0].id, { at: Date.parse("2025-01-10T11:00:00Z") });
+    return v;
+  };
+  const guest = old("Gina");
+  const gone = old("Gus");
+  const eventId = db.raw.prepare("INSERT INTO visitor_events (site_id, title, date, created_at, updated_at) VALUES (?, 'Open day', '2099-01-01', 0, 0)").run(ldn.id).lastInsertRowid;
+  db.raw.prepare("INSERT INTO event_guests (event_id, visitor_id, added_at) VALUES (?, ?, 0)").run(eventId, guest.id);
+  const willGo = visitors.retentionPreview(clock.retentionCutoff());
+  const went = visitors.applyRetention(clock.retentionCutoff());
+  check("retention: a guest of an event to come is kept", Boolean(visitors.get(guest.id)) && !visitors.get(gone.id) && went.visitors === 1, JSON.stringify(went));
+  check("retention: the preview says what is then deleted", willGo.visits === went.visits && willGo.visitors === went.visitors, JSON.stringify({ willGo, went }));
+  db.raw.prepare("DELETE FROM visitor_events WHERE id = ?").run(eventId);
+  visitors.remove(guest.id);
+}
 check("retention: months must be sensible", throwsStatus(() => clock.saveSettings({ retentionMonths: -1 }), 400) === true && throwsStatus(() => clock.saveSettings({ retentionMonths: "" }), 400) === true && throwsStatus(() => clock.saveSettings({ retentionMonths: null }), 400) === true && throwsStatus(() => clock.saveSettings({ kioskIdleSeconds: 2 }), 400) === true);
 
 // --- merge ------------------------------------------------------------------------------------

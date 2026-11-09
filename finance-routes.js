@@ -120,7 +120,9 @@ function createFinanceRoutes({ access, leases, billing, allotments, quickbooks, 
   /** A document, shown in the browser when it is a PDF or an image (checked when it came in), otherwise saved. */
   router.get("/api/lease-documents/:ref", seesLeases, (req, res) => {
     const file = leases.documentFile(str(req.params.ref, 64));
-    if (!file || !leases.get(file.leaseId, { scope: scope(req) })) throw fail(404, "No such document.");
+    const lease = file && leases.get(file.leaseId, { scope: scope(req) });
+    if (!lease) throw fail(404, "No such document.");
+    auditFrom(req, "lease.document_open", lease.reference || `#${lease.id}`, `${lease.companyName}: ${file.name}`);
     res.set({
       "Content-Type": file.type,
       "Content-Length": String(file.data.length),

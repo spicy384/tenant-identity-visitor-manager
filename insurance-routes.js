@@ -89,7 +89,9 @@ function createInsuranceRoutes({ access, insurance, directory, auditFrom }) {
   /** A certificate's copy, shown in the browser: only a PDF or an image, checked when it came in, and taken as nothing else. */
   router.get("/api/insurance/files/:ref", seesInsurance, (req, res) => {
     const file = insurance.fileByRef(str(req.params.ref, 64));
-    if (!file || !directory.getCompany(file.companyId, { sites: req.ctx.sites })) throw fail(404, "No such file.");
+    const company = file && directory.getCompany(file.companyId, { sites: req.ctx.sites });
+    if (!company) throw fail(404, "No such file.");
+    auditFrom(req, "insurance.file_open", company.name, file.name);
     res.set({
       "Content-Type": file.type,
       "Content-Length": String(file.data.length),

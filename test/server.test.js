@@ -271,6 +271,10 @@ async function main() {
   r = await manager.put(`/api/people/${jane.id}`, { jobTitle: "Managing Director", custom: { badge_number: "B-78" } });
   check("roles: a manager changes a person", r.status === 200 && r.data.person.jobTitle === "Managing Director" && r.data.person.custom.badge_number === "B-78");
   check("roles: only administrators delete", (await manager.del(`/api/people/${jane.id}`)).status === 403);
+  r = await manager.put(`/api/people/${jane.id}`, { lastName: "Renamed" });
+  check("audit: a change of name says who they were and now are", r.status === 200 && (await admin.get("/api/audit?action=person.update")).data.entries.some((e) => e.detail.startsWith("lastName; name: ") && e.detail.endsWith(`-> "${jane.firstName} Renamed"`)));
+  await manager.put(`/api/people/${jane.id}`, { lastName: jane.lastName });
+  check("audit: a change that leaves who they are says only what was touched", (await admin.get("/api/audit?action=person.update")).data.entries.some((e) => e.detail === "jobTitle, custom.badge_number"));
   check("roles: settings are for administrators (managers only add custom fields)", (await manager.get("/api/field-access")).status === 403 && (await manager.post("/api/sites", { name: "Nope" })).status === 403 && (await manager.get("/api/fields")).status === 200);
 
   // --- site limits --------------------------------------------------------------------------------------------
@@ -395,6 +399,17 @@ async function main() {
   r = await client().post("/api/auth/login", { username: "fran", password: pw.frontdesk });
   f = await failures();
   check("failed: the right password while locked is recorded too", r.status === 429 && /right password, but the account is locked/.test(f[0]?.detail || ""));
+  {
+    // Every change to the grid is logged, over as many entries as they take (it used to be the first twenty).
+    // (Read-only cells, set to what they are already: nothing changes for anyone.)
+    const grid = (await admin.get("/api/field-access")).data;
+    const cells = [];
+    for (const [entity, fields] of Object.entries(grid.entities)) for (const f of fields) for (const role of grid.roles) if (f.access[role.id] === "view") cells.push({ roleId: role.id, entity, field: f.key, access: "view" });
+    const saved = await admin.put("/api/field-access", { changes: cells });
+    const logged = (await admin.get("/api/audit?action=field_access.update&limit=500")).data.entries.filter((e) => /part [0-9]+ of [0-9]+/.test(e.target));
+    const said = logged.flatMap((e) => e.detail.split("; "));
+    check("audit: every cell of a grid change is logged, over several entries", saved.status === 200 && cells.length > 100 && logged.length > 1 && said.length === cells.length && cells.every((c) => said.includes(c.roleId + " " + c.entity + "." + c.field + "=" + c.access)), saved.status + " " + cells.length + " " + said.length + " " + (saved.data.error || ""));
+  }
   check("failed: among the sign-ins, filtered by user", (await admin.get("/api/audit?signins=only&username=fran&limit=500")).data.entries.filter((e) => e.action === "auth.login_failed").length === 6);
 }
 

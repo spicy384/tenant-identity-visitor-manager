@@ -71,10 +71,16 @@ function endOfDayFor(checkedInAt, endOfDay, tz) {
   return cut;
 }
 
-/** The instant `months` calendar months before `now` (UTC calendar). */
+/**
+ * The instant `months` calendar months before `now` (UTC calendar): the same day of that month,
+ * or its last day when it is shorter (a month before 31 May is 30 April, not 1 May).
+ */
 function monthsBefore(now, months) {
   const d = new Date(now);
+  const day = d.getUTCDate();
+  d.setUTCDate(1);
   d.setUTCMonth(d.getUTCMonth() - months);
+  d.setUTCDate(Math.min(day, new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate()));
   return d.getTime();
 }
 

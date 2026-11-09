@@ -111,7 +111,8 @@ async function openLease(id, onChange = () => {}) {
       fact("Next increase", nextYear ? `${dateText(nextYear.from)}: ${nextYear.rate !== null ? `${fmtRate(nextYear.rate)}, ` : ""}${nextYear.monthly === null ? "" : `${fmtMoney(nextYear.monthly)}/month`}` : null),
       fact("Deposit", lease.deposit ? fmtMoney(lease.deposit) : null),
       fact("Space", lease.sqft ? fmtSqft(lease.sqft) : null),
-      fact("Invoiced", lease.invoiced.length ? lease.invoiced.map((p) => monthText(p)).join(", ") : "Not yet"),
+      fact("Invoiced", [lease.invoiced.length ? lease.invoiced.map((p) => monthText(p)).join(", ") : null,
+        lease.invoicedBefore?.length ? `${lease.invoicedBefore.map((p) => monthText(p)).join(", ")} on the lease its room was in before` : null].filter(Boolean).join("; ") || "Not yet"),
       fact("Notes", lease.notes ? h("span", { class: "pre", text: lease.notes }) : null)),
     h("h4", { text: "Offices" }),
     lease.offices.length

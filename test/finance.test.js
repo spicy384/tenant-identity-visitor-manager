@@ -731,6 +731,52 @@ async function main() {
   check("shared room: each company gets its own invoice for its part", sharedDraft(pied)?.total === 1800 && sharedDraft(aviato)?.total === 1200, JSON.stringify(r.data.invoices));
   }
   check("documents: nor removed", (await elsewhereManager.del(`/api/lease-documents/${harborDoc.id}`)).status === 404 && (await manager.raw(`/api/lease-documents/${harborDoc.ref}`)).status === 200);
+
+  // --- an office that leaves an invoiced lease isn't billed for those months again --------------------------
+  const splitCo = await mk("Splitsville");
+  const s1 = await office("S1", 1000);
+  const s2 = await office("S2", 500);
+  const bothLease = (await manager.post("/api/leases", { companyId: splitCo.id, officeIds: [s1.id, s2.id], startDate: "2022-01-01" })).data.lease;
+  const makeMonth = async (period) => (await finance.post("/api/invoices/generate", { period, companyIds: [splitCo.id], issueDate: period + "-01" })).data;
+  const june = (await makeMonth("2022-06")).invoices[0];
+  await finance.post("/api/invoices/" + june.id + "/issue", {});
+  const s2Office = (await manager.get("/api/offices/" + s2.id)).data.office;
+  r = await manager.put("/api/office-assignments/" + s2Office.assignments.find((a) => a.companyId === splitCo.id).id, { endDate: "2022-06-30" });
+  const itsOwn = (await manager.get("/api/leases")).data.leases.find((l) => l.companyId === splitCo.id && l.id !== bothLease.id);
+  check("split: the office that left has a lease of its own, told what was invoiced with it in", r.status === 200 && itsOwn && itsOwn.invoicedBefore.join() === "2022-06" && itsOwn.invoiced.length === 0, JSON.stringify(itsOwn));
+  r = await makeMonth("2022-06");
+  check("split: that month isn't billed a second time", r.invoices.length === 0, JSON.stringify(r));
+  r = await makeMonth("2022-05");
+  check("split: a month nobody invoiced is billed for both", r.invoices.length === 1 && r.invoices[0].total === (await rentOf(bothLease.id, "2022-05")) + (await rentOf(itsOwn.id, "2022-05")) && r.invoices[0].total === 3000, JSON.stringify(r.invoices));
+  await finance.post("/api/invoices/" + june.id + "/void", {});
+  r = await makeMonth("2022-06");
+  check("split: once that invoice is void, the month is owed again, by both", r.invoices.length === 1 && r.invoices[0].total === 3000, JSON.stringify(r.invoices));
+
+  // --- the state asked for is found before the row limit ----------------------------------------------
+  const everything = (await finance.get("/api/invoices?limit=5000")).data.invoices;
+  const newestOf = async (state) => (await finance.get("/api/invoices?limit=1&state=" + state)).data.invoices[0]?.id ?? null;
+  const isState = { unpaid: (i) => ["open", "partial", "overdue"].includes(i.state) };
+  const misses = [];
+  for (const state of ["draft", "void", "paid", "overdue", "partial", "open", "unpaid"]) {
+    const want = everything.find(isState[state] || ((i) => i.state === state))?.id ?? null;
+    if ((await newestOf(state)) !== want) misses.push(state);
+  }
+  check("invoices: a state's invoices are found however many newer ones there are", everything.some((i) => i.state === "overdue") && misses.length === 0, misses.join());
+  check("invoices: all of a state, and none of one there isn't", (await finance.get("/api/invoices?state=overdue")).data.invoices.length === everything.filter((i) => i.state === "overdue").length && (await finance.get("/api/invoices?state=nonsense")).data.invoices.length === 0);
+
+  // --- cents as a spreadsheet rounds them -----------------------------------------------------------------
+  const { roundMoney } = require("../rent-terms");
+  check("cents: half a cent goes up, though the sum falls a hair short of it", roundMoney(101 * 2.675) === 270.18 && roundMoney((1000.29 * 15) / 30) === 500.15 && roundMoney(1024.09 * 0.5) === 512.05 && roundMoney(0.1 + 0.2) === 0.3);
+  check("cents: nothing stays nothing, and less than nothing rounds away from it", roundMoney(null) === null && roundMoney(0) === 0 && roundMoney(-2.675) === -2.68);
+
+  // --- opening a tenant's file is in the audit log --------------------------------------------------------
+  check("audit: a lease document opened", (await admin.get("/api/audit?action=lease.document_open&limit=100")).data.entries.some((e) => /Lease agreement\.pdf/.test(e.detail) && e.username === "fiona"));
+  check("audit: a certificate's copy opened", (await admin.get("/api/audit?action=insurance.file_open")).data.entries.length >= 1);
+
+  // --- a session cookie is looked up only as a session ----------------------------------------------------
+  r = await fetch(BASE + "/api/leases", { headers: { cookie: "ivm_session=__proto__" } });
+  const afterOdd = await manager.raw("/api/lease-documents/" + harborDoc.ref);
+  check("session: a cookie naming what every object has signs no one in, and leaves nothing behind", r.status === 401 && afterOdd.status === 200 && !afterOdd.headers.has("lastseenat"));
 }
 
 main()

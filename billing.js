@@ -371,9 +371,28 @@ function createBilling({ db, leases, directory, now = Date.now }) {
    * open, partial and overdue), for a company or month, issued between two dates, or matching
    * words (number, company).
    */
-  function listInvoices({ companies = null, state = null, companyId = null, period = null, from = null, to = null, q = "", limit = 500 } = {}) {
+  function listInvoices({ companies = null, state = null, companyId = null, period = null, from = null, to = null, q = "", limit = 500, all = false } = {}) {
     const where = [];
     const params = [];
+    const day = today();
+    // The state is asked of the database, before the row limit: the oldest overdue invoice is the
+    // one most wanted, and the newest rows of every state would crowd it out. (stateOf below still
+    // has the last word on each row.)
+    if (state) {
+      const PAID = "(SELECT coalesce(sum(p.amount), 0) FROM payments p WHERE p.invoice_id = v.id)";
+      const owed = `v.status = 'issued' AND round(v.total - ${PAID}, 2) > 0.004`;
+      const sql = {
+        draft: "v.status = 'draft'",
+        void: "v.status = 'void'",
+        paid: `v.status = 'issued' AND NOT (round(v.total - ${PAID}, 2) > 0.004)`,
+        unpaid: owed,
+        overdue: `${owed} AND v.due_date < ?`,
+        partial: `${owed} AND coalesce(v.due_date, '9999') >= ? AND round(${PAID}, 2) > 0`,
+        open: `${owed} AND coalesce(v.due_date, '9999') >= ? AND NOT (round(${PAID}, 2) > 0)`
+      }[state];
+      where.push(sql ? `(${sql})` : "0");
+      if (sql && sql.includes("?")) params.push(day);
+    }
     companyScope(companies, "v.company_id", where, params);
     if (companyId) { where.push("v.company_id = ?"); params.push(Number(companyId)); }
     if (period) { where.push("v.period = ?"); params.push(periodInput(period)); }
@@ -384,8 +403,7 @@ function createBilling({ db, leases, directory, now = Date.now }) {
       where.push("(coalesce(v.number, '') LIKE ? ESCAPE '\\' OR coalesce(co.name, v.company_name) LIKE ? ESCAPE '\\')");
       params.push(p, p);
     }
-    const day = today();
-    const rows = raw.prepare(`${INVOICE_SELECT}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY v.issue_date DESC, v.id DESC LIMIT ?`).all(...params, Math.min(Number(limit) || 500, 5000))
+    const rows = raw.prepare(`${INVOICE_SELECT}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY v.issue_date DESC, v.id DESC${all ? "" : " LIMIT ?"}`).all(...params, ...(all ? [] : [Math.min(Number(limit) || 500, 5000)]))
       .map((r) => invoiceRow(r, { day }));
     const wanted = state === "unpaid" ? ["open", "partial", "overdue"] : state ? [state] : null;
     return wanted ? rows.filter((i) => wanted.includes(i.state)) : rows;
@@ -400,8 +418,12 @@ function createBilling({ db, leases, directory, now = Date.now }) {
     return (raw.prepare("SELECT max(position) AS p FROM invoice_lines WHERE invoice_id = ?").get(invoiceId).p ?? -1) + 1;
   }
 
-  /** Whether a lease's month is on an invoice that isn't void. */
-  const rentInvoiced = (leaseId, period) => Boolean(raw.prepare("SELECT 1 FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id WHERE l.lease_id = ? AND l.period = ? AND i.status <> 'void'").get(leaseId, period));
+  /**
+   * Whether a lease's month is on an invoice that isn't void: its own, or (for a lease made by an
+   * office leaving another) the invoice of the lease its office was in for that month.
+   */
+  const rentInvoiced = (leaseId, period) => Boolean(raw.prepare(`SELECT 1 FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id WHERE i.status <> 'void' AND l.period = ?
+    AND (l.lease_id = ? OR l.lease_id IN (SELECT by_lease_id FROM lease_covered_periods WHERE lease_id = ? AND period = ?))`).get(period, leaseId, leaseId, period));
 
   function putRentLine(invoiceId, rent) {
     const s = settings();
@@ -645,7 +667,7 @@ function createBilling({ db, leases, directory, now = Date.now }) {
   function aging({ companies = null } = {}) {
     const day = today();
     const by = new Map();
-    for (const inv of listInvoices({ companies, state: "unpaid", limit: 5000 })) {
+    for (const inv of listInvoices({ companies, state: "unpaid", all: true })) {
       if (!by.has(inv.companyId)) by.set(inv.companyId, { companyId: inv.companyId, companyName: inv.companyName, current: 0, d30: 0, d60: 0, d90: 0, over90: 0, total: 0, invoices: 0, oldestDue: inv.dueDate });
       const row = by.get(inv.companyId);
       const late = inv.dueDate < day ? daysBetween(inv.dueDate, day) : 0;

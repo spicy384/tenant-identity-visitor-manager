@@ -586,6 +586,16 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
 CREATE INDEX IF NOT EXISTS invoice_lines_invoice ON invoice_lines(invoice_id);
 CREATE INDEX IF NOT EXISTS invoice_lines_lease ON invoice_lines(lease_id, period);
 
+-- A lease made by an office leaving a lease of several (its dates changed in Rooms): the months
+-- that lease (by_lease_id) had invoiced with the office in it, which are not billed again on
+-- this one for as long as those invoices stand.
+CREATE TABLE IF NOT EXISTS lease_covered_periods (
+  lease_id INTEGER NOT NULL REFERENCES leases(id) ON DELETE CASCADE,
+  period TEXT NOT NULL,
+  by_lease_id INTEGER NOT NULL REFERENCES leases(id) ON DELETE CASCADE,
+  PRIMARY KEY (lease_id, period)
+);
+
 -- Payments against issued invoices; from QuickBooks too (qbo_id) when it is connected.
 CREATE TABLE IF NOT EXISTS payments (
   id INTEGER PRIMARY KEY,

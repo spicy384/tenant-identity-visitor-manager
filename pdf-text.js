@@ -195,6 +195,11 @@ function skipWs(buf, pos) {
 // compressed bomb in an emailed PDF can't use up the server's memory.
 const MAX_STREAM_BYTES = 16 * 1024 * 1024;
 const MAX_DECODED_BYTES = 64 * 1024 * 1024;
+// Nor can one keep the server busy: a file gets this many steps (operators run, strings shown,
+// page-tree nodes visited) in all, however its pages and forms point at each other; and a
+// font's character map this many entries. A real report uses a small fraction of either.
+const MAX_WORK = 5000000;
+const MAX_CMAP = 300000;
 
 /** budget: { left } bytes the whole file may still decode to. */
 function decode(dict, data, budget = { left: MAX_DECODED_BYTES }) {
@@ -234,7 +239,14 @@ function openPdf(buf) {
     if (!data) continue;
     const lex = new Lexer(data);
     const pairs = [];
-    for (let i = 0; i < o.value.N; i += 1) pairs.push([lex.token(), lex.token()]);
+    // The count is the file's own word: never more pairs than the stream has room for (a number,
+    // a space, a number), and none past its end.
+    const count = Math.min(Number(o.value.N) || 0, Math.floor(data.length / 2));
+    for (let i = 0; i < count; i += 1) {
+      const num = lex.token();
+      if (num === null) break;
+      pairs.push([num, lex.token()]);
+    }
     for (const [num, off] of pairs) {
       if (objects.has(num)) continue;
       try { objects.set(num, { value: new Lexer(data, o.value.First + off).object(), stream: null }); } catch { /* skip */ }
@@ -262,19 +274,41 @@ function openPdf(buf) {
     root = get(xref?.Root);
   }
   if (!root) throw fail(400, "That PDF has no pages that can be read.");
-  return { get, streamOf, root };
+  return { get, streamOf, root, work: { left: MAX_WORK } };
+}
+
+/** Counts a step of reading against the file's allowance; past it the file is refused. */
+function spend(pdf) {
+  pdf.work.left -= 1;
+  if (pdf.work.left < 0) throw fail(400, "That PDF is too large to read.");
 }
 
 // --- fonts -----------------------------------------------------------------------------------
+
+/** The pieces of `text` between each `open` and the `close` after it, in one pass over it. */
+function between(text, open, close) {
+  const out = [];
+  for (let i = 0; ;) {
+    const a = text.indexOf(open, i);
+    if (a < 0) break;
+    const b = text.indexOf(close, a + open.length);
+    if (b < 0) break;
+    out.push(text.slice(a + open.length, b));
+    i = b + close.length;
+  }
+  return out;
+}
 
 /** A ToUnicode CMap: { bytes (code length), map (code -> text) }. */
 function parseCMap(data) {
   const text = data.toString("latin1");
   const map = new Map();
   let bytes = 1;
-  const range = /begincodespacerange([\s\S]*?)endcodespacerange/.exec(text);
-  if (range) {
-    const first = /<([0-9a-f]+)>/i.exec(range[1]);
+  let entries = 0;
+  const put = (code, value) => { entries += 1; map.set(code, value); };
+  const range = between(text, "begincodespacerange", "endcodespacerange")[0];
+  if (range !== undefined) {
+    const first = /<([0-9a-f]+)>/i.exec(range);
     if (first) bytes = Math.max(1, first[1].length / 2);
   }
   const utf16 = (hex) => {
@@ -282,26 +316,30 @@ function parseCMap(data) {
     for (let i = 0; i + 1 < b.length; i += 2) { const t = b[i]; b[i] = b[i + 1]; b[i + 1] = t; }
     return b.toString("utf16le");
   };
-  for (const block of text.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)) {
-    for (const m of block[1].matchAll(/<([0-9a-f]+)>\s*<([0-9a-f]*)>/gi)) map.set(parseInt(m[1], 16), utf16(m[2]));
+  for (const block of between(text, "beginbfchar", "endbfchar")) {
+    for (const m of block.matchAll(/<([0-9a-f]+)>\s*<([0-9a-f]*)>/gi)) {
+      if (entries >= MAX_CMAP) break;
+      put(parseInt(m[1], 16), utf16(m[2]));
+    }
   }
-  for (const block of text.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)) {
-    for (const m of block[1].matchAll(/<([0-9a-f]+)>\s*<([0-9a-f]+)>\s*(<[0-9a-f]*>|\[[^\]]*\])/gi)) {
+  for (const block of between(text, "beginbfrange", "endbfrange")) {
+    for (const m of block.matchAll(/<([0-9a-f]+)>\s*<([0-9a-f]+)>\s*(<[0-9a-f]*>|\[[^\]]*\])/gi)) {
+      if (entries >= MAX_CMAP) break;
       const lo = parseInt(m[1], 16);
       const hi = parseInt(m[2], 16);
       if (hi - lo > 65535) continue;
       if (m[3].startsWith("[")) {
         const list = [...m[3].matchAll(/<([0-9a-f]*)>/gi)].map((x) => x[1]);
-        for (let c = lo; c <= hi && c - lo < list.length; c += 1) map.set(c, utf16(list[c - lo]));
+        for (let c = lo; c <= hi && c - lo < list.length && entries < MAX_CMAP; c += 1) put(c, utf16(list[c - lo]));
       } else {
         const start = m[3].slice(1, -1);
         const base = Buffer.from(start.length % 4 ? start.padStart(Math.ceil(start.length / 4) * 4, "0") : start, "hex");
-        for (let c = lo; c <= hi; c += 1) {
+        for (let c = lo; c <= hi && entries < MAX_CMAP; c += 1) {
           const b = Buffer.from(base);
           // The last UTF-16 unit counts up through the range.
           const last = b.readUInt16BE(b.length - 2) + (c - lo);
           b.writeUInt16BE(last & 0xffff, b.length - 2);
-          map.set(c, utf16(b.toString("hex")));
+          put(c, utf16(b.toString("hex")));
         }
       }
     }
@@ -392,6 +430,7 @@ function runContent(pdf, data, resources, ctm, items, fonts, depth = 0) {
   let hScale = 1;
   // Shows a string: one item, its start and end on the page; the pen moves on past it.
   const show = (buf) => {
+    spend(pdf);
     if (!font || !Buffer.isBuffer(buf)) return;
     const start = mul(tm, gs.ctm);
     let text = "";
@@ -412,6 +451,7 @@ function runContent(pdf, data, resources, ctm, items, fonts, depth = 0) {
   for (;;) {
     const tok = lex.token();
     if (tok === null) break;
+    spend(pdf);
     if (!(tok instanceof Op)) {
       stack.push(tok === "[" || tok === "<<" ? lex.object(tok) : tok);
       continue;
@@ -469,6 +509,7 @@ function pagesOf(pdf) {
   const walk = (ref, inherited, depth) => {
     const node = pdf.get(ref);
     if (!node || depth > 32) return;
+    spend(pdf);
     const resources = node.Resources || inherited.resources;
     const box = node.MediaBox || inherited.box;
     if (Array.isArray(node.Kids)) for (const kid of node.Kids) walk(kid, { resources, box }, depth + 1);
@@ -507,7 +548,9 @@ function pdfLines(pages, { tolerance = 2, columns = [] } = {}) {
     const sorted = [...page.items].sort((a, b) => b.y - a.y || a.x - b.x);
     const lines = [];
     for (const it of sorted) {
-      const line = lines.find((l) => Math.abs(l.y - it.y) <= tolerance);
+      // Top to bottom, so its line (the highest within reach) is among the last few begun.
+      let line = null;
+      for (let i = lines.length - 1; i >= 0 && Math.abs(lines[i].y - it.y) <= tolerance; i -= 1) line = lines[i];
       if (line) line.runs.push(it);
       else lines.push({ y: it.y, runs: [it] });
     }

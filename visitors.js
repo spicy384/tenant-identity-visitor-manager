@@ -700,11 +700,22 @@ function createVisitors({ db, fields }) {
 
   // --- retention -----------------------------------------------------------------------------
 
+  // Visitors who registered themselves at a kiosk and were never checked by staff go with their
+  // last visit, unless something still waits on them: a badge out or kept for them, a clearance
+  // request, or an event they are a guest of (from the day given on). The preview and the
+  // deleting use the one rule.
+  const LET_GO = `v.verified = 0 AND v.source = 'kiosk' AND v.reserved_badge_id IS NULL
+    AND NOT EXISTS (SELECT 1 FROM badge_assignments b WHERE b.holder_kind = 'visitor' AND b.holder_id = v.id AND b.returned_at IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM clearance_requests q WHERE q.holder_kind = 'visitor' AND q.holder_id = v.id AND q.status = 'open')
+    AND NOT EXISTS (SELECT 1 FROM event_guests g JOIN visitor_events e ON e.id = g.event_id WHERE g.visitor_id = v.id AND e.date >= ?)`;
+  // Yesterday (UTC), so an event today anywhere in the world still counts as to come.
+  const eventsFrom = (at) => new Date(at - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
   /** What deleting visits that started before `cutoff` would remove. */
-  function retentionPreview(cutoff) {
+  function retentionPreview(cutoff, { now = Date.now() } = {}) {
     const visits = raw.prepare("SELECT count(*) AS n FROM visits WHERE checked_in_at < ? AND checked_out_at IS NOT NULL").get(cutoff).n;
-    const visitors = raw.prepare(`SELECT count(*) AS n FROM visitors v WHERE v.verified = 0 AND v.source = 'kiosk'
-      AND NOT EXISTS (SELECT 1 FROM visits x WHERE x.visitor_id = v.id AND NOT (x.checked_in_at < ? AND x.checked_out_at IS NOT NULL))`).get(cutoff).n;
+    const visitors = raw.prepare(`SELECT count(*) AS n FROM visitors v WHERE ${LET_GO}
+      AND NOT EXISTS (SELECT 1 FROM visits x WHERE x.visitor_id = v.id AND NOT (x.checked_in_at < ? AND x.checked_out_at IS NOT NULL))`).get(eventsFrom(now), cutoff).n;
     return { visits, visitors };
   }
 
@@ -713,14 +724,12 @@ function createVisitors({ db, fields }) {
    * themselves at a kiosk, were never checked by staff, and have no visits left.
    * Open visits are never deleted.
    */
-  function applyRetention(cutoff) {
+  function applyRetention(cutoff, { now = Date.now() } = {}) {
     let visits = 0;
     let visitors = 0;
     db.transaction(() => {
       visits = raw.prepare("DELETE FROM visits WHERE checked_in_at < ? AND checked_out_at IS NOT NULL").run(cutoff).changes;
-      const orphans = raw.prepare(`SELECT id FROM visitors v WHERE v.verified = 0 AND v.source = 'kiosk' AND NOT EXISTS (SELECT 1 FROM visits x WHERE x.visitor_id = v.id)
-        AND NOT EXISTS (SELECT 1 FROM badge_assignments b WHERE b.holder_kind = 'visitor' AND b.holder_id = v.id AND b.returned_at IS NULL)
-        AND NOT EXISTS (SELECT 1 FROM clearance_requests q WHERE q.holder_kind = 'visitor' AND q.holder_id = v.id AND q.status = 'open')`).all().map((r) => r.id);
+      const orphans = raw.prepare(`SELECT id FROM visitors v WHERE ${LET_GO} AND NOT EXISTS (SELECT 1 FROM visits x WHERE x.visitor_id = v.id)`).all(eventsFrom(now)).map((r) => r.id);
       for (const id of orphans) fields.forgetRecord("visitor", id);
       if (orphans.length) visitors = raw.prepare(`DELETE FROM visitors WHERE id IN (${inList(orphans)})`).run(...orphans).changes;
       raw.prepare("UPDATE visitors SET last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = visitors.id)").run();

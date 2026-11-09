@@ -400,7 +400,7 @@ async function settingsSecurityMail(body) {
       h("tbody", {}, m.log.map((x) => h("tr", {},
         h("td", { class: "nowrap", text: fmtDateTime(x.at) }),
         h("td", { text: x.by === "schedule" ? "On schedule" : x.by }),
-        h("td", { class: x.ok ? "small-text" : "small-text bad-text", text: x.ok ? `${x.fetched} emails: ${x.alarms} alarms, ${x.reports} guard reports${x.duplicates ? `, ${x.duplicates} already here` : ""}${x.ignored ? `, ${x.ignored} other mail passed over` : ""}${x.deleted ? `; ${x.deleted} past keeping deleted` : ""}` : x.error })))))) : null);
+        h("td", { class: x.ok ? "small-text" : "small-text bad-text", text: x.ok ? `${x.fetched} emails: ${x.alarms} alarms, ${x.reports} guard reports${x.duplicates ? `, ${x.duplicates} already here` : ""}${x.ignored ? `, ${x.ignored} other mail passed over` : ""}${x.failed ? `, ${x.failed} couldn't be read` : ""}${x.deleted ? `; ${x.deleted} past keeping deleted` : ""}` : x.error })))))) : null);
 
   const where = h("div", { class: "stack" }, securityAccountsPanel(sources.filter((x) => x.kind === "alarm")), guardSitesPanel(sources.filter((x) => x.kind === "guard")));
 

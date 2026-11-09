@@ -122,7 +122,10 @@ The design and decisions are in [PLAN.md](PLAN.md).
   - To renew without a gap: make a new certificate, add it in Entra, test it, choose **Use this
     one**, then remove the old one here and in Entra. Up to 5 can be kept.
 - **CSV import and export**, an **encrypted backup download** and an **audit log** that
-  records which fields changed, never their values. Settings > Audit log filters it by user,
+  says who a person, visitor or company was and now is when a change renames them or moves them
+  (name, company, organization, email), lists every cell of a field-access change, and notes each
+  time a lease document, a certificate's copy or a guard report's PDF is opened. For every
+  other field it records which changed, never the value. Settings > Audit log filters it by user,
   action (or a group of them, such as every badge action), sign-ins (only, or none), the start
   of an IP address, and dates; click a user or an address in it to see only theirs.
   Sign-ins include failed ones (`auth.login_failed`): a wrong password (and when it locks the
@@ -214,7 +217,10 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **End of day**: at each site's end-of-day time, in its own time zone, anyone still checked
   in is checked out automatically, at that time, even if the server was down then.
 - **Retention**: Settings > Visits sets how many months of visits to keep (off by default),
-  with a count of what a change would delete before you save it.
+  with a count of what a change would delete before you save it. A visitor who registered at
+  a kiosk and was never checked by staff goes with their last visit, unless something still
+  waits on them: a badge out or kept for them, a clearance request, or an event to come that
+  they are a guest of.
 
 ## Badges and clearances
 
@@ -359,7 +365,9 @@ Guard reports**.
 - **From the mailbox.** Under Settings > Security mail an administrator gives the mailbox's
   address and how often to check it (every 5 minutes to start with). The app reads it through
   Microsoft Graph as itself, with the app registration under Settings > Microsoft Entra ID, and
-  only reads: nothing is moved, marked or deleted. Other mail in the mailbox is passed over. The
+  only reads: nothing is moved, marked or deleted. Other mail in the mailbox is passed over, and so
+  is a message that can't be read (the check says how many, and carries on with the rest). An
+  attached PDF is read within limits, so an odd one is refused rather than tying up the server. The
   registration needs Microsoft Graph's Mail.Read application permission (with admin consent),
   limited to that mailbox by an Exchange application access policy; the page shows the
   PowerShell command with the app's client ID filled in. It says how each check went (how many
@@ -470,7 +478,8 @@ Home.
   years ago is entered with the rent it began with: the form works out what that comes to today,
   and the lease shows its rent and rate now, its next increase and its rent by the month and the
   year, year by year. Each office's rent is rounded to the cent every year and the lease's rent is
-  their sum, so it agrees to the cent with a spreadsheet that does the same. Rooms,
+  their sum, so it agrees to the cent with a spreadsheet that does the same (half a cent goes up,
+  as it does there: 101 sq ft at $2.675 is $270.18). Rooms,
   a company's page, Home and invoices all use that same figure. An office let for a fixed amount
   keeps it (with the increases) unless the lease gives it a custom rate, and an office in a lease with a fixed rent shows its share of
   that rent, by size. A lease commences on its start unless you give another commencement
@@ -480,7 +489,8 @@ Home.
   a lease of their own (the ones assigned together share one); the assignments made before
   leases became leases the same way. Moving one office of several to other dates on Rooms gives
   it a lease of its own, with the same rates and yearly increase (not for a fixed rent: change
-  that on the lease). A lease that has been
+  that on the lease). The months already invoiced with that office in the lease it left aren't
+  billed again on its own lease, which lists them, unless that invoice is voided. A lease that has been
   invoiced can't be deleted, only ended; Home shows the leases ending within 90 days. **A room shared
   between companies** has a lease for each, giving its **share of the room** (50%, say). Each company
   pays that part of the room's rent, with its own rates and yearly increase, and is invoiced for it

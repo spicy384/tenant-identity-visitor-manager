@@ -127,6 +127,12 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
 
   // --- sessions ------------------------------------------------------------
 
+  // A session's id is 32 random bytes in hex. The cookie's value is looked up among the sessions
+  // only when it has that shape, and only as a session of its own: never a name every object
+  // answers to ("__proto__", "constructor").
+  const SESSION_ID = /^[0-9a-f]{64}$/;
+  const sessionIn = (sessions, id) => (typeof id === "string" && SESSION_ID.test(id) && Object.hasOwn(sessions, id) ? sessions[id] : null);
+
   function pruneSessions(sessions) {
     const now = Date.now();
     let changed = false;
@@ -166,7 +172,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
 
     const sessions = loadSessions();
     const pruned = pruneSessions(sessions);
-    const session = sessions[id];
+    const session = sessionIn(sessions, id);
 
     if (!session) {
       if (pruned) {
@@ -188,7 +194,7 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
 
   function destroySession(id) {
     const sessions = loadSessions();
-    if (sessions[id]) {
+    if (sessionIn(sessions, id)) {
       delete sessions[id];
       saveSessions(sessions);
     }

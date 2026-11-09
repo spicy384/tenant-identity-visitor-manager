@@ -46,6 +46,7 @@ const { createAuth } = require("./auth-routes");
 const { createEntra } = require("./entra");
 const { resolveTlsOptions } = require("./tls-setup");
 const { parseCsvObjects, toCsv } = require("./csv");
+const { identityChanges, chunks, PERSON_IDENTITY, COMPANY_IDENTITY } = require("./audit-detail");
 const { ENTITIES } = require("./catalog");
 const pkg = require("./package.json");
 
@@ -502,9 +503,10 @@ app.post("/api/companies", editDir, (req, res) => {
 
 app.put("/api/companies/:id", editDir, (req, res) => {
   const id = positiveInt(req.params.id);
-  if (!directory.getCompany(id, { sites: req.ctx.sites })) throw fail(404, "No such company.");
+  const before = directory.getCompany(id, { sites: req.ctx.sites });
+  if (!before) throw fail(404, "No such company.");
   const record = directory.updateCompany(id, req.body || {}, writePlan(req.ctx, "company", req.body, id));
-  auditFrom(req, "company.update", record.name, changedKeys(req.body));
+  auditFrom(req, "company.update", record.name, changeWords(req.body, before, record, COMPANY_IDENTITY));
   res.json({ ok: true, company: recordOut(req.ctx, "company", record) });
 });
 
@@ -537,6 +539,9 @@ function changedKeys(body) {
   return [...keys, ...custom].join(", ") || null;
 }
 
+/** The fields a change touched and, when it changed who the record is, who it was and now is. */
+const changeWords = (body, before, after, identity) => [changedKeys(body), identityChanges(before, after, identity)].filter(Boolean).join("; ") || null;
+
 // --- people --------------------------------------------------------------------------------
 
 app.get("/api/people", readDir, (req, res) => {
@@ -568,9 +573,10 @@ app.post("/api/people", editDir, (req, res) => {
 
 app.put("/api/people/:id", editDir, (req, res) => {
   const id = positiveInt(req.params.id);
-  if (!directory.getPerson(id, { sites: req.ctx.sites })) throw fail(404, "No such person.");
+  const before = directory.getPerson(id, { sites: req.ctx.sites });
+  if (!before) throw fail(404, "No such person.");
   const record = directory.updatePerson(id, req.body || {}, writePlan(req.ctx, "person", req.body, id));
-  auditFrom(req, "person.update", `${record.firstName} ${record.lastName}`, changedKeys(req.body));
+  auditFrom(req, "person.update", `${record.firstName} ${record.lastName}`, changeWords(req.body, before, record, PERSON_IDENTITY));
   res.json({ ok: true, person: recordOut(req.ctx, "person", record) });
 });
 
@@ -644,12 +650,18 @@ app.post("/api/people/bulk", editDir, (req, res) => {
   const ids = idsFrom(req.body);
   const patch = bulkPatch(req.body, ["firstName", "lastName", "preferredName"]);
   const names = ids.map((id) => { const p = directory.getPerson(id, { sites: req.ctx.sites }); return p ? personName(p) : `Person ${id}`; });
+  // Whose company or email it changed, each named: all or none are changed, so these all happened.
+  const moved = [];
   const counts = importRows(ids, (id) => {
-    if (!directory.getPerson(id, { sites: req.ctx.sites })) throw fail(404, "No such person, or at a site this account can't see.");
-    directory.updatePerson(id, patch, writePlan(req.ctx, "person", patch, id));
+    const before = directory.getPerson(id, { sites: req.ctx.sites });
+    if (!before) throw fail(404, "No such person, or at a site this account can't see.");
+    const after = directory.updatePerson(id, patch, writePlan(req.ctx, "person", patch, id));
+    const words = identityChanges(before, after, PERSON_IDENTITY);
+    if (words) moved.push(`${personName(before)}: ${words}`);
     return "updated";
   }, (i) => names[i], "changed");
   auditFrom(req, "person.bulk_update", `${counts.updated} people`, changedKeys(patch));
+  chunks(moved).forEach((detail, i, all) => auditFrom(req, "person.bulk_update", `${counts.updated} people: who changed${all.length > 1 ? ` (part ${i + 1} of ${all.length})` : ""}`, detail));
   res.json({ ok: true, updated: counts.updated });
 });
 
@@ -1408,7 +1420,9 @@ app.get("/api/field-access", admin, (req, res) => {
 app.put("/api/field-access", admin, (req, res) => {
   const changes = req.body?.changes;
   const count = access.setPolicies(changes);
-  auditFrom(req, "field_access.update", `${count} cell${count === 1 ? "" : "s"}`, changes.slice(0, 20).map((c) => `${c.roleId} ${c.entity}.${c.field}=${c.access}`).join("; "));
+  // Every change is logged, over as many entries as they take.
+  chunks(changes.map((c) => `${c.roleId} ${c.entity}.${c.field}=${c.access}`)).forEach((detail, i, all) =>
+    auditFrom(req, "field_access.update", `${count} cell${count === 1 ? "" : "s"}${all.length > 1 ? ` (part ${i + 1} of ${all.length})` : ""}`, detail));
   res.json({ ok: true, ...access.grid() });
 });
 

@@ -82,6 +82,7 @@ function createSecurityMailRoutes({ access, reports, mailbox, admin, auditFrom, 
   router.get("/api/security/guard-reports/:id/pdf", reader, (req, res) => {
     const file = reports.pdf(positiveInt(req.params.id), { sites: req.ctx.sites });
     if (!file) throw fail(404, "That report has no PDF.");
+    auditFrom(req, "security.guard_report_open", `Guard report ${positiveInt(req.params.id)}`, file.name);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${String(file.name).replace(/[^\w.\- ]/g, "_")}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -110,7 +111,7 @@ function createSecurityMailRoutes({ access, reports, mailbox, admin, auditFrom, 
   router.post("/api/security/mail/check", (req, res, next) => (access.isSecurity(req.ctx) || req.ctx.isAdmin ? next() : res.status(403).json({ error: "This account can't check Security's mailbox." })), async (req, res) => {
     if (!mailbox.settings().mailbox) throw fail(409, "No mailbox is set up: an administrator sets it under Settings > Security mail.");
     const entry = await mailbox.check({ by: staffName(req) || "staff" });
-    auditFrom(req, "security.mail_check", mailbox.settings().mailbox, `${entry.fetched} fetched: ${entry.alarms} alarms, ${entry.reports} reports, ${entry.duplicates} already here, ${entry.ignored} passed over`);
+    auditFrom(req, "security.mail_check", mailbox.settings().mailbox, `${entry.fetched} fetched: ${entry.alarms} alarms, ${entry.reports} reports, ${entry.duplicates} already here, ${entry.ignored} passed over${entry.failed ? `, ${entry.failed} couldn't be read` : ""}`);
     res.json({ ok: true, ...entry, unread: access.isSecurity(req.ctx) ? reports.unread({ sites: req.ctx.sites }) : undefined });
   });
 

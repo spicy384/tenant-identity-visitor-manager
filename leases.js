@@ -19,7 +19,7 @@
  * files, which go when the lease does.
  */
 const { localParts } = require("./visit-clock");
-const { commencementOf, anniversary, increasesOn, factorAfter, escalate } = require("./rent-terms");
+const { commencementOf, anniversary, increasesOn, factorAfter, escalate, roundMoney } = require("./rent-terms");
 
 const RENT_MODES = ["rates", "fixed"];
 const DOCUMENT_KINDS = ["agreement", "amendment", "supporting"];
@@ -36,7 +36,7 @@ function fail(status, message) {
   return error;
 }
 
-const money = (n) => (n === null || n === undefined ? null : Math.round(n * 100) / 100);
+const money = roundMoney;
 const rate4 = (n) => (n === null || n === undefined ? null : Math.round(n * 10000) / 10000);
 const yearlyOf = (monthly) => (monthly === null ? null : money(monthly * 12));
 const text = (v, max) => {
@@ -247,6 +247,9 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
       sqft: money(offices.reduce((n, o) => n + ((o.sqft || 0) * o.sharePct) / 100, 0)),
       // Months already invoiced (rent lines on invoices that aren't void).
       invoiced: raw.prepare(`SELECT DISTINCT l.period FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id WHERE l.lease_id = ? AND i.status <> 'void' ORDER BY l.period`).all(r.id).map((x) => x.period),
+      // And months billed on the lease its office was in before it left for this one.
+      invoicedBefore: raw.prepare(`SELECT DISTINCT c.period FROM lease_covered_periods c JOIN invoice_lines l ON l.lease_id = c.by_lease_id AND l.period = c.period
+        JOIN invoices i ON i.id = l.invoice_id WHERE c.lease_id = ? AND i.status <> 'void' ORDER BY c.period`).all(r.id).map((x) => x.period),
       documents: documentsOf(r.id),
       notes: r.notes || null,
       createdBy: r.created_by || null,
@@ -524,18 +527,26 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
 
   /**
    * An office's assignment leaves its lease of several for a lease of its own (rent from the rates),
-   * keeping the rates and yearly increase it had, counted from the same day.
+   * keeping the rates and yearly increase it had, counted from the same day. The months the lease
+   * it leaves has invoiced had this office's rent in them: the new lease is told so
+   * (lease_covered_periods), and isn't billed for them again while those invoices stand.
    */
   function leave(assignmentId, { by = null } = {}) {
-    const had = raw.prepare("SELECT l.* FROM office_assignments a JOIN leases l ON l.id = a.lease_id WHERE a.id = ?").get(Number(assignmentId));
-    raw.prepare("UPDATE office_assignments SET lease_id = NULL WHERE id = ?").run(Number(assignmentId));
-    adoptAssignments({ by });
-    if (!had) return;
-    const commences = commencementOf(had);
-    raw.prepare(`UPDATE leases SET escalation_pct = ?, commencement_date = CASE WHEN start_date = ? THEN NULL ELSE ? END
-      WHERE id = (SELECT lease_id FROM office_assignments WHERE id = ?)`).run(had.escalation_pct, commences, commences, Number(assignmentId));
-    raw.prepare(`INSERT OR REPLACE INTO lease_class_rates (lease_id, class_key, rate, updated_at)
-      SELECT (SELECT lease_id FROM office_assignments WHERE id = ?), class_key, rate, updated_at FROM lease_class_rates WHERE lease_id = ?`).run(Number(assignmentId), had.id);
+    db.transaction(() => {
+      const had = raw.prepare("SELECT l.* FROM office_assignments a JOIN leases l ON l.id = a.lease_id WHERE a.id = ?").get(Number(assignmentId));
+      raw.prepare("UPDATE office_assignments SET lease_id = NULL WHERE id = ?").run(Number(assignmentId));
+      adoptAssignments({ by });
+      if (!had) return;
+      const own = raw.prepare("SELECT lease_id FROM office_assignments WHERE id = ?").get(Number(assignmentId)).lease_id;
+      const commences = commencementOf(had);
+      raw.prepare("UPDATE leases SET escalation_pct = ?, commencement_date = CASE WHEN start_date = ? THEN NULL ELSE ? END WHERE id = ?").run(had.escalation_pct, commences, commences, own);
+      raw.prepare(`INSERT OR REPLACE INTO lease_class_rates (lease_id, class_key, rate, updated_at)
+        SELECT ?, class_key, rate, updated_at FROM lease_class_rates WHERE lease_id = ?`).run(own, had.id);
+      // What the lease it leaves has invoiced, and what that lease was itself told when it was made this way.
+      raw.prepare(`INSERT OR IGNORE INTO lease_covered_periods (lease_id, period, by_lease_id)
+        SELECT DISTINCT ?, l.period, l.lease_id FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id WHERE l.lease_id = ? AND l.period IS NOT NULL AND i.status <> 'void'`).run(own, had.id);
+      raw.prepare("INSERT OR IGNORE INTO lease_covered_periods (lease_id, period, by_lease_id) SELECT ?, period, by_lease_id FROM lease_covered_periods WHERE lease_id = ?").run(own, had.id);
+    });
   }
 
   /** The lease an assignment belongs to, and how many offices it has. */

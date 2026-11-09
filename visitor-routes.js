@@ -9,6 +9,7 @@
  */
 const express = require("express");
 const { toCsv } = require("./csv");
+const { identityChanges, VISITOR_IDENTITY } = require("./audit-detail");
 const { ID_TYPES, cleanIdOther, idText } = require("./visitors");
 
 function fail(status, message) {
@@ -111,12 +112,14 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
 
   router.put("/api/visitors/:id", editVisitors, (req, res) => {
     const id = positiveInt(req.params.id);
-    if (!visitors.get(id, { sites: req.ctx.sites })) throw fail(404, "No such visitor.");
+    const before = visitors.get(id, { sites: req.ctx.sites });
+    if (!before) throw fail(404, "No such visitor.");
     const body = req.body || {};
     delete body.links; // links have their own routes
     const record = visitors.update(id, body, writePlan(req.ctx, body, id));
     const keys = [...Object.keys(body).filter((k) => k !== "custom"), ...Object.keys(body.custom || {}).map((k) => `custom.${k}`)];
-    auditFrom(req, "visitor.update", fullName(record), keys.join(", ") || null);
+    // The fields touched and, when it changed who the visitor is, who they were and now are.
+    auditFrom(req, "visitor.update", fullName(record), [keys.join(", "), identityChanges(before, record, VISITOR_IDENTITY)].filter(Boolean).join("; ") || null);
     res.json({ ok: true, visitor: visitorOut(req.ctx, record, access.fieldsFor(req.ctx, "visitor", { recordId: id })) });
   });
 

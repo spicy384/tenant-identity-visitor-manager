@@ -16,7 +16,7 @@ const { generateKey } = require("../db-key");
 const { createSites } = require("../sites");
 const { pdfText, pdfLines, parseCMap } = require("../pdf-text");
 const { readMailFile } = require("../mail-files");
-const { classify, parseAlarm, parseGuardReport } = require("../security-mail");
+const { classify, parseAlarm, parseGuardReport, htmlLines } = require("../security-mail");
 const { createSecurityReports } = require("../security-reports");
 const { createSecurityMailbox } = require("../security-mailbox");
 const fx = require("./helpers/mail-fixtures");
@@ -50,6 +50,16 @@ check("pdf: a heading set one letter at a time reads as words", lines[0][0].item
 check("pdf: columns stay apart", lines[0].find((l) => l.items.some((i) => i.text === "Site name:")).items.map((i) => i.text).join("|") === "Site name:|Example Site");
 check("pdf: and runs either side of a column edge aren't joined, however close", pdfLines(pages)[0].some((l) => /PM EST Clock-in/.test(l.items[0]?.text))
   && !pdfLines(pages, { columns: [110] })[0].some((l) => /PM EST Clock-in/.test(l.items[0]?.text)));
+// A file can't take the server down or keep it busy: what it says about itself isn't believed past
+// what it holds, and it gets only so many steps. (A 103-byte PDF used to end the process.)
+const refusedSoon = (pdf) => { const t = Date.now(); let status = null; try { pdfText(Buffer.from(pdf, "latin1")); } catch (e) { status = e.status; } return status === 400 && Date.now() - t < 5000; };
+check("pdf: a count the file has no room for isn't believed", refusedSoon("%PDF-1.5\n1 0 obj\n<< /Type /ObjStm /N 9999999999 /First 4 /Length 8 >>\nstream\n5 0 true\nendstream\nendobj\n"));
+check("pdf: a form that draws itself over and over is refused", refusedSoon("%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /XObject << /F 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /XObject /Subtype /Form /Resources << /XObject << /F 4 0 R >> >> /Length 60 >>\nstream\n/F Do /F Do /F Do /F Do /F Do /F Do /F Do /F Do /F Do /F Do\nendstream\nendobj\n5 0 obj\n<< /Length 5 >>\nstream\n/F Do\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n"));
+check("pdf: so is a page tree that lists itself", refusedSoon("%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [2 0 R 2 0 R 2 0 R] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n"));
+check("pdf: a character map is followed only so far", (() => { const t = Date.now(); parseCMap(Buffer.from("beginbfrange " + "<0000> <FFFF> <0000> ".repeat(20000) + "endbfrange")); parseCMap(Buffer.from("beginbfchar ".repeat(200000))); return Date.now() - t < 5000; })());
+check("html: a character number that is no character doesn't stop the reading", htmlLines("<p>a&#99999999;b &#65;&#xA0;c</p>")[0] === "a\ufffdb A c" && classify({ html: "<p>&#99999999;</p>", attachments: [] }).kind === null);
+check("html: scripts and styles left out, blocks and breaks as lines", htmlLines("<html><BODY class=x><style>p{}</style><p>One &amp; two</p><div>A <b>bold</b><br/>line\r\nwrapped</div><SCRIPT>bad()</script>end</body></html>").join("|") === "One & two|A bold|linewrapped|end");
+check("html: thousands of tags that never close take no time", (() => { const t = Date.now(); htmlLines("<script>".repeat(300000)); htmlLines("<".repeat(300000)); htmlLines("<body ".repeat(300000)); return Date.now() - t < 5000; })());
 check("pdf: a ToUnicode range counts up", parseCMap(Buffer.from("1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfrange <41> <43> <0061> endbfrange")).map.get(0x43) === "c");
 check("pdf: not a PDF is refused", throwsStatus(() => pdfText(Buffer.from("hello")), 400));
 const digitsStart = Date.now();
@@ -238,6 +248,15 @@ async function mailboxTests() {
   check("mailbox: one check at a time", x === y);
   check("mailbox: another mailbox starts over", mailbox.save({ mailbox: "other@example.com" }).since === null);
   check("mailbox: its log never holds what came in", !JSON.stringify(mailbox.settings()).includes("BURGLARY") && !JSON.stringify(mailbox.settings()).includes("Lunch"));
+  // A message that can't be read is passed over: the ones after it still come in, and the next
+  // check doesn't meet it again. (One used to stop every check from then on.)
+  refuse = 0;
+  const warned = [];
+  const picky = { ...reports2, ingest: (m, o) => { if (m.subject === "Lunch") throw new Error("unreadable"); return reports2.ingest(m, o); } };
+  const mailbox3 = createSecurityMailbox({ store, reports: picky, token: async () => "TOKEN", graphBase: () => "https://graph.example", fetchImpl, now: () => Date.UTC(2027, 0, 5), log: { warn: (w) => warned.push(w) } });
+  const past = await mailbox3.check({ by: "Sam" });
+  check("mailbox: a message that can't be read is passed over, and the rest come in", past.ok && past.fetched === 3 && past.failed === 1 && past.duplicates === 2 && mailbox3.settings().since === "2027-01-04T12:30:00Z", JSON.stringify(past));
+  check("mailbox: it is noted, without what it said", warned.length === 1 && /couldn't be read/.test(warned[0]) && !warned[0].includes("Lunch"));
 }
 
 // --- over HTTP ----------------------------------------------------------------------------------------
@@ -364,6 +383,7 @@ async function httpTests() {
     && (await responder.get(`/api/security/alarms/${alarmId}`)).data.alarm.id === alarmId
     && (await responder.get(`/api/security/guard-reports/${reportId}`)).status === 200
     && (await responder.get(`/api/security/guard-reports/${reportId}/pdf`)).status === 200);
+  check("http: opening a report's PDF is in the audit log", (await admin.get("/api/audit?action=security.guard_report_open")).data.entries.some((e) => e.target === `Guard report ${reportId}`));
   check("http: a responder doesn't add them or check the mailbox", (await responder.upload("/api/security/mail/upload?name=alarm.msg", alarmMsg)).status === 403
     && (await responder.post("/api/security/mail/check")).status === 403 && (await responder.get("/api/settings/security-mail")).status === 403);
   check("http: nor reach the directory, visitors, badges or clearances", (await responder.get("/api/people")).status === 403 && (await responder.get("/api/visits")).status === 403
