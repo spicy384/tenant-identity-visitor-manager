@@ -7,6 +7,18 @@ const visitsView = { offset: 0 };
 
 const CHECKOUT_LABELS = { kiosk: "at the kiosk", staff: "by staff", auto: "at end of day" };
 
+/** How they arrived: at a kiosk (and who at the desk checked their ID), or who checked them in at the desk. */
+function arrivedHow(v) {
+  if (v.kioskId) return [`at ${v.kioskName || "the kiosk"}`, v.idVerifiedBy ? `ID checked by ${v.idVerifiedBy}` : null].filter(Boolean).join(", ");
+  return v.checkedInBy ? `by ${v.checkedInBy}` : "";
+}
+
+/** How they left: who checked them out (staff), at the kiosk, or at the end of the day. */
+function leftHow(v) {
+  if (v.checkoutMethod === "staff" && v.checkedOutBy) return `by ${v.checkedOutBy}`;
+  return CHECKOUT_LABELS[v.checkoutMethod] || "";
+}
+
 /**
  * A table of visits. showVisitor: include the visitor's name (the log does, the visitor dialog
  * doesn't). onChange: called after a visit's times are corrected.
@@ -23,9 +35,10 @@ function visitsTable(visits, { showVisitor = true, onChange = () => {} } = {}) {
   return h("div", { class: "table-wrap" }, h("table", { class: "table compact phone-cards" },
     h("thead", {}, h("tr", {}, head.map((t) => h("th", { text: t })))),
     h("tbody", {}, visits.length ? visits.map((v) => h("tr", { class: v.timesCorrected ? "time-changed" : null },
-      h("td", { class: "nowrap small-text" }, fmtDateTime(v.checkedInAt), v.timeChanged?.in ? changedMark(v, onChange) : null),
+      h("td", { class: "small-text" }, h("span", { class: "nowrap" }, fmtDateTime(v.checkedInAt), v.timeChanged?.in ? changedMark(v, onChange) : null),
+        arrivedHow(v) ? h("div", { class: "muted", text: arrivedHow(v) }) : null),
       h("td", { class: "small-text" }, v.checkedOutAt
-        ? [h("span", { class: "nowrap" }, leftAt(v), v.timeChanged?.out ? changedMark(v, onChange) : null), h("div", { class: "muted", text: CHECKOUT_LABELS[v.checkoutMethod] || "" })]
+        ? [h("span", { class: "nowrap" }, leftAt(v), v.timeChanged?.out ? changedMark(v, onChange) : null), h("div", { class: "muted", text: leftHow(v) })]
         : h("span", { class: "badge ok", text: "In the building" })),
       showVisitor ? h("td", {}, h("a", { href: `#visitor/${v.visitorId}`, text: visitorName(v.visitor) }), v.visitor.organization ? h("div", { class: "muted small-text", text: v.visitor.organization }) : null) : null,
       h("td", { text: v.companyName || "" }, v.purpose ? h("div", { class: "muted small-text", text: v.purpose }) : null),

@@ -193,8 +193,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
   back into stock when they leave and stays theirs. Nobody else can be given it. The Expected
   page shows it beside the guest, unless it can't be used at the event's site; Change picks
   another for that event alone.
-- **Visit log**: every visit with filters and a CSV export (administrators), with the visitor
-  badge each visitor had (for those who see badges; a badge given from a visitor's page goes
+- **Visit log**: every visit with filters and a CSV export (administrators), with who on the
+  staff checked each visitor in and out (or the kiosk they used, and who checked their ID), and
+  the visitor badge each visitor had (for those who see badges; a badge given from a visitor's page goes
   with the visit they're on). **Add badge** enters one that wasn't recorded at the time: for a
   visit that has ended it is recorded as theirs from arrival to departure, shown as "entered
   later" and in the badge's history and the audit log, and refused if the badge was with
