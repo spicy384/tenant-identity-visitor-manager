@@ -21,7 +21,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
   section or page the account can't open isn't shown.
 - **Home** has a search box at the top for those who see the directory: as you type it lists the
   people and companies that match (at the chosen site), and choosing one opens it. Below it is each
-  person's dashboard. **Customize** adds, removes and reorders modules: who
+  person's dashboard. **Customize** adds and removes modules, and they can be dragged into
+  any order: who
   is in the building, who is expected today, visitors whose check-in the desk must finish, visitors to
   check, badges out past their time, a quick list of tenants, offices by status with the space
   let and the monthly rent (for those who see facilities), leases ending soon, insurance to renew, COIs expiring or expired, overdue invoices

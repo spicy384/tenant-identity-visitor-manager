@@ -543,12 +543,19 @@ a.brand:hover { text-decoration: none; }
 /* Columns of cards (19-dashboard.js sets how many): each stacks its own, so a long card only
    moves the cards below it in its column. */
 .dashboard { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-items: start; }
-.dash-column { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.dash-column { position: relative; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .dash-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; box-shadow: var(--shadow-sm); min-width: 0; }
 .dash-card.needs-attention { border-top: 3px solid var(--warn); }
 .dash-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .dash-card-head h3 { margin: 0; font-size: 1rem; display: flex; align-items: center; gap: 6px; }
 .dash-card-head h3 a { color: var(--text); }
+/* Customize: a card can be dragged (by its grip on a touch screen) and lands in the gap shown. */
+.dashboard.is-editing .dash-card[data-module] { cursor: grab; -webkit-user-select: none; user-select: none; }
+.dash-grip { flex: none; box-sizing: content-box; width: 10px; height: 15px; padding: 10px 8px; margin: -10px -2px -10px -8px; background: radial-gradient(circle, var(--text-muted) 1.3px, transparent 1.8px) content-box 0 0 / 5px 5px; cursor: grab; touch-action: none; }
+.dash-card.dash-placeholder { background: transparent; border: 2px dashed var(--border-strong); box-shadow: none; }
+.dash-card.is-lifted { z-index: 40; scale: 1.02; box-shadow: var(--shadow-lg); cursor: grabbing; will-change: transform; transition: scale var(--spring-time) var(--spring), box-shadow var(--spring-time) var(--spring); }
+.dash-card.is-lifted.is-settling { scale: 1; box-shadow: var(--shadow-sm); }
+html.is-dragging-card, html.is-dragging-card * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
 .dash-list { display: flex; flex-direction: column; }
 .dash-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 6px; border-radius: 6px; color: var(--text); border-bottom: 1px solid var(--border); min-height: 44px; }
 .dash-list > .dash-row:last-of-type { border-bottom: none; }
@@ -1074,6 +1081,7 @@ dialog.dialog.is-closing::backdrop { opacity: 0; }
   .toast.is-leaving { transform: translateX(-50%); }
   ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 1ms; }
   .skeleton span { animation: none; }
+  .dash-card.is-lifted { scale: none; }
 }
 
 /* --- asked for less transparency: solid surfaces, no blur --- */

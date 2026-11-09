@@ -1,5 +1,5 @@
 // 19-dashboard.js: Home, each person's dashboard. They choose which modules it shows, and in
-// what order (Customize); the server keeps the list with their account and offers only the
+// what order (Customize, where the cards can be dragged into place); the server keeps the list with their account and offers only the
 // modules their role may see. Every module follows the site chosen in the header, which the
 // buttons at the top switch quickly. The page refreshes itself every minute.
 
@@ -337,7 +337,7 @@ function greeting() {
 }
 
 /** One module's card; in edit mode with its controls instead of its contents. */
-function moduleCard(id, index, list) {
+function moduleCard(id) {
   const def = DASHBOARD_MODULES[id];
   const count = h("span", { class: "pill", hidden: true });
   // What it showed last while it reloads (the refresh every minute, a site switch); its shape the first time.
@@ -350,11 +350,13 @@ function moduleCard(id, index, list) {
   }
   const card = h("section", { class: "dash-card", dataset: { module: id } },
     h("div", { class: "dash-card-head" },
-      h("h3", {}, h("a", { href: def.href, text: def.title }), " ", count),
+      // Customizing, the title isn't a link (a click would leave the page) and a grip shows the card can be dragged.
+      dashboard.editing ? h("h3", {}, h("span", { class: "dash-grip", "aria-hidden": "true" }), h("span", { text: def.title }))
+        : h("h3", {}, h("a", { href: def.href, text: def.title }), " ", count),
       dashboard.editing ? h("div", { class: "btn-row" },
-        h("button", { type: "button", class: "link-btn", text: "Up", "aria-label": `Move ${def.title} up`, disabled: index === 0, onclick: () => moveModule(index, -1) }),
-        h("button", { type: "button", class: "link-btn", text: "Down", "aria-label": `Move ${def.title} down`, disabled: index === list.length - 1, onclick: () => moveModule(index, 1) }),
-        h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: () => { dashboard.draft.splice(index, 1); renderDashboard(); } })) : null),
+        h("button", { type: "button", class: "link-btn", text: "Up", "aria-label": `Move ${def.title} up`, dataset: { move: "up" }, onclick: () => moveModule(id, -1) }),
+        h("button", { type: "button", class: "link-btn", text: "Down", "aria-label": `Move ${def.title} down`, dataset: { move: "down" }, onclick: () => moveModule(id, 1) }),
+        h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: () => { dashboard.draft.splice(dashboard.draft.indexOf(id), 1); renderDashboard(); } })) : null),
     body);
   if (dashboard.editing) {
     body.replaceChildren(h("p", { class: "muted small-text", text: def.description }));
@@ -374,10 +376,11 @@ function moduleCard(id, index, list) {
   return card;
 }
 
-function moveModule(index, by) {
+function moveModule(id, by) {
   const list = dashboard.draft;
-  const [m] = list.splice(index, 1);
-  list.splice(index + by, 0, m);
+  const index = list.indexOf(id);
+  list.splice(index, 1);
+  list.splice(index + by, 0, id);
   // The cards slide to their new places rather than jumping there.
   const glide = glideFrom($("home-modules").querySelectorAll("[data-module]"), (el) => el.dataset.module);
   renderDashboard();
@@ -396,12 +399,14 @@ function addModuleCard() {
 }
 
 function renderDashboard() {
+  endCardDrag();
   $("home-greeting").textContent = greeting();
+  $("home-modules").classList.toggle("is-editing", dashboard.editing);
   $("home-customize").hidden = dashboard.editing;
   $("home-search").hidden = dashboard.editing || !canReadDirectory();
   $("home-edit-bar").hidden = !dashboard.editing;
   const list = (dashboard.editing ? dashboard.draft : state.prefs.dashboard).filter((id) => DASHBOARD_MODULES[id]);
-  const cards = list.map((id, i) => moduleCard(id, i, list));
+  const cards = list.map((id) => moduleCard(id));
   if (dashboard.editing) cards.push(addModuleCard());
   else if (!list.length) cards.push(h("section", { class: "dash-card" }, h("p", { class: "muted", text: "Your dashboard is empty. Customize it to add modules." })));
   dashboard.cards = cards;
@@ -426,6 +431,18 @@ function placeCards() {
   box.style.gridTemplateColumns = `repeat(${n}, minmax(0, 1fr))`;
   box.replaceChildren(...columns);
   dashboard.columns = n;
+  markCardEnds();
+}
+
+/** Customizing, the first card can't go up nor the last down. */
+function markCardEnds() {
+  const mods = dashboard.cards.filter((el) => el.dataset.module);
+  mods.forEach((el, i) => {
+    const up = el.querySelector("[data-move=up]");
+    const down = el.querySelector("[data-move=down]");
+    if (up) up.disabled = i === 0;
+    if (down) down.disabled = i === mods.length - 1;
+  });
 }
 
 // A wider or narrower window (or Home first shown) may fit a different number of columns: the
@@ -435,6 +452,209 @@ if (typeof ResizeObserver === "function") {
     if ($("home-modules").clientWidth && dashboardColumns() !== dashboard.columns) placeCards();
   }).observe($("home-modules"));
 }
+
+// --- dragging a card into place (Customize) ----------------------------------------------------------
+
+// How far a press moves before it's a drag (so a click stays a click), how far the pointer goes
+// after the cards rearrange before they may again, and the band at the top and bottom of the
+// window that scrolls the page while a card is held there.
+const CARD_DRAG_START = 6;
+const CARD_DRAG_STEP = 12;
+const CARD_DRAG_EDGE = 64;
+let cardDrag = null;
+
+/**
+ * Where the held card would go for a pointer at (x, y), as its place among the others: the
+ * column under the pointer, below the cards in it whose middle the pointer is past.
+ */
+function cardSlot(x, y) {
+  const columns = [...$("home-modules").children];
+  let c = columns.findIndex((col) => x < col.getBoundingClientRect().right + DASHBOARD_GAP / 2);
+  if (c < 0) c = columns.length - 1;
+  const col = columns[c];
+  const top = col.getBoundingClientRect().top;
+  // Where the cards are laid out, not where a glide has them for the moment.
+  const above = [...col.children].filter((el) => el !== cardDrag.holder && el.dataset.module && top + el.offsetTop + el.offsetHeight / 2 < y).length;
+  return above * columns.length + c;
+}
+
+/** Puts the cards in this order (the gap left by the held card among them), gliding there. */
+function arrangeCards(mods) {
+  const box = $("home-modules");
+  const glide = glideFrom(box.querySelectorAll("[data-module]"), (el) => el.dataset.module);
+  dashboard.cards = [...mods, ...dashboard.cards.filter((el) => !el.dataset.module)];
+  dashboard.draft = mods.map((el) => el.dataset.module);
+  placeCards();
+  glide(box.querySelectorAll("[data-module]"));
+}
+
+/** The gap moves to where the pointer is, and the other cards make room. */
+function reorderTo(x, y) {
+  const d = cardDrag;
+  // Measured on the page, so scrolling counts as moving.
+  const at = { x, y: y + window.scrollY };
+  if (d.last && Math.hypot(at.x - d.last.x, at.y - d.last.y) < CARD_DRAG_STEP) return;
+  const mods = dashboard.cards.filter((el) => el.dataset.module);
+  const from = mods.indexOf(d.holder);
+  const to = Math.min(Math.max(cardSlot(x, y), 0), mods.length - 1);
+  if (to === from) return;
+  d.last = at;
+  mods.splice(from, 1);
+  mods.splice(to, 0, d.holder);
+  arrangeCards(mods);
+}
+
+const showCard = (d) => { d.card.style.transform = `translate(${d.x}px, ${d.y}px)`; };
+
+/** Takes the card out of the dashboard to follow the pointer, leaving a gap the same size. */
+function liftCard(d) {
+  const { card } = d;
+  card.getAnimations().forEach((a) => a.cancel());
+  const r = card.getBoundingClientRect();
+  d.holder = h("div", { class: "dash-card dash-placeholder", dataset: { module: card.dataset.module }, "aria-hidden": "true" });
+  d.holder.style.height = `${r.height}px`;
+  dashboard.cards[dashboard.cards.indexOf(card)] = d.holder;
+  card.replaceWith(d.holder);
+  d.origin = { x: r.left, y: r.top };
+  Object.assign(card.style, { position: "fixed", left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, margin: "0" });
+  card.classList.add("is-lifted");
+  $("view-home").append(card);
+  showCard(d);
+  if (!reducedMotion() && typeof card.animate === "function") card.animate([{ scale: "1" }, { scale: "1.02" }], { duration: 200, easing: "ease-out" });
+  d.lifted = true;
+  d.chrome = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chrome-h")) || 0;
+  document.documentElement.classList.add("is-dragging-card");
+  d.frame = requestAnimationFrame(() => edgeScroll(d));
+}
+
+/** Held near the top or bottom of the window, the page scrolls, faster the closer to the edge. */
+function edgeScroll(d) {
+  if (cardDrag !== d || d.settling) return;
+  const top = d.chrome + CARD_DRAG_EDGE;
+  const bottom = window.innerHeight - CARD_DRAG_EDGE;
+  const pull = d.py < top ? -Math.min(1, (top - d.py) / CARD_DRAG_EDGE) : d.py > bottom ? Math.min(1, (d.py - bottom) / CARD_DRAG_EDGE) : 0;
+  if (pull) {
+    const was = window.scrollY;
+    window.scrollBy({ top: pull * 16, behavior: "instant" });
+    if (window.scrollY !== was) reorderTo(d.px, d.py);
+  }
+  d.frame = requestAnimationFrame(() => edgeScroll(d));
+}
+
+/** Let go: the card carries on at the pointer's speed into the gap, and takes its place there. */
+function settleCard(d, velocity = { x: 0, y: 0 }) {
+  cancelAnimationFrame(d.frame);
+  d.settling = true;
+  document.documentElement.classList.remove("is-dragging-card");
+  d.card.classList.add("is-settling");
+  const col = d.holder.parentElement.getBoundingClientRect();
+  const to = { x: col.left + d.holder.offsetLeft - d.origin.x, y: col.top + d.holder.offsetTop - d.origin.y };
+  let moving = 2;
+  const done = () => { moving -= 1; if (!moving) placeCard(d); };
+  d.motions = [
+    springTo({ from: d.x, to: to.x, velocity: velocity.x, onUpdate: (v) => { d.x = v; showCard(d); }, onDone: done }),
+    springTo({ from: d.y, to: to.y, velocity: velocity.y, onUpdate: (v) => { d.y = v; showCard(d); }, onDone: done })
+  ];
+}
+
+/** The card back in the dashboard, in the gap. */
+function placeCard(d) {
+  if (cardDrag !== d) return;
+  d.motions?.forEach((m) => m.stop());
+  d.card.classList.remove("is-lifted", "is-settling");
+  d.card.removeAttribute("style");
+  dashboard.cards[dashboard.cards.indexOf(d.holder)] = d.card;
+  d.holder.replaceWith(d.card);
+  cardDrag = null;
+  markCardEnds();
+}
+
+function onCardDragMove(e) {
+  const d = cardDrag;
+  if (!d || e.pointerId !== d.id) return;
+  d.px = e.clientX;
+  d.py = e.clientY;
+  if (!d.lifted) {
+    if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < CARD_DRAG_START) return;
+    liftCard(d);
+  }
+  // Under the pointer at the point it was grabbed.
+  d.track.add(e.clientX, e.clientY);
+  d.x = e.clientX - d.grabX;
+  d.y = e.clientY - d.grabY;
+  showCard(d);
+  reorderTo(e.clientX, e.clientY);
+}
+
+function onCardDragEnd(e) {
+  const d = cardDrag;
+  if (!d || e.pointerId !== d.id) return;
+  stopCardDragListening();
+  if (d.lifted) settleCard(d, d.track.velocity());
+  else cardDrag = null;
+}
+
+/** Escape puts the card back where it was before this drag. */
+function onCardDragKey(e) {
+  const d = cardDrag;
+  if (e.key !== "Escape" || !d || d.settling) return;
+  e.preventDefault();
+  stopCardDragListening();
+  if (!d.lifted) {
+    cardDrag = null;
+    return;
+  }
+  const byId = new Map(dashboard.cards.filter((el) => el.dataset.module).map((el) => [el.dataset.module, el]));
+  arrangeCards(d.startOrder.map((id) => byId.get(id)).filter(Boolean));
+  settleCard(d);
+}
+
+function stopCardDragListening() {
+  window.removeEventListener("pointermove", onCardDragMove);
+  window.removeEventListener("pointerup", onCardDragEnd);
+  window.removeEventListener("pointercancel", onCardDragEnd);
+  window.removeEventListener("keydown", onCardDragKey);
+}
+
+/** Any drag in progress is dropped (the dashboard is about to be drawn again). */
+function endCardDrag() {
+  const d = cardDrag;
+  if (!d) return;
+  stopCardDragListening();
+  cancelAnimationFrame(d.frame);
+  d.motions?.forEach((m) => m.stop());
+  document.documentElement.classList.remove("is-dragging-card");
+  if (d.lifted) d.card.remove();
+  cardDrag = null;
+}
+
+// The card itself is the handle with a mouse; on a touch screen the grip is, so a finger
+// elsewhere still scrolls the page. A card still gliding into place can be caught again.
+$("view-home").addEventListener("pointerdown", (e) => {
+  if (!dashboard.editing || e.button !== 0) return;
+  const card = e.target.closest(".dash-card[data-module]");
+  if (!card || card.classList.contains("dash-placeholder") || e.target.closest("button, a, input, select, textarea")) return;
+  if (e.pointerType === "touch" && !e.target.closest(".dash-grip")) return;
+  e.preventDefault();
+  const d = cardDrag;
+  if (d && d.settling && d.card === card) {
+    d.motions.forEach((m) => m.stop());
+    d.settling = false;
+    d.last = null;
+    card.classList.remove("is-settling");
+    document.documentElement.classList.add("is-dragging-card");
+    Object.assign(d, { id: e.pointerId, grabX: e.clientX - d.x, grabY: e.clientY - d.y, px: e.clientX, py: e.clientY, track: trackVelocity() });
+    d.frame = requestAnimationFrame(() => edgeScroll(d));
+  } else {
+    if (d) placeCard(d);
+    cardDrag = { card, id: e.pointerId, startX: e.clientX, startY: e.clientY, grabX: e.clientX, grabY: e.clientY, x: 0, y: 0, px: e.clientX, py: e.clientY,
+      track: trackVelocity(), lifted: false, startOrder: dashboard.cards.filter((el) => el.dataset.module).map((el) => el.dataset.module) };
+  }
+  window.addEventListener("pointermove", onCardDragMove);
+  window.addEventListener("pointerup", onCardDragEnd);
+  window.addEventListener("pointercancel", onCardDragEnd);
+  window.addEventListener("keydown", onCardDragKey);
+});
 
 /** Reloads every module (after a change, a site switch, or on the timer). */
 function loadDashboard() {
