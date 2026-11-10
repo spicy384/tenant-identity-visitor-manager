@@ -930,16 +930,16 @@ function personInCompanyByName(companyId, name) {
     AND (lower(first_name || ' ' || last_name) = lower(?) OR lower(coalesce(preferred_name, first_name) || ' ' || last_name) = lower(?))`).get(companyId, n, n)?.id ?? null;
 }
 
-/** The clearance columns an import may carry: the level, and when it was validated, granted and expires. */
-const CLEARANCE_ROW_COLUMNS = ["level", "validated", "granted", "expires"];
+/** The clearance columns an import may carry: the level, and when it was validated and granted. */
+const CLEARANCE_ROW_COLUMNS = ["level", "validated", "granted"];
 
 /**
- * A row's clearance, checked: { level (null for Uncleared), validated, granted, expires }, or
+ * A row's clearance, checked: { level (null for Uncleared), validated, granted }, or
  * null when the row gives no level. A date without a level is a problem.
  */
 function clearanceOfRow(row, levels, todayStr) {
   if (!row.level || !String(row.level).trim()) {
-    if (row.validated || row.granted || row.expires) throw fail(400, "Give the clearance level too (or Uncleared) with its dates.");
+    if (row.validated || row.granted) throw fail(400, "Give the clearance level too (or Uncleared) with its dates.");
     return null;
   }
   let level = null;
@@ -949,7 +949,7 @@ function clearanceOfRow(row, levels, todayStr) {
   }
   const validated = row.validated ? importDate(row.validated, "the date validated") : todayStr;
   if (validated > todayStr) throw fail(400, `The date validated, ${validated}, is still to come.`);
-  return { level, validated, granted: row.granted ? importDate(row.granted, "granted") : null, expires: row.expires ? importDate(row.expires, "expires") : null };
+  return { level, validated, granted: row.granted ? importDate(row.granted, "granted") : null };
 }
 
 /**
@@ -962,8 +962,8 @@ function validateFromImport(req, { kind, id, name, validatedAt }, c, from, today
   const [y, m, d] = c.validated.split("-").map(Number);
   // Midday on the day validated, so the day reads the same in every time zone nearby.
   const at = c.validated === todayStr ? Date.now() : new Date(y, m - 1, d, 12).getTime();
-  clearance.validate({ kind, id, levelId: c.level?.id ?? null, granted: c.granted, expires: c.expires, by: req.user?.displayName || req.user?.username || "import", validatedAt: at });
-  auditFrom(req, "clearance.validate", name, `${kind}; ${c.level ? c.level.name : UNCLEARED}${c.expires ? `, expires ${c.expires}` : ""}; validated ${c.validated}, imported from ${from}`);
+  clearance.validate({ kind, id, levelId: c.level?.id ?? null, granted: c.granted, by: req.user?.displayName || req.user?.username || "import", validatedAt: at });
+  auditFrom(req, "clearance.validate", name, `${kind}; ${c.level ? c.level.name : UNCLEARED}; validated ${c.validated}, imported from ${from}`);
   return true;
 }
 
@@ -972,7 +972,7 @@ function validateFromImport(req, { kind, id, name, validatedAt }, c, from, today
  * visitor_type, citizenship, email, phone, notes, blocked, company and host they visit,
  * custom field keys). A visitor with the
  * same email, else exactly the same name, is updated. Imported visitors count as checked by
- * staff. Clearances (level, validated, granted, expires) only from the Security role: each
+ * staff. Clearances (level, validated, granted) only from the Security role: each
  * visitor is validated on the date given, unless validated more recently here.
  */
 function importVisitors(req, rows, { where, from = "CSV", skipProblems = false } = {}) {
@@ -1091,7 +1091,7 @@ function importBadges(req, rows, { where, from = "CSV", skipProblems = false } =
   return { ...counts, ignored };
 }
 
-const CLEARANCE_COLUMNS = ["name", "first_name", "last_name", "kind", "company", "email", "level", "validated", "granted", "expires", "visiting", "phone", "citizenship", "visitor_type", "notes"];
+const CLEARANCE_COLUMNS = ["name", "first_name", "last_name", "kind", "company", "email", "level", "validated", "granted", "visiting", "phone", "citizenship", "visitor_type", "notes"];
 // What the "Person or visitor" column may say.
 const HOLDER_KINDS = { person: "person", people: "person", tenant: "person", staff: "person", employee: "person", directory: "person", visitor: "visitor", visitors: "visitor", guest: "visitor" };
 
@@ -1100,7 +1100,7 @@ const HOLDER_KINDS = { person: "person", people: "person", tenant: "person", sta
  * (it adds nobody): who (a name column, "First Last" or "Last, First" or in any order, or first
  * and last name columns; whether a person or a visitor, a company or an email to tell apart two
  * with the same name), the clearance level (a level's name, or Uncleared), the date validated
- * (empty: today), and when it was granted and expires. Each is validated as Security would, on
+ * (empty: today), and when it was granted. Each is validated as Security would, on
  * that date, by the person importing; one validated more recently in the app is left as it is.
  * With `addVisitors`, a name on record nowhere is added as a visitor (the company their own,
  * `visiting` the tenant they visit, which an account limited to some sites must give), with

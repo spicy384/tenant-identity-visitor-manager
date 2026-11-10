@@ -180,9 +180,25 @@ function createClearanceRoutes({ access, clearance, directory, visitors, admin, 
     const id = positiveInt(body.id);
     const holder = id && visibleHolder(req, kind, id);
     if (!holder) throw fail(404, kind === "person" ? "No such person." : "No such visitor.");
-    const result = clearance.validate({ kind, id, levelId: body.levelId, granted: body.granted, expires: body.expires, by: staffName(req) });
-    auditFrom(req, "clearance.validate", nameOf(holder), `${kind}; ${result.level ? result.level.name : "no clearance"}${body.expires ? `, expires ${body.expires}` : ""}${result.closed ? "; request closed, digits wiped" : ""}`);
+    const result = clearance.validate({ kind, id, levelId: body.levelId, granted: body.granted, by: staffName(req) });
+    auditFrom(req, "clearance.validate", nameOf(holder), `${kind}; ${result.level ? result.level.name : "no clearance"}${result.closed ? "; request closed, digits wiped" : ""}`);
     res.json({ ok: true, level: result.level, closed: result.closed });
+  });
+
+  /**
+   * Debriefs someone with a validated clearance: it is removed as of the date given, leaving
+   * them Uncleared or at a lower level. Answers with the badges they still hold that the new
+   * level doesn't cover, to be taken back.
+   */
+  router.post("/api/clearance/debrief", security, (req, res) => {
+    const body = req.body || {};
+    const kind = kindOf(body.kind);
+    const id = positiveInt(body.id);
+    const holder = id && visibleHolder(req, kind, id);
+    if (!holder) throw fail(404, kind === "person" ? "No such person." : "No such visitor.");
+    const result = clearance.debrief({ kind, id, levelId: body.levelId, debriefed: body.debriefed, by: staffName(req) });
+    auditFrom(req, "clearance.debrief", nameOf(holder), `${kind}; debriefed ${result.debriefed} from ${result.from.name}; now ${result.level ? result.level.name : "uncleared"}${result.badges.length ? `; still holds ${result.badges.map((b) => `badge ${b.label}`).join(", ")}` : ""}${result.closed ? "; request closed, digits wiped" : ""}`);
+    res.json({ ok: true, from: result.from, level: result.level, debriefed: result.debriefed, closed: result.closed, badges: result.badges });
   });
 
   /** The same clearance for up to 1,000 people (or visitors) already checked: all or nothing. */
@@ -194,9 +210,9 @@ function createClearanceRoutes({ access, clearance, directory, visitors, admin, 
     if (ids.length > 1000) throw fail(400, "At most 1,000 at once.");
     const holders = ids.map((id) => visibleHolder(req, kind, id));
     if (holders.some((x) => !x)) throw fail(404, kind === "person" ? "One of those people doesn't exist, or is at a site this account can't see." : "One of those visitors doesn't exist, or visits a site this account can't see.");
-    const result = clearance.validateMany({ kind, ids, levelId: body.levelId, granted: body.granted, expires: body.expires, by: staffName(req) });
+    const result = clearance.validateMany({ kind, ids, levelId: body.levelId, granted: body.granted, by: staffName(req) });
     // One entry each, as when validated one at a time.
-    const detail = `${kind}; ${result.level ? result.level.name : "no clearance"}${body.expires ? `, expires ${body.expires}` : ""}; one of ${ids.length} validated together`;
+    const detail = `${kind}; ${result.level ? result.level.name : "no clearance"}; one of ${ids.length} validated together`;
     for (const holder of holders) auditFrom(req, "clearance.validate", nameOf(holder), detail);
     res.json({ ok: true, validated: ids.length, level: result.level, closed: result.closed });
   });
@@ -210,10 +226,10 @@ function createClearanceRoutes({ access, clearance, directory, visitors, admin, 
 
   router.get("/api/clearance/overview", securityOrAdmin, (req, res) => {
     const days = (v, fallback) => Math.min(Math.max(positiveInt(v, fallback), 1), 365);
-    const o = clearance.overview({ withinDays: days(req.query.within, 30), expiringDays: days(req.query.expiring, 60), recentDays: days(req.query.recent, 30) });
+    const o = clearance.overview({ withinDays: days(req.query.within, 30), recentDays: days(req.query.recent, 30) });
     // Only people and visitors the caller can see (site limits).
     const visible = (x) => !req.ctx.sites || Boolean(visibleHolder(req, x.kind, x.id));
-    res.json({ ...o, rechecks: o.rechecks.filter(visible), expiring: o.expiring.filter(visible), recent: o.recent.filter(visible) });
+    res.json({ ...o, rechecks: o.rechecks.filter(visible), debriefed: o.debriefed.filter(visible), recent: o.recent.filter(visible) });
   });
 
   router.get("/api/clearance/settings", (req, res) => {

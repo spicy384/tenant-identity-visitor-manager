@@ -6,8 +6,9 @@
  * Uncleared, built in: no level at all (null), which anyone may hold. It isn't a row, so it
  * can't be renamed, reordered or deleted, and no level may take its name.
  *
- * A person's or visitor's clearance counts only while it hasn't expired: an expiry date in
- * the past means no clearance at all for badge purposes.
+ * A clearance has no expiry date. It ends when its holder is debriefed (they leave, or fail a
+ * periodic investigation): the Security role removes it as of a date, leaving them Uncleared
+ * or at a lower level, and can validate a higher one again later.
  *
  * Validation: only the Security role sets a clearance, by validating it. Anyone who may
  * change a record can ask for validation, optionally with the last four digits of the
@@ -73,7 +74,7 @@ function fail(status, message) {
   return error;
 }
 
-/** Today's date as YYYY-MM-DD in `timeZone` (or the server's), for comparing expiry dates. */
+/** Today's date as YYYY-MM-DD in `timeZone` (or the server's), for a debrief's date. */
 function today(timeZone = undefined, now = Date.now()) {
   const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(now)).map((x) => [x.type, x.value]));
   return `${p.year}-${p.month}-${p.day}`;
@@ -178,12 +179,11 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
   }
 
   /**
-   * The level a holder's clearance counts as today: null when they have none or it has
-   * expired. holder: { clearanceLevelId, clearanceExpires }.
+   * The level a holder's clearance counts as today: null when they have none, or it isn't
+   * validated. holder: { kind, clearanceLevelId, clearanceValidatedAt }.
    */
-  function effectiveLevel(holder, timeZone = undefined) {
+  function effectiveLevel(holder) {
     if (!holder?.clearanceLevelId) return null;
-    if (holder.clearanceExpires && holder.clearanceExpires < today(timeZone, now())) return null;
     // Only a validated clearance counts; a visitor's only within the re-check period.
     if (!holder.clearanceValidatedAt) return null;
     if (holder.kind === "visitor" && holder.clearanceValidatedAt + recheckDays(db) * DAY_MS < now()) return null;
@@ -191,9 +191,8 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
   }
 
   /** Why a holder's clearance on record doesn't count today, or null when it does (or they have none). */
-  function notCounting(holder, timeZone = undefined) {
+  function notCounting(holder) {
     if (!holder?.clearanceLevelId) return null;
-    if (holder.clearanceExpires && holder.clearanceExpires < today(timeZone, now())) return "has expired";
     if (!holder.clearanceValidatedAt) return "hasn't been validated by Security";
     if (holder.kind === "visitor" && holder.clearanceValidatedAt + recheckDays(db) * DAY_MS < now()) return "is due to be re-checked by Security";
     return null;
@@ -364,27 +363,71 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     return Boolean(raw.prepare("SELECT 1 FROM clearance_requests WHERE holder_kind = ? AND holder_id = ? AND status = 'open'").get(kind, Number(id)));
   }
 
+  /** The clearance someone has on record, as stored: { levelId, validatedAt, granted }. */
+  function onRecord(kind, id) {
+    const r = raw.prepare(`SELECT clearance_level_id, clearance_validated_at, clearance_granted FROM ${kind === "person" ? "people" : "visitors"} WHERE id = ?`).get(Number(id));
+    return { levelId: r?.clearance_level_id ?? null, validatedAt: r?.clearance_validated_at ?? null, granted: r?.clearance_granted ?? null };
+  }
+
   /**
-   * The Security role validates a clearance: sets the level (null for "no clearance"),
-   * granted and expiry dates, and when and by whom it was validated. Every open request for
-   * them is closed and its digits wiped. Returns how many requests were closed.
+   * The Security role validates a clearance: sets the level (null for "no clearance"), when it
+   * was granted, and when and by whom it was validated. Every open request for them is closed
+   * and its digits wiped. Returns how many requests were closed. Someone debriefed earlier can
+   * be validated at any level again: a level above the one they were left with takes the
+   * debrief off their record (the audit log keeps it).
+   * `validatedAt`: when it was validated, for one checked earlier outside this system (default now).
    */
-  /** `validatedAt`: when it was validated, for one checked earlier outside this system (default now). */
-  function validate({ kind, id, levelId = null, granted, expires, by, validatedAt = null }) {
+  function validate({ kind, id, levelId = null, granted, by, validatedAt = null }) {
     const h = holderRow(kind, id);
     if (!h) throw fail(404, "No such person or visitor.");
     const lvl = cleanLevelId(levelId);
     const g = cleanDate(granted, "Clearance granted");
-    const e = cleanDate(expires, "Clearance expires");
-    if (g && e && e < g) throw fail(400, "The clearance can't expire before it was granted.");
     const table = kind === "person" ? "people" : "visitors";
+    const before = onRecord(kind, h.id);
+    const raised = Boolean(lvl) && level(lvl).rank > (before.levelId ? level(before.levelId)?.rank ?? -1 : -1);
     let closed = 0;
     db.transaction(() => {
-      raw.prepare(`UPDATE ${table} SET clearance_level_id = ?, clearance_granted = ?, clearance_expires = ?, clearance_validated_at = ?, clearance_validated_by = ?, updated_at = ? WHERE id = ?`)
-        .run(lvl, lvl ? g : null, lvl ? e : null, validatedAt ?? now(), by, now(), h.id);
+      raw.prepare(`UPDATE ${table} SET clearance_level_id = ?, clearance_granted = ?, clearance_validated_at = ?, clearance_validated_by = ?, updated_at = ? WHERE id = ?`)
+        .run(lvl, lvl ? g : null, validatedAt ?? now(), by, now(), h.id);
+      if (raised) raw.prepare(`UPDATE ${table} SET clearance_debriefed = NULL, clearance_debriefed_by = NULL WHERE id = ?`).run(h.id);
       closed = closeOpen(kind, h.id, "validated", by, lvl);
     });
     return { holder: h, level: lvl ? level(lvl) : null, closed };
+  }
+
+  /**
+   * The Security role debriefs someone who has a validated clearance (they left, or failed a
+   * periodic investigation). The clearance is removed as of `debriefed` (a date; today when
+   * empty), leaving them Uncleared or at a lower level Security chooses, which counts from now.
+   * The date and who did it stay on their record; waiting requests are closed and their digits
+   * wiped. Returns the level they had, the one they have now, and the badges they still hold
+   * that it no longer covers.
+   */
+  function debrief({ kind, id, levelId = null, debriefed = null, by }) {
+    const h = holderRow(kind, id);
+    if (!h) throw fail(404, "No such person or visitor.");
+    const before = onRecord(kind, h.id);
+    const from = before.levelId && before.validatedAt ? level(before.levelId) : null;
+    if (!from) throw fail(409, `${h.name} has no validated clearance to be debriefed from.`);
+    const lvl = cleanLevelId(levelId);
+    const to = lvl ? level(lvl) : null;
+    if (to && to.rank >= from.rank) throw fail(400, "A debrief leaves someone Uncleared or at a lower level. To give this level, validate it instead.");
+    const t = now();
+    const on = cleanDate(debriefed, "The debrief date") || today(undefined, t);
+    // A day's grace: today where the browser is can be ahead of today on the server.
+    if (on > today(undefined, t + DAY_MS)) throw fail(400, `The debrief date, ${on}, is still to come.`);
+    const table = kind === "person" ? "people" : "visitors";
+    let closed = 0;
+    db.transaction(() => {
+      raw.prepare(`UPDATE ${table} SET clearance_level_id = ?, clearance_granted = ?, clearance_validated_at = ?, clearance_validated_by = ?, clearance_debriefed = ?, clearance_debriefed_by = ?, updated_at = ? WHERE id = ?`)
+        .run(lvl, lvl ? before.granted : null, t, by, on, by, t, h.id);
+      closed = closeOpen(kind, h.id, "validated", by, lvl);
+    });
+    const badges = raw.prepare(`SELECT b.number, b.facility_code, l.name AS level_name, l.rank FROM badge_assignments a JOIN badges b ON b.id = a.badge_id
+      JOIN clearance_levels l ON l.id = b.clearance_level_id WHERE a.holder_kind = ? AND a.holder_id = ? AND a.returned_at IS NULL ORDER BY a.assigned_at`).all(kind, h.id)
+      .filter((b) => !to || b.rank > to.rank)
+      .map((b) => ({ label: b.facility_code ? `${b.facility_code}-${b.number}` : b.number, levelName: b.level_name }));
+    return { holder: h, from, level: to, debriefed: on, closed, badges };
   }
 
   /**
@@ -392,18 +435,16 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
    * all or nothing: for those already checked outside this system. Returns each holder and
    * how many requests were closed.
    */
-  function validateMany({ kind, ids, levelId = null, granted, expires, by }) {
+  function validateMany({ kind, ids, levelId = null, granted, by }) {
     if (!Array.isArray(ids) || !ids.length) throw fail(400, "Choose at least one.");
     // Everything checked first: validating wipes digits held in memory, which a rollback
     // wouldn't bring back.
     if (ids.some((id) => !holderRow(kind, id))) throw fail(404, "One of them doesn't exist.");
     cleanLevelId(levelId);
-    const g = cleanDate(granted, "Clearance granted");
-    const e = cleanDate(expires, "Clearance expires");
-    if (g && e && e < g) throw fail(400, "The clearance can't expire before it was granted.");
+    cleanDate(granted, "Clearance granted");
     const results = [];
     db.transaction(() => {
-      for (const id of ids) results.push(validate({ kind, id, levelId, granted, expires, by }));
+      for (const id of ids) results.push(validate({ kind, id, levelId, granted, by }));
     });
     return { holders: results.map((r) => r.holder), level: results[0].level, closed: results.reduce((n, r) => n + r.closed, 0) };
   }
@@ -432,38 +473,36 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
 
   /**
    * Clearances that need attention soon: visitors whose validation runs out (re-check) within
-   * \`withinDays\` or already has, clearances on record that expire within \`expiringDays\` or
-   * expired in the last 30, and validations of the last \`recentDays\`. Holders only, levels
-   * named: for roles that see clearance levels. The caller drops those it can't see.
+   * \`withinDays\` or already has, and the debriefs and validations of the last \`recentDays\`.
+   * Holders only, levels named: for roles that see clearance levels. The caller drops those it
+   * can't see.
    */
-  function overview({ withinDays = 30, expiringDays = 60, recentDays = 30 } = {}) {
+  function overview({ withinDays = 30, recentDays = 30 } = {}) {
     const t = now();
     const days = recheckDays(db);
     const holders = (where, params = []) => [
-      ...raw.prepare(`SELECT 'person' AS kind, p.id, p.first_name, p.last_name, c.name AS org, l.name AS level_name, p.clearance_expires, p.clearance_validated_at, p.clearance_validated_by
+      ...raw.prepare(`SELECT 'person' AS kind, p.id, p.first_name, p.last_name, c.name AS org, l.name AS level_name, p.clearance_debriefed, p.clearance_debriefed_by, p.clearance_validated_at, p.clearance_validated_by
         FROM people p JOIN companies c ON c.id = p.company_id LEFT JOIN clearance_levels l ON l.id = p.clearance_level_id WHERE ${where.replace(/\bX\./g, "p.")}`).all(...params),
-      ...raw.prepare(`SELECT 'visitor' AS kind, v.id, v.first_name, v.last_name, v.organization AS org, l.name AS level_name, v.clearance_expires, v.clearance_validated_at, v.clearance_validated_by
+      ...raw.prepare(`SELECT 'visitor' AS kind, v.id, v.first_name, v.last_name, v.organization AS org, l.name AS level_name, v.clearance_debriefed, v.clearance_debriefed_by, v.clearance_validated_at, v.clearance_validated_by
         FROM visitors v LEFT JOIN clearance_levels l ON l.id = v.clearance_level_id WHERE ${where.replace(/\bX\./g, "v.")}`).all(...params)
     ];
     const item = (r, extra = {}) => ({
       kind: r.kind, id: r.id, name: `${r.first_name} ${r.last_name}`, organization: r.org || null, levelName: r.level_name || null,
-      expires: r.clearance_expires || null, validatedAt: r.clearance_validated_at || null, validatedBy: r.clearance_validated_by || null, ...extra
+      debriefed: r.clearance_debriefed || null, debriefedBy: r.clearance_debriefed_by || null, validatedAt: r.clearance_validated_at || null, validatedBy: r.clearance_validated_by || null, ...extra
     });
     const recheckBy = t + withinDays * DAY_MS;
-    const rechecks = raw.prepare(`SELECT 'visitor' AS kind, v.id, v.first_name, v.last_name, v.organization AS org, l.name AS level_name, v.clearance_expires, v.clearance_validated_at, v.clearance_validated_by
+    const rechecks = raw.prepare(`SELECT 'visitor' AS kind, v.id, v.first_name, v.last_name, v.organization AS org, l.name AS level_name, v.clearance_debriefed, v.clearance_debriefed_by, v.clearance_validated_at, v.clearance_validated_by
         FROM visitors v JOIN clearance_levels l ON l.id = v.clearance_level_id
         WHERE v.clearance_validated_at IS NOT NULL AND v.clearance_validated_at + ? <= ? ORDER BY v.clearance_validated_at`).all(days * DAY_MS, recheckBy)
       .map((r) => item(r, { dueAt: r.clearance_validated_at + days * DAY_MS, overdue: r.clearance_validated_at + days * DAY_MS < t }));
-    const todayStr = today(undefined, t);
-    const from = today(undefined, t - 30 * DAY_MS);
-    const to = today(undefined, t + expiringDays * DAY_MS);
-    const expiring = holders("X.clearance_level_id IS NOT NULL AND X.clearance_expires IS NOT NULL AND X.clearance_expires >= ? AND X.clearance_expires <= ?", [from, to])
-      .map((r) => item(r, { expired: r.clearance_expires < todayStr }))
-      .sort((a, b) => a.expires.localeCompare(b.expires));
+    // Latest first; the level is the one they were left with (none for Uncleared).
+    const debriefed = holders("X.clearance_debriefed IS NOT NULL AND X.clearance_debriefed >= ?", [today(undefined, t - recentDays * DAY_MS)])
+      .map((r) => item(r))
+      .sort((a, b) => b.debriefed.localeCompare(a.debriefed) || a.name.localeCompare(b.name));
     const recent = holders("X.clearance_validated_at >= ?", [t - recentDays * DAY_MS])
       .map((r) => item(r))
       .sort((a, b) => b.validatedAt - a.validatedAt);
-    return { recheckDays: days, withinDays, expiringDays, recentDays, rechecks, expiring, recent };
+    return { recheckDays: days, withinDays, recentDays, rechecks, debriefed, recent };
   }
 
   /** True when `holderLevel` (a level or null) covers `badgeLevel` (a level or null). */
@@ -471,6 +510,29 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     if (!badgeLevel) return true;
     return Boolean(holderLevel) && holderLevel.rank >= badgeLevel.rank;
   }
+
+  /**
+   * Clearances used to carry an expiry date; they don't any more. Any date still on record
+   * from before is taken off at start-up. A clearance whose date had already passed counted
+   * as none, so it is removed rather than brought back: Security validates it again if it
+   * still stands.
+   */
+  function retireExpiry() {
+    const day = today(undefined, now());
+    db.transaction(() => {
+      for (const [kind, table] of [["person", "people"], ["visitor", "visitors"]]) {
+        const lapsed = raw.prepare(`SELECT x.id, x.first_name, x.last_name, x.clearance_expires, l.name AS level_name FROM ${table} x
+          JOIN clearance_levels l ON l.id = x.clearance_level_id WHERE x.clearance_expires IS NOT NULL AND x.clearance_expires < ?`).all(day);
+        for (const r of lapsed) {
+          raw.prepare(`UPDATE ${table} SET clearance_level_id = NULL, clearance_granted = NULL WHERE id = ?`).run(r.id);
+          db.audit({ action: "clearance.expiry_retired", target: `${r.first_name} ${r.last_name}`,
+            detail: `${kind}; ${r.level_name} had passed its expiry date (${r.clearance_expires}) and counted as none, so it was removed when expiry dates were retired. Validate it again if it still stands.` });
+        }
+        raw.prepare(`UPDATE ${table} SET clearance_expires = NULL WHERE clearance_expires IS NOT NULL`).run();
+      }
+    });
+  }
+  retireExpiry();
 
   return {
     levels,
@@ -494,6 +556,7 @@ function createClearance({ db, now = Date.now, digitsHours = DEFAULT_DIGITS_HOUR
     },
     validate,
     validateMany,
+    debrief,
     cancelRequest,
     forgetHolder,
     sweepDigits,

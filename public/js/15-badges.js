@@ -702,7 +702,7 @@ async function settingsBadges(body) {
     await badgeImagesPanel(info.levels),
     h("div", { class: "panel" },
       h("div", { class: "panel-head" }, h("h3", { text: "Clearance levels" }), h("button", { type: "button", class: "primary small", text: "Add level", onclick: () => editLevel(null).then((x) => x && changed()) })),
-      h("p", { class: "muted", text: "Higher in the order covers everything below it: someone at TS//SCI FSP may hold a TS//SCI CI badge, not the other way round. Uncleared is built in, below them all: its badges can go to anyone of the right type. People and visitors carry a level, with when it was granted and when it expires, set only by the Security role when it validates one; an expired or unvalidated clearance counts as none." }),
+      h("p", { class: "muted", text: "Higher in the order covers everything below it: someone at TS//SCI FSP may hold a TS//SCI CI badge, not the other way round. Uncleared is built in, below them all: its badges can go to anyone of the right type. People and visitors carry a level, with when it was granted, set only by the Security role when it validates one; an unvalidated clearance counts as none. A clearance has no expiry date: it stands until Security debriefs its holder." }),
       h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
         h("thead", {}, h("tr", {}, ["Level", "Order", "Used by", ""].map((t) => h("th", { text: t })))),
         h("tbody", {}, h("tr", {},

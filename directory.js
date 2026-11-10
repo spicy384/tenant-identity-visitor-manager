@@ -393,7 +393,8 @@ function createDirectory({ db, fields }) {
       clearanceLevel: r.clearance_level_id ?? null,
       clearanceLevelName: r.clearance_level_name ?? null,
       clearanceGranted: r.clearance_granted ?? null,
-      clearanceExpires: r.clearance_expires ?? null,
+      clearanceDebriefed: r.clearance_debriefed ?? null,
+      clearanceDebriefedBy: r.clearance_debriefed_by ?? null,
       clearanceValidatedAt: r.clearance_validated_at ?? null,
       clearanceValidatedBy: r.clearance_validated_by ?? null,
       clearanceStatus: statusFor("person", { clearanceValidatedAt: r.clearance_validated_at, clearanceRequested: r.clearance_requested }, days),
@@ -447,7 +448,6 @@ function createDirectory({ db, fields }) {
       else out.clearanceLevel = Number(v);
     }
     if (input.clearanceGranted !== undefined) out.clearanceGranted = cleanDate(input.clearanceGranted, "Clearance granted");
-    if (input.clearanceExpires !== undefined) out.clearanceExpires = cleanDate(input.clearanceExpires, "Clearance expires");
     if (input.notes !== undefined) out.notes = longText(input.notes);
     if (input.active !== undefined) out.active = Boolean(input.active);
 
@@ -491,10 +491,10 @@ function createDirectory({ db, fields }) {
     let id;
     db.transaction(() => {
       id = raw.prepare(`INSERT INTO people (company_id, site_id, first_name, last_name, preferred_name, job_title, email, work_phone, mobile, can_host, notes,
-        clearance_level_id, clearance_granted, clearance_expires, active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        clearance_level_id, clearance_granted, active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(v.companyId, v.siteId ?? null, v.firstName, v.lastName, v.preferredName ?? null, v.jobTitle ?? null, v.email ?? null, v.workPhone ?? null, v.mobile ?? null, v.canHost === false ? 0 : 1, v.notes ?? null,
-          v.clearanceLevel ?? null, v.clearanceGranted ?? null, v.clearanceExpires ?? null, v.active === false ? 0 : 1, now, now).lastInsertRowid;
+          v.clearanceLevel ?? null, v.clearanceGranted ?? null, v.active === false ? 0 : 1, now, now).lastInsertRowid;
       fields.writeValues(id, values);
     });
     return getPerson(id);
@@ -508,9 +508,9 @@ function createDirectory({ db, fields }) {
     const next = { ...existing, ...v };
     db.transaction(() => {
       raw.prepare(`UPDATE people SET company_id = ?, site_id = ?, first_name = ?, last_name = ?, preferred_name = ?, job_title = ?, email = ?, work_phone = ?, mobile = ?,
-        can_host = ?, notes = ?, clearance_level_id = ?, clearance_granted = ?, clearance_expires = ?, active = ?, updated_at = ? WHERE id = ?`)
+        can_host = ?, notes = ?, clearance_level_id = ?, clearance_granted = ?, active = ?, updated_at = ? WHERE id = ?`)
         .run(next.companyId, next.siteId ?? null, next.firstName, next.lastName, next.preferredName, next.jobTitle, next.email, next.workPhone, next.mobile, next.canHost ? 1 : 0, next.notes,
-          next.clearanceLevel ?? null, next.clearanceGranted ?? null, next.clearanceExpires ?? null, next.active ? 1 : 0, Date.now(), id);
+          next.clearanceLevel ?? null, next.clearanceGranted ?? null, next.active ? 1 : 0, Date.now(), id);
       fields.writeValues(id, values);
     });
     return getPerson(id);

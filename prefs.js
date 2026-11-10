@@ -27,7 +27,7 @@ function createPrefs({ db, access }) {
     tenants: (ctx) => access.canReadDirectory(ctx),
     clearanceQueue: (ctx) => access.isSecurity(ctx),
     rechecks: securityOrAdmin,
-    expiring: securityOrAdmin,
+    debriefed: securityOrAdmin,
     validations: securityOrAdmin,
     alarms: (ctx) => access.canReadAlarms(ctx),
     guardReports: (ctx) => access.canReadAlarms(ctx),
@@ -39,7 +39,7 @@ function createPrefs({ db, access }) {
   };
   // What each role starts with, in order (only the modules it may see are kept).
   const DEFAULTS = {
-    security: ["clearanceQueue", "alarms", "rechecks", "expiring", "badgesOut", "here"],
+    security: ["clearanceQueue", "alarms", "rechecks", "debriefed", "badgesOut", "here"],
     responder: ["alarms", "guardReports"],
     admin: ["here", "expected", "badgeNeeded", "rechecks", "badgesOut", "tenants", "occupancy", "overdueInvoices", "leasesEnding", "insurance"],
     finance: ["overdueInvoices", "leasesEnding", "insurance", "occupancy", "tenants"],

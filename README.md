@@ -27,7 +27,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
   check, badges out past their time, a quick list of tenants, offices by status with the space
   let and the monthly rent (for those who see facilities), leases ending soon, insurance to renew, COIs expiring or expired, overdue invoices
   (for those who see the books), and for Security the clearance
-  queue, visitor re-checks, clearances expiring and recent validations (administrators get
+  queue, visitor re-checks, recent debriefs and recent validations (administrators get
   all but the queue). Only modules the role can see are offered, every role starts with a
   layout that suits it, and the choice is kept with the account, on any device. The cards
   stand in columns (as many as fit), so a long one only moves the cards below it in its column.
@@ -176,8 +176,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
      for a regular visitor) is shown large, with **Badge handed over** and **Can't find it?
      Issue a different badge**. Otherwise the desk enters the number of the badge they hand
      over: it must be an active visitor badge, valid at the site, that the visitor may hold.
-     A visitor whose clearance doesn't count (not validated by Security, due a re-check, or
-     expired) is shown the uncleared visitor badge image, with a note saying so, and can be
+     A visitor whose clearance doesn't count (not validated by Security, or due a re-check)
+     is shown the uncleared visitor badge image, with a note saying so, and can be
      sent to Security from here (**Request clearance validation**). **No badge needed**
      (audited) finishes without one.
 
@@ -259,8 +259,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
   below it. **Uncleared** is built in, below them all: an Uncleared badge can go to anyone of
   the right type. It can't be renamed or deleted, and no level can take its name. (Badges had a
   separate classification, Cleared or Uncleared, before; the level now says it all.)
-- **People and visitors** have a clearance level, the date it was granted and when it
-  expires; an expired clearance counts as none. Clearance fields go through the field access
+- **People and visitors** have a clearance level and the date it was granted. A clearance has
+  no expiry date: it stands until Security debriefs its holder (below). Clearance fields go through the field access
   grid and start hidden from roles that only read the directory (or visitors) and from API
   clients, but nobody can change them in a record, administrators included.
 - **Validation.** Only the **Security** role sets a clearance, by validating it, and only a
@@ -277,13 +277,24 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Validating several at once.** For people already checked outside the app, Security ticks
   them on **People** or **Visitors** (one box for the whole page; picks carry across pages and
   searches) and chooses **Validate clearance**: one level (or no clearance), and optional
-  granted and expiry dates, the same for each, up to 1,000 at a time. It is all or nothing:
+  granted date, the same for each, up to 1,000 at a time. It is all or nothing:
   if one of them can't be validated, none are. Waiting requests for them close and their digits
   are wiped; the audit trail gets an entry for each person, as when validated one at a time.
 - **Visitor re-checks.** A visitor's validation lasts 90 days, then shows Re-check due and
   counts as none until Security validates it again. Change the period under Settings >
-  Badges and clearances. People's validations don't lapse; their clearance's expiry date
-  still applies.
+  Badges and clearances. People's validations don't lapse.
+- **Debrief.** A clearance ends when its holder is debriefed: they leave, or fail a periodic
+  investigation. On anyone whose clearance it has validated, the **Security** role (and only
+  it) chooses **Debrief**, gives the date, and says what they are left with: Uncleared most
+  often, or a lower level they keep, never the same or a higher one. That counts for badges
+  from then on. The date and who did it stay on the record, shown only to roles that see
+  clearances, and the audit log has both levels. If they still hold a badge that needs more
+  than they have now, Security is told which, to take it back. Someone debriefed can be
+  validated again later at any level, a higher one included; that takes the debrief off their
+  record (the audit log keeps it). **Security > Re-checks and expiry** lists the debriefs of
+  the last 30 days. A database from before this had expiry dates: any still on record are
+  removed at start-up, and a clearance whose date had already passed stays removed (each is in
+  the audit log) until Security validates it again.
 - **History.** Every assignment is kept: to whom, when, by whom, and when and how it came back
   (returned or lost). Visitor badges stay out until someone takes them back; the Badges page
   and In the building show those still out with visitors who have left. Someone who holds a
@@ -915,8 +926,8 @@ A company's site can come from one column (a site's name) and its suite from ano
 - **Visitors**: first and last name (required), their organization, email, phone, notes,
   blocked (yes/no), the company they visit and their host there (by name), and custom fields.
   A visitor with the same email, else exactly the same name, is updated. Imported visitors
-  count as checked by staff. Clearance level, date validated (empty for today), granted and
-  expires come only from an account with the Security role (and visitor change access, Security
+  count as checked by staff. Clearance level, date validated (empty for today) and granted
+  come only from an account with the Security role (and visitor change access, Security
   plus Front desk say): each visitor with a level is validated by them on the date given, unless
   validated more recently here. Anyone else's file with a clearance in it is refused.
 - **Badges**: number and type (personnel or staff, tenant, visitor) required; clearance level
@@ -938,7 +949,7 @@ A company's site can come from one column (a site's name) and its suite from ano
   visitor column (or one value for the whole file), a company (a person's company, or a
   visitor's own company or the tenant they visit), or an email. Then the clearance level (a
   level's name, or Uncleared; required), the date validated (empty for today), and when it was
-  granted and expires. Each is validated as Security would, on the date given, by the person
+  granted. Each is validated as Security would, on the date given, by the person
   importing, and each is in the audit log; a visitor's re-check is due counting from that date.
   Someone validated more recently in the app is left as they are. A name that matches nobody
   (with the nearest names on record), or more than one, or the same one twice, is a problem row,
@@ -992,7 +1003,7 @@ Companies: `name` (required); `sites` (`Harbor Point: Suite 100; Riverside`), `p
 name is updated.
 
 Clearances: `level` (required); `name`, or `first_name` and `last_name`; `kind` (person or visitor), `company`, `email`, `visiting`, `phone`, `citizenship`, `visitor_type`, `notes`,
-`validated`, `granted`, `expires`.
+`validated`, `granted`.
 
 Companies may also give `site` and `suite` instead of `sites`. If any line has a problem, nothing
 is imported. Columns for fields the importer can't change are skipped and listed.

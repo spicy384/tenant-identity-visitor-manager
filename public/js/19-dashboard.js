@@ -231,18 +231,18 @@ const DASHBOARD_MODULES = {
       })), "No re-checks coming up.", { more: "#clearances" }) };
     }
   },
-  expiring: {
-    title: "Clearances expiring",
-    description: "Clearances that expire within 60 days, or expired in the last 30.",
+  debriefed: {
+    title: "Recently debriefed",
+    description: "People and visitors debriefed in the last 30 days, and the clearance each was left with.",
     href: "#clearances",
     async load() {
-      const { expiring } = await clearanceOverview();
-      return { count: expiring.length, attention: expiring.some((x) => x.expired), body: dashList(expiring.map((x) => dashRow({
+      const { debriefed } = await clearanceOverview();
+      return { count: debriefed.length, attention: false, body: dashList(debriefed.map((x) => dashRow({
         href: holderHref(x),
         main: x.name,
-        sub: [x.levelName, x.kind === "visitor" ? "Visitor" : x.organization].filter(Boolean).join(" · "),
-        right: x.expired ? h("span", { class: "badge bad", text: "Expired" }) : h("span", { class: "muted small-text", text: dateText(x.expires) })
-      })), "Nothing expiring soon.", { more: "#clearances" }) };
+        sub: [x.levelName || "Uncleared", x.kind === "visitor" ? "Visitor" : x.organization].filter(Boolean).join(" · "),
+        right: h("span", { class: "muted small-text", text: dateText(x.debriefed) })
+      })), "Nobody debriefed lately.", { more: "#clearances" }) };
     }
   },
   occupancy: {

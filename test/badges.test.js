@@ -57,18 +57,19 @@ check("companies: building staff is stored", directory.getCompany(security.id).b
 const guard = directory.createPerson({ firstName: "Gail", lastName: "Guard", companyId: security.id, clearanceLevel: L.TS.id, clearanceGranted: "2024-01-10" });
 const fsp = directory.createPerson({ firstName: "Fran", lastName: "Poly", companyId: acme.id, clearanceLevel: L["TS//SCI FSP"].id });
 const ci = directory.createPerson({ firstName: "Cal", lastName: "Counter", companyId: acme.id, clearanceLevel: L["TS//SCI CI"].id });
-const lapsed = directory.createPerson({ firstName: "Lee", lastName: "Lapsed", companyId: acme.id, clearanceLevel: L["TS//SCI FSP"].id, clearanceExpires: "2020-01-01" });
+const lapsed = directory.createPerson({ firstName: "Lee", lastName: "Lapsed", companyId: acme.id, clearanceLevel: L["TS//SCI FSP"].id });
 const plain = directory.createPerson({ firstName: "Pat", lastName: "Plain", companyId: acme.id });
 check("people: clearance fields are stored", directory.getPerson(guard.id).clearanceLevelName === "TS" && directory.getPerson(guard.id).clearanceGranted === "2024-01-10");
 check("people: an unknown clearance level is refused", throwsStatus(() => directory.updatePerson(plain.id, { clearanceLevel: 9999 }), 400) === true);
-check("people: a bad clearance date is refused", throwsStatus(() => directory.updatePerson(plain.id, { clearanceExpires: "next year" }), 400) === true);
+check("people: a bad clearance date is refused", throwsStatus(() => directory.updatePerson(plain.id, { clearanceGranted: "next year" }), 400) === true);
+check("people: an expiry date is no longer taken", directory.updatePerson(plain.id, { clearanceExpires: "2020-01-01" }).clearanceExpires === undefined);
 const visitorTs = visitors.create({ firstName: "Vic", lastName: "Visitor", clearanceLevel: L.TS.id });
 const visitorNone = visitors.create({ firstName: "Nora", lastName: "None" });
 check("visitors: clearance fields are stored", visitors.get(visitorTs.id).clearanceLevelName === "TS");
 check("validation: a clearance on record but not validated counts as none", clearance.effectiveLevel({ kind: "person", ...directory.getPerson(guard.id), clearanceLevelId: guard.clearanceLevel }) === null && directory.getPerson(guard.id).clearanceStatus === "unvalidated");
 // Security validates what is on record (validate() sets the level, dates and when).
 for (const [kind, rec] of [["person", guard], ["person", fsp], ["person", ci], ["person", lapsed], ["visitor", visitorTs]]) {
-  clearance.validate({ kind, id: rec.id, levelId: rec.clearanceLevel, granted: rec.clearanceGranted, expires: rec.clearanceExpires, by: "security" });
+  clearance.validate({ kind, id: rec.id, levelId: rec.clearanceLevel, granted: rec.clearanceGranted, by: "security" });
 }
 check("validation: validated, it is marked so", directory.getPerson(guard.id).clearanceStatus === "validated" && directory.getPerson(guard.id).clearanceValidatedBy === "security" && directory.getPerson(guard.id).clearanceGranted === "2024-01-10");
 
@@ -99,7 +100,9 @@ check("type: a person's badge doesn't go to a visitor", throwsStatus(give(tUncl,
 
 check("clearance: FSP may hold a CI badge", Boolean(give(tCi, "person", fsp)()));
 check("clearance: CI may not hold an FSP badge", throwsStatus(give(tFsp, "person", ci), 409, /clearance doesn't cover/) === true);
-check("clearance: an expired clearance counts as none", throwsStatus(give(tFsp, "person", lapsed), 409, /has expired/) === true);
+// Lee leaves: debriefed, and so uncleared from then on.
+const debriefedLee = clearance.debrief({ kind: "person", id: lapsed.id, by: "security" });
+check("clearance: a debriefed clearance counts as none", debriefedLee.from.name === "TS//SCI FSP" && debriefedLee.level === null && throwsStatus(give(tFsp, "person", lapsed), 409, /clearance doesn't cover/) === true);
 check("clearance: no clearance, no cleared badge", throwsStatus(give(tFsp, "person", plain), 409) === true);
 check("clearance: anyone of the right type may hold an uncleared badge", Boolean(give(tUncl, "person", plain)()));
 check("clearance: a cleared visitor may hold a cleared visitor badge", Boolean(give(vTs, "visitor", visitorTs)()));
@@ -209,7 +212,8 @@ check("temporary: can't stop being temporary while lent", (() => {
 
 // --- who sees clearances ---------------------------------------------------------------------
 const fieldAccess = (role, entity, key) => access.fieldsFor(access.contextFor({ role }), entity).find((f) => f.key === key)?.access || "hidden";
-check("access: managers see a person's clearance but can't change it", fieldAccess("manager", "person", "clearanceLevel") === "view" && fieldAccess("admin", "person", "clearanceExpires") === "view");
+check("access: managers see a person's clearance but can't change it", fieldAccess("manager", "person", "clearanceLevel") === "view" && fieldAccess("admin", "person", "clearanceGranted") === "view" && fieldAccess("admin", "person", "clearanceDebriefed") === "view"
+  && fieldAccess("admin", "person", "clearanceExpires") === "hidden" && fieldAccess("frontdesk", "person", "clearanceDebriefed") === "hidden");
 check("access: Security sees it (and sets it only by validating)", fieldAccess("security", "person", "clearanceLevel") === "view" && fieldAccess("security", "visitor", "clearanceLevel") === "view");
 check("access: read-only roles don't see it by default", fieldAccess("frontdesk", "person", "clearanceLevel") === "hidden" && fieldAccess("viewer", "person", "clearanceExpires") === "hidden");
 check("access: Equipment Checkout doesn't get it", fieldAccess("checkout", "person", "clearanceLevel") === "hidden");
@@ -294,6 +298,20 @@ check("expiry: within other days", badges.list({ state: "expiring", expiringDays
 check("expiry: renewed, it can be given again", badges.update(ePast.id, { expiresOn: dayFromNow(365) }).expired === false && Boolean(badges.assign(ePast.id, { kind: "person", holderId: guard.id })));
 check("expiry: a held badge's date can change", badges.update(ePast.id, { expiresOn: dayFromNow(-1) }).expired === true && badges.get(ePast.id).holder.name === "Gail Guard");
 check("expiry: and taken away", badges.update(eSoon.id, { expiresOn: null }).expiresOn === null && badges.update(eLater.id, { expiresOn: "" }).expiresOn === null);
+
+// --- a debrief, and the badges still out ------------------------------------------------------
+check("debrief: the badges still held that the new level doesn't cover are named", (() => {
+  const dee = directory.createPerson({ firstName: "Dee", lastName: "Briefed", companyId: acme.id });
+  clearance.validate({ kind: "person", id: dee.id, levelId: L["TS//SCI CI"].id, by: "security" });
+  const high = make("D-CI", "tenant", L["TS//SCI CI"]);
+  const low = make("D-TS", "tenant", L.TS, { facilityCode: "12" });
+  const none = make("D-NONE", "tenant");
+  for (const b of [high, low, none]) badges.assign(b.id, { kind: "person", holderId: dee.id }, { by: "desk" });
+  const toTs = clearance.debrief({ kind: "person", id: dee.id, levelId: L.TS.id, by: "security" });
+  const toNone = clearance.debrief({ kind: "person", id: dee.id, by: "security" });
+  return toTs.badges.map((b) => `${b.label}:${b.levelName}`).join() === "D-CI:TS//SCI CI" && toNone.badges.map((b) => b.label).join() === "D-CI,12-D-TS"
+    && badges.get(high.id).holder.name === "Dee Briefed";
+})());
 
 db.close();
 fs.rmSync(tmp, { recursive: true, force: true });

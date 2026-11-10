@@ -343,7 +343,7 @@ function createBadges({ db, clearance, now = Date.now }) {
       return {
         kind, id: p.id, name: `${p.preferred_name || p.first_name} ${p.last_name}`, company: p.company_name,
         buildingStaff: Boolean(p.building_staff), active: Boolean(p.active && p.company_active),
-        clearanceLevelId: p.clearance_level_id, clearanceExpires: p.clearance_expires, clearanceValidatedAt: p.clearance_validated_at,
+        clearanceLevelId: p.clearance_level_id, clearanceValidatedAt: p.clearance_validated_at,
         regular: held.filter((x) => !x.temporary), temporaryOut: held.filter((x) => x.temporary), timeZone: tz || null
       };
     }
@@ -351,7 +351,7 @@ function createBadges({ db, clearance, now = Date.now }) {
       const v = raw.prepare("SELECT * FROM visitors WHERE id = ?").get(Number(id));
       return v && {
         kind, id: v.id, name: `${v.first_name} ${v.last_name}`, company: v.organization, buildingStaff: false, active: true, blocked: Boolean(v.blocked),
-        clearanceLevelId: v.clearance_level_id, clearanceExpires: v.clearance_expires, clearanceValidatedAt: v.clearance_validated_at
+        clearanceLevelId: v.clearance_level_id, clearanceValidatedAt: v.clearance_validated_at
       };
     }
     return null;

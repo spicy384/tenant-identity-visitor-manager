@@ -110,13 +110,19 @@ function inProcess() {
   check("retention: the run is recorded", /1 audit entries older than 365 days and 2 sign-ins older than 30 days deleted/.test(db.raw.prepare("SELECT detail FROM audit WHERE action = 'audit.retention'").get()?.detail || ""));
 
   const third = clearance.requestValidation({ kind: "person", id: person.id, last4: DIGITS, by: "manny" });
-  const done = clearance.validate({ kind: "person", id: person.id, levelId: L.TS.id, granted: "2025-01-02", expires: "2030-01-02", by: "sec" });
+  const done = clearance.validate({ kind: "person", id: person.id, levelId: L.TS.id, granted: "2025-01-02", by: "sec" });
   check("validate: the request is closed and its digits wiped", done.closed === 1 && clearance.openCount() === 0 && clearance.digitsOf(third.id) === null);
   const p = directory.getPerson(person.id);
-  check("validate: the level, dates, when and by whom are recorded", p.clearanceLevel === L.TS.id && p.clearanceGranted === "2025-01-02" && p.clearanceExpires === "2030-01-02" && p.clearanceValidatedAt === t && p.clearanceValidatedBy === "sec" && p.clearanceStatus === "validated");
-  check("validate: it now counts for badges", clearance.effectiveLevel({ kind: "person", clearanceLevelId: p.clearanceLevel, clearanceExpires: p.clearanceExpires, clearanceValidatedAt: p.clearanceValidatedAt })?.name === "TS");
+  check("validate: the level, dates, when and by whom are recorded", p.clearanceLevel === L.TS.id && p.clearanceGranted === "2025-01-02" && p.clearanceExpires === undefined && p.clearanceValidatedAt === t && p.clearanceValidatedBy === "sec" && p.clearanceStatus === "validated");
+  check("validate: it now counts for badges", clearance.effectiveLevel({ kind: "person", clearanceLevelId: p.clearanceLevel, clearanceValidatedAt: p.clearanceValidatedAt })?.name === "TS");
   check("validate: no clearance at all can be validated too", clearance.validate({ kind: "visitor", id: visitor.id, levelId: null, by: "sec" }).level === null && visitors.get(visitor.id).clearanceStatus === "validated");
-  check("validate: an expiry before the grant is refused", throwsStatus(() => clearance.validate({ kind: "person", id: person.id, levelId: L.TS.id, granted: "2025-01-02", expires: "2024-01-01" }), 400) === true);
+  check("validate: a clearance has no expiry date: one given is ignored, and a date long past doesn't end it", (() => {
+    clearance.validate({ kind: "person", id: person.id, levelId: L.TS.id, granted: "2025-01-02", expires: "2020-01-01", by: "sec" });
+    const now = directory.getPerson(person.id);
+    return db.raw.prepare("SELECT clearance_expires FROM people WHERE id = ?").get(person.id).clearance_expires === null
+      && clearance.effectiveLevel({ kind: "person", clearanceLevelId: now.clearanceLevel, clearanceValidatedAt: now.clearanceValidatedAt })?.name === "TS";
+  })());
+  check("validate: a bad granted date is refused", throwsStatus(() => clearance.validate({ kind: "person", id: person.id, levelId: L.TS.id, granted: "last spring", by: "sec" }), 400) === true);
   check("validate: an unknown level is refused", throwsStatus(() => clearance.validate({ kind: "person", id: person.id, levelId: 9999 }), 400) === true);
 
   // Several at once, for people already checked: all or nothing.
@@ -124,12 +130,71 @@ function inProcess() {
   const samRequest = clearance.requestValidation({ kind: "person", id: sam.id, last4: OTHER });
   check("validate many: one that doesn't exist changes none of them", throwsStatus(() => clearance.validateMany({ kind: "person", ids: [sam.id, 99999], levelId: L.Secret.id, by: "sec" }), 404) === true
     && directory.getPerson(sam.id).clearanceStatus === "requested" && clearance.digitsOf(samRequest.id) !== null);
-  const many = clearance.validateMany({ kind: "person", ids: [sam.id, person.id], levelId: L.TS.id, granted: "2025-01-02", expires: "2030-01-02", by: "sec" });
+  const many = clearance.validateMany({ kind: "person", ids: [sam.id, person.id], levelId: L.TS.id, granted: "2025-01-02", by: "sec" });
   const samNow = directory.getPerson(sam.id);
   check("validate many: each gets the level and dates, validated by whom", many.holders.length === 2 && many.level.name === "TS" && many.closed === 1
-    && samNow.clearanceLevel === L.TS.id && samNow.clearanceExpires === "2030-01-02" && samNow.clearanceValidatedBy === "sec" && samNow.clearanceStatus === "validated");
+    && samNow.clearanceLevel === L.TS.id && samNow.clearanceGranted === "2025-01-02" && samNow.clearanceValidatedBy === "sec" && samNow.clearanceStatus === "validated");
   check("validate many: their waiting requests close and the digits are wiped", clearance.digitsOf(samRequest.id) === null && !clearance.hasOpen("person", sam.id));
   check("validate many: none chosen is refused", throwsStatus(() => clearance.validateMany({ kind: "person", ids: [], levelId: L.TS.id }), 400) === true);
+
+  // --- debrief: how a clearance ends ---------------------------------------------------------
+  const dana = directory.createPerson({ firstName: "Dana", lastName: "Debrief", companyId: acme.id });
+  const dayOf = (ms) => new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+  check("debrief: nothing to end without a validated clearance", throwsStatus(() => clearance.debrief({ kind: "person", id: dana.id, by: "sec" }), 409) === true
+    && throwsStatus(() => clearance.debrief({ kind: "person", id: 99999, by: "sec" }), 404) === true);
+  clearance.validate({ kind: "person", id: dana.id, levelId: L["TS//SCI"].id, granted: "2021-03-04", by: "sec" });
+  check("debrief: not to the same level or a higher one", throwsStatus(() => clearance.debrief({ kind: "person", id: dana.id, levelId: L["TS//SCI"].id, by: "sec" }), 400) === true
+    && throwsStatus(() => clearance.debrief({ kind: "person", id: dana.id, levelId: L["TS//SCI FSP"].id, by: "sec" }), 400) === true
+    && directory.getPerson(dana.id).clearanceLevel === L["TS//SCI"].id);
+  check("debrief: not on a date still to come, or one that isn't a date", throwsStatus(() => clearance.debrief({ kind: "person", id: dana.id, debriefed: dayOf(t + 3 * 86400000), by: "sec" }), 400) === true
+    && throwsStatus(() => clearance.debrief({ kind: "person", id: dana.id, debriefed: "yesterday", by: "sec" }), 400) === true);
+  // Down a level: what is left counts from now, and the debrief stays on the record.
+  const danaRequest = clearance.requestValidation({ kind: "person", id: dana.id, last4: DIGITS, by: "manny" });
+  let down = clearance.debrief({ kind: "person", id: dana.id, levelId: L.TS.id, debriefed: "2026-02-03", by: "sec2" });
+  let d = directory.getPerson(dana.id);
+  check("debrief: to a lower level, with the date and by whom", down.from.name === "TS//SCI" && down.level.name === "TS" && down.debriefed === "2026-02-03"
+    && d.clearanceLevel === L.TS.id && d.clearanceDebriefed === "2026-02-03" && d.clearanceDebriefedBy === "sec2" && d.clearanceGranted === "2021-03-04" && d.clearanceValidatedBy === "sec2");
+  check("debrief: the lower level counts for badges, the old one doesn't", clearance.effectiveLevel({ kind: "person", clearanceLevelId: d.clearanceLevel, clearanceValidatedAt: d.clearanceValidatedAt })?.name === "TS");
+  check("debrief: a waiting request is closed and its digits wiped", down.closed === 1 && clearance.digitsOf(danaRequest.id) === null && !clearance.hasOpen("person", dana.id));
+  // Validated again at what they have: the debrief still shows. Then debriefed altogether.
+  clearance.validate({ kind: "person", id: dana.id, levelId: L.TS.id, granted: "2021-03-04", by: "sec" });
+  check("debrief: validating the same level again leaves it on the record", directory.getPerson(dana.id).clearanceDebriefed === "2026-02-03");
+  down = clearance.debrief({ kind: "person", id: dana.id, by: "sec" });
+  d = directory.getPerson(dana.id);
+  check("debrief: to uncleared, today when no date is given", down.level === null && down.from.name === "TS" && d.clearanceLevel === null && d.clearanceGranted === null && d.clearanceDebriefed === dayOf(t)
+    && d.clearanceStatus === "validated" && clearance.effectiveLevel({ kind: "person", clearanceLevelId: d.clearanceLevel, clearanceValidatedAt: d.clearanceValidatedAt }) === null);
+  check("debrief: once uncleared there is nothing left to debrief", throwsStatus(() => clearance.debrief({ kind: "person", id: dana.id, by: "sec" }), 409) === true);
+  // They come back: any level again, higher than before included.
+  clearance.validate({ kind: "person", id: dana.id, levelId: L["TS//SCI FSP"].id, granted: "2027-05-06", by: "sec" });
+  d = directory.getPerson(dana.id);
+  check("debrief: someone debriefed can be given a higher clearance later, and the debrief comes off the record", d.clearanceLevel === L["TS//SCI FSP"].id && d.clearanceDebriefed === null && d.clearanceDebriefedBy === null
+    && clearance.effectiveLevel({ kind: "person", clearanceLevelId: d.clearanceLevel, clearanceValidatedAt: d.clearanceValidatedAt })?.name === "TS//SCI FSP");
+  check("debrief: a visitor too", (() => {
+    const v = visitors.create({ firstName: "Vic", lastName: "Leaving" });
+    clearance.validate({ kind: "visitor", id: v.id, levelId: L.Secret.id, by: "sec" });
+    const r = clearance.debrief({ kind: "visitor", id: v.id, debriefed: "2026-01-05", by: "sec" });
+    const now = visitors.get(v.id);
+    visitors.remove(v.id);
+    return r.from.name === "Secret" && now.clearanceLevel === null && now.clearanceDebriefed === "2026-01-05" && now.clearanceDebriefedBy === "sec";
+  })());
+  directory.deletePerson?.(dana.id);
+
+  // An expiry date left from before: taken off at start-up; one already past doesn't bring the clearance back.
+  check("expiry retired: a date left on record is removed, and a clearance that had lapsed stays gone", (() => {
+    const old = directory.createPerson({ firstName: "Olga", lastName: "Old", companyId: acme.id });
+    const fine = directory.createPerson({ firstName: "Fay", lastName: "Fine", companyId: acme.id });
+    for (const x of [old, fine]) clearance.validate({ kind: "person", id: x.id, levelId: L.TS.id, by: "sec" });
+    db.raw.prepare("UPDATE people SET clearance_expires = ? WHERE id = ?").run("2020-01-01", old.id);
+    db.raw.prepare("UPDATE people SET clearance_expires = ? WHERE id = ?").run("2999-01-01", fine.id);
+    const again = createClearance({ db, now: () => t });
+    again.stop();
+    const o = directory.getPerson(old.id);
+    const f = directory.getPerson(fine.id);
+    const logged = db.raw.prepare("SELECT target, detail FROM audit WHERE action = 'clearance.expiry_retired'").all();
+    const left = db.raw.prepare("SELECT count(*) AS n FROM people WHERE clearance_expires IS NOT NULL").get().n;
+    for (const x of [old, fine]) directory.deletePerson?.(x.id);
+    return o.clearanceLevel === null && f.clearanceLevel === L.TS.id && left === 0 && logged.length === 1 && logged[0].target === "Olga Old" && /2020-01-01/.test(logged[0].detail);
+  })());
 
   const canceled = clearance.requestValidation({ kind: "visitor", id: visitor.id, last4: DIGITS });
   clearance.cancelRequest(canceled.id, "sec");
@@ -376,18 +441,39 @@ async function overHttp() {
   check("overview: so do administrators", (await admin.get("/api/clearance/overview")).status === 200);
   check("overview: nobody else", (await manager.get("/api/clearance/overview")).status === 403 && (await desk.get("/api/clearance/overview")).status === 403 && (await viewer.get("/api/clearance/overview")).status === 403);
   check("overview: Security at another site doesn't see Harbor Point's people", !(await riverSecurity.get("/api/clearance/overview")).data.recent.some((x) => x.name === "Pat Person"));
-  const soon = new Date(Date.now() + 20 * 86400000).toISOString().slice(0, 10);
-  await security.post("/api/clearance/validate", { kind: "visitor", id: visitor.id, levelId: L.Secret.id, expires: soon });
+  await security.post("/api/clearance/validate", { kind: "visitor", id: visitor.id, levelId: L.Secret.id });
   r = await security.get("/api/clearance/overview?within=60");
   check("overview: a visitor's re-check, with its due date", r.data.rechecks.some((x) => x.name === "Val Visitor" && x.dueAt > Date.now() && !x.overdue));
-  check("overview: and a clearance expiring soon", r.data.expiring.some((x) => x.name === "Val Visitor" && x.expires === soon && !x.expired));
+  check("overview: no clearance expires any more", r.data.expiring === undefined && Array.isArray(r.data.debriefed));
+
+  // --- debrief over HTTP: Security only ------------------------------------------------------------
+  const leaver = (await manager.post("/api/people", { firstName: "Lou", lastName: "Leaver", companyId: acme.id })).data.person;
+  await security.post("/api/clearance/validate", { kind: "person", id: leaver.id, levelId: L["TS//SCI"].id });
+  const debriefBody = { kind: "person", id: leaver.id, levelId: L.Secret.id, debriefed: "2026-03-04" };
+  check("debrief http: only the Security role", (await admin.post("/api/clearance/debrief", debriefBody)).status === 403 && (await manager.post("/api/clearance/debrief", debriefBody)).status === 403
+    && (await desk.post("/api/clearance/debrief", debriefBody)).status === 403 && (await riverSecurity.post("/api/clearance/debrief", debriefBody)).status === 404);
+  r = await security.post("/api/clearance/debrief", debriefBody);
+  check("debrief http: Security debriefs to a lower level", r.status === 200 && r.data.from.name === "TS//SCI" && r.data.level.name === "Secret" && r.data.debriefed === "2026-03-04" && r.data.badges.length === 0, JSON.stringify(r.data));
+  check("debrief http: not up a level", (await security.post("/api/clearance/debrief", { kind: "person", id: leaver.id, levelId: L.TS.id })).status === 400);
+  r = await security.get(`/api/people/${leaver.id}`);
+  check("debrief http: Security sees it on the record", r.data.person.clearanceLevelName === "Secret" && r.data.person.clearanceDebriefed === "2026-03-04" && Boolean(r.data.person.clearanceDebriefedBy));
+  r = await desk.get(`/api/people/${leaver.id}`);
+  check("debrief http: a role that doesn't see clearances sees neither the level nor the debrief", r.status === 200 && r.data.person.clearanceLevel === undefined && r.data.person.clearanceDebriefed === undefined && r.data.person.clearanceDebriefedBy === undefined, JSON.stringify(Object.keys(r.data.person)));
+  r = await admin.get("/api/audit?action=clearance.debrief");
+  check("debrief http: in the audit log, with both levels", r.data.entries.some((e) => e.target === "Lou Leaver" && /person; debriefed 2026-03-04 from TS\/\/SCI; now Secret/.test(e.detail)), JSON.stringify(r.data.entries.slice(0, 2)));
+  await security.post("/api/clearance/debrief", { kind: "person", id: leaver.id });
+  r = await security.get("/api/clearance/overview");
+  check("overview: who was debriefed lately, and what they were left with", r.data.debriefed.some((x) => x.name === "Lou Leaver" && x.levelName === null && Boolean(x.debriefed) && Boolean(x.debriefedBy)), JSON.stringify(r.data.debriefed));
+  check("overview: Security at another site doesn't see them", !(await riverSecurity.get("/api/clearance/overview")).data.debriefed.some((x) => x.name === "Lou Leaver"));
+  r = await security.post("/api/clearance/validate", { kind: "person", id: leaver.id, levelId: L["TS//SCI FSP"].id });
+  check("debrief http: and they can be validated higher again", r.status === 200 && (await security.get(`/api/people/${leaver.id}`)).data.person.clearanceLevelName === "TS//SCI FSP");
   check("overview: never the SSN digits", !mentions(JSON.stringify(r.data)) && !mentions(JSON.stringify(r.data), OTHER));
 
   // --- each person's preferences: their site and dashboard ----------------------------------------
   r = await security.get("/api/me/prefs");
   check("prefs: Security starts with the clearance modules", r.data.dashboard[0] === "clearanceQueue" && r.data.dashboard.includes("rechecks") && r.data.site === null);
   r = await desk.get("/api/me/prefs");
-  check("prefs: front desk with its own, and no clearance modules on offer", r.data.dashboard[0] === "badgeNeeded" && !r.data.available.some((m) => ["clearanceQueue", "rechecks", "expiring", "validations"].includes(m)));
+  check("prefs: front desk with its own, and no clearance modules on offer", r.data.dashboard[0] === "badgeNeeded" && !r.data.available.some((m) => ["clearanceQueue", "rechecks", "debriefed", "validations"].includes(m)));
   check("prefs: a module they may not have is refused", (await desk.put("/api/me/prefs", { dashboard: ["here", "clearanceQueue"] })).status === 403);
   r = await desk.put("/api/me/prefs", { dashboard: ["tenants", "here"], site: other.id });
   check("prefs: their own order and site are kept", r.status === 200 && r.data.dashboard.join() === "tenants,here" && r.data.site === other.id && (await desk.get("/api/me/prefs")).data.site === other.id);

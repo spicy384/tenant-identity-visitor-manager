@@ -146,7 +146,8 @@ function createVisitors({ db, fields }) {
       clearanceLevel: r.clearance_level_id ?? null,
       clearanceLevelName: r.clearance_level_name ?? null,
       clearanceGranted: r.clearance_granted ?? null,
-      clearanceExpires: r.clearance_expires ?? null,
+      clearanceDebriefed: r.clearance_debriefed ?? null,
+      clearanceDebriefedBy: r.clearance_debriefed_by ?? null,
       clearanceValidatedAt: r.clearance_validated_at ?? null,
       clearanceValidatedBy: r.clearance_validated_by ?? null,
       clearanceStatus: statusFor("visitor", { clearanceValidatedAt: r.clearance_validated_at, clearanceRequested: r.clearance_requested }, days),
@@ -247,7 +248,6 @@ function createVisitors({ db, fields }) {
       else out.clearanceLevel = Number(v);
     }
     if (input.clearanceGranted !== undefined) out.clearanceGranted = cleanDate(input.clearanceGranted, "Clearance granted");
-    if (input.clearanceExpires !== undefined) out.clearanceExpires = cleanDate(input.clearanceExpires, "Clearance expires");
     return out;
   }
 
@@ -307,9 +307,9 @@ function createVisitors({ db, fields }) {
     const now = Date.now();
     let id;
     db.transaction(() => {
-      id = raw.prepare(`INSERT INTO visitors (first_name, last_name, organization, visitor_type, citizenship, email, phone, notes, clearance_level_id, clearance_granted, clearance_expires, verified, blocked, source, added_site_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(v.firstName, v.lastName, v.organization ?? null, v.visitorType || "Guest", v.citizenship ?? null, v.email ?? null, v.phone ?? null, v.notes ?? null, v.clearanceLevel ?? null, v.clearanceGranted ?? null, v.clearanceExpires ?? null,
+      id = raw.prepare(`INSERT INTO visitors (first_name, last_name, organization, visitor_type, citizenship, email, phone, notes, clearance_level_id, clearance_granted, verified, blocked, source, added_site_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(v.firstName, v.lastName, v.organization ?? null, v.visitorType || "Guest", v.citizenship ?? null, v.email ?? null, v.phone ?? null, v.notes ?? null, v.clearanceLevel ?? null, v.clearanceGranted ?? null,
           (v.verified ?? verified) ? 1 : 0, v.blocked ? 1 : 0, source, addedSite, now, now).lastInsertRowid;
       for (const link of links) setLink(id, link, { sites: addedSite ? null : sites });
       fields.writeValues(id, values);
@@ -325,9 +325,9 @@ function createVisitors({ db, fields }) {
     const values = customValues(custom, { editable, current: existing.values });
     const next = { ...existing, ...v };
     db.transaction(() => {
-      raw.prepare(`UPDATE visitors SET first_name = ?, last_name = ?, organization = ?, visitor_type = ?, citizenship = ?, email = ?, phone = ?, notes = ?, clearance_level_id = ?, clearance_granted = ?, clearance_expires = ?,
+      raw.prepare(`UPDATE visitors SET first_name = ?, last_name = ?, organization = ?, visitor_type = ?, citizenship = ?, email = ?, phone = ?, notes = ?, clearance_level_id = ?, clearance_granted = ?,
         verified = ?, blocked = ?, updated_at = ? WHERE id = ?`)
-        .run(next.firstName, next.lastName, next.organization, next.visitorType || "Guest", next.citizenship ?? null, next.email, next.phone, next.notes, next.clearanceLevel ?? null, next.clearanceGranted ?? null, next.clearanceExpires ?? null,
+        .run(next.firstName, next.lastName, next.organization, next.visitorType || "Guest", next.citizenship ?? null, next.email, next.phone, next.notes, next.clearanceLevel ?? null, next.clearanceGranted ?? null,
           next.verified ? 1 : 0, next.blocked ? 1 : 0, Date.now(), id);
       fields.writeValues(id, values);
     });
@@ -399,8 +399,8 @@ function createVisitors({ db, fields }) {
       // Security merges; anyone else's merge leaves it behind.
       if (!into.clearanceLevel && from.clearanceLevel && !carryClearance) clearanceDropped = true;
       if (!into.clearanceLevel && from.clearanceLevel && carryClearance) {
-        raw.prepare("UPDATE visitors SET clearance_level_id = ?, clearance_granted = ?, clearance_expires = ?, clearance_validated_at = ?, clearance_validated_by = ? WHERE id = ?")
-          .run(from.clearanceLevel, from.clearanceGranted, from.clearanceExpires, from.clearanceValidatedAt, from.clearanceValidatedBy, intoId);
+        raw.prepare("UPDATE visitors SET clearance_level_id = ?, clearance_granted = ?, clearance_validated_at = ?, clearance_validated_by = ?, clearance_debriefed = ?, clearance_debriefed_by = ? WHERE id = ?")
+          .run(from.clearanceLevel, from.clearanceGranted, from.clearanceValidatedAt, from.clearanceValidatedBy, from.clearanceDebriefed, from.clearanceDebriefedBy, intoId);
       }
       // Waiting validation requests follow them too.
       raw.prepare("UPDATE clearance_requests SET holder_id = ? WHERE holder_kind = 'visitor' AND holder_id = ?").run(intoId, fromId);

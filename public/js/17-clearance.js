@@ -17,7 +17,7 @@ const KIND_FILTER = { key: "kind", label: "People and visitors", value: holderKi
 
 const isSecurity = () => Boolean(state.config?.clearance?.security);
 const canAskValidation = (kind) => isSecurity() || (kind === "person" ? canEditDirectory() : canEditVisitors());
-const CLEARANCE_KEYS = ["clearanceStatus", "clearanceLevel", "clearanceGranted", "clearanceExpires", "clearanceValidatedAt", "clearanceValidatedBy"];
+const CLEARANCE_KEYS = ["clearanceStatus", "clearanceLevel", "clearanceGranted", "clearanceValidatedAt", "clearanceValidatedBy", "clearanceDebriefed", "clearanceDebriefedBy"];
 
 /** The validation tag, or null when the caller doesn't see it. */
 function clearanceTag(record) {
@@ -42,7 +42,7 @@ function clearanceSection(kind, record, done) {
   const fact = (label, value) => dl.append(h("dt", { text: label }), h("dd", { text: value }));
   if (record.clearanceLevel !== undefined) fact("Level", clearanceText(record));
   if (record.clearanceGranted) fact("Granted", fmtDate(Date.parse(`${record.clearanceGranted}T12:00:00`)));
-  if (record.clearanceExpires) fact("Expires", fmtDate(Date.parse(`${record.clearanceExpires}T12:00:00`)));
+  if (record.clearanceDebriefed) fact("Debriefed", `${fmtDate(Date.parse(`${record.clearanceDebriefed}T12:00:00`))}${record.clearanceDebriefedBy ? ` by ${record.clearanceDebriefedBy}` : ""}`);
   if (record.clearanceValidatedAt) fact("Validated", `${fmtDateTime(record.clearanceValidatedAt)}${record.clearanceValidatedBy ? ` by ${record.clearanceValidatedBy}` : ""}`);
   if (kind === "visitor" && record.clearanceValidatedAt) fact(record.clearanceStatus === "recheck" ? "Re-check was due" : "Re-check due", fmtDate(recheckDue(record)));
   const buttons = [];
@@ -55,6 +55,10 @@ function clearanceSection(kind, record, done) {
       const request = record.clearanceStatus === "requested" ? (await api("/api/clearance/requests")).requests.find((q) => q.kind === kind && q.holderId === record.id) : null;
       if (await validateClearance(kind, record, request)) done();
     } }));
+    // Only a clearance Security has validated can be ended by a debrief.
+    if (record.clearanceLevel && record.clearanceValidatedAt) {
+      buttons.push(h("button", { type: "button", class: "secondary small", text: "Debrief", onclick: async () => { if (await debriefClearance(kind, record)) done(); } }));
+    }
   }
   return h("div", { class: "stack clearance-section" },
     h("h4", {}, "Clearance ", clearanceTag(record)),
@@ -101,8 +105,8 @@ async function requestValidation(kind, record) {
 }
 
 /**
- * The Security role validates a clearance: the level (or none), when it was granted and
- * when it expires. With a waiting request that came with digits, they can be shown here.
+ * The Security role validates a clearance: the level (or none) and when it was granted.
+ * With a waiting request that came with digits, they can be shown here.
  */
 async function validateClearance(kind, record, request = null) {
   const name = kind === "visitor" ? visitorName(record) : personName(record);
@@ -152,11 +156,10 @@ async function validateClearance(kind, record, request = null) {
       fields: [
         ...extra.map((node) => ({ node })),
         { name: "levelId", label: "Clearance level", type: "select", value: record.clearanceLevel ? String(record.clearanceLevel) : "", options: [{ value: "", label: "Uncleared" }, ...levels.map((l) => ({ value: String(l.id), label: l.name }))] },
-        { name: "granted", label: "Granted", type: "date", half: true, value: record.clearanceGranted || "" },
-        { name: "expires", label: "Expires", type: "date", half: true, value: record.clearanceExpires || "" }
+        { name: "granted", label: "Granted", type: "date", half: true, value: record.clearanceGranted || "", hint: "Optional: when the clearance was granted." }
       ],
       submitLabel: "Validate",
-      onSubmit: (v) => api("/api/clearance/validate", { method: "POST", body: { kind, id: record.id, levelId: v.levelId ? Number(v.levelId) : null, granted: v.granted || null, expires: v.expires || null } })
+      onSubmit: (v) => api("/api/clearance/validate", { method: "POST", body: { kind, id: record.id, levelId: v.levelId ? Number(v.levelId) : null, granted: v.granted || null } })
     });
     if (done) {
       toast(`Validated: ${done.level ? done.level.name : "no clearance"}.${done.closed ? " The request is closed and its digits wiped." : ""}`);
@@ -166,6 +169,49 @@ async function validateClearance(kind, record, request = null) {
   } finally {
     hideDigits();
   }
+}
+
+/**
+ * The Security role debriefs someone whose clearance it has validated (they left, or failed a
+ * periodic investigation): the clearance ends on the date given, and they are left Uncleared
+ * or at a lower level. Validating them again later can give any level. Returns true when done.
+ */
+async function debriefClearance(kind, record) {
+  const name = kind === "visitor" ? visitorName(record) : personName(record);
+  const levels = state.config.clearanceLevels || [];
+  const held = levels.find((l) => l.id === record.clearanceLevel);
+  const lower = levels.filter((l) => held && l.rank < held.rank).sort((a, b) => b.rank - a.rank);
+  const done = await formDialog({
+    title: `Debrief ${name}`,
+    intro: h("p", { class: "muted", text: `Ends ${name}'s clearance${held ? ` (${held.name})` : ""} as of the debrief date. Choose what they are left with: usually Uncleared, or a lower level they keep. If they come back, validating them again can give any level.` }),
+    fields: [
+      { name: "debriefed", label: "Debriefed on", type: "date", half: true, value: localToday() },
+      { name: "levelId", label: "Clearance from now on", type: "select", half: true, value: "", options: [{ value: "", label: "Uncleared" }, ...lower.map((l) => ({ value: String(l.id), label: l.name }))] }
+    ],
+    submitLabel: "Debrief",
+    onSubmit: (v) => {
+      if (!v.debriefed) throw new Error("Give the date they were debriefed.");
+      return api("/api/clearance/debrief", { method: "POST", body: { kind, id: record.id, levelId: v.levelId ? Number(v.levelId) : null, debriefed: v.debriefed } });
+    }
+  });
+  if (done) {
+    toast(`Debriefed: ${done.level ? `now ${done.level.name}` : "now uncleared"}.${done.closed ? " The waiting request is closed and its digits wiped." : ""}`);
+    refreshCounts();
+    // A badge they still hold that needs more than they have now: said in a notice to
+    // acknowledge, since a toast would sit behind the record that is open.
+    const n = done.badges.length;
+    if (n) {
+      await openDialog({
+        title: n === 1 ? "A badge to take back" : "Badges to take back",
+        body: h("div", { class: "stack" },
+          h("p", { text: `${name} still holds ${n === 1 ? "a badge that needs" : "badges that need"} ${done.level ? `a higher clearance than ${done.level.name}` : "a clearance"}:` }),
+          h("ul", {}, done.badges.map((x) => h("li", { text: `Badge ${x.label} (${x.levelName})` }))),
+          h("p", { class: "muted", text: "The debrief is recorded. Take the badge back, or mark it lost, from their record or the Badges page." })),
+        actions: [{ label: "OK", kind: "primary", value: true }]
+      });
+    }
+  }
+  return Boolean(done);
 }
 
 /**
@@ -190,13 +236,12 @@ async function validateClearances(kind, list) {
     fields: [
       { name: "levelId", label: "Clearance level", type: "select", required: true, value: "",
         options: [{ value: "", label: "Choose a level" }, ...levels.map((l) => ({ value: String(l.id), label: l.name })), { value: "none", label: "Uncleared" }] },
-      { name: "granted", label: "Granted", type: "date", half: true, hint: "Optional; the same for each." },
-      { name: "expires", label: "Expires", type: "date", half: true, hint: "Optional; the same for each." }
+      { name: "granted", label: "Granted", type: "date", half: true, hint: "Optional; the same for each." }
     ],
     submitLabel: `Validate ${n}`,
     onSubmit: (v) => {
       if (!v.levelId) throw new Error("Choose the clearance level.");
-      return api("/api/clearance/validate-bulk", { method: "POST", body: { kind, ids: list.map((r) => r.id), levelId: v.levelId === "none" ? null : Number(v.levelId), granted: v.granted || null, expires: v.expires || null } });
+      return api("/api/clearance/validate-bulk", { method: "POST", body: { kind, ids: list.map((r) => r.id), levelId: v.levelId === "none" ? null : Number(v.levelId), granted: v.granted || null } });
     }
   });
   if (done) {
@@ -346,10 +391,10 @@ async function showClearances() {
         { label: "Last validated", cell: (x) => `${fmtDate(x.validatedAt)}${x.validatedBy ? ` by ${x.validatedBy}` : ""}` }], "No visitor re-checks coming up.",
       { words: (x) => [fmtDate(x.dueAt), x.overdue ? "Overdue" : null, fmtDate(x.validatedAt), x.validatedBy],
         filters: [LEVEL_FILTER, { key: "due", label: "Overdue and coming up", value: (x) => (x.overdue ? "Overdue" : "Coming up") }] }),
-    holderPanel("expiring", "Clearances expiring", `Clearances on record that expire within ${o.expiringDays} days, or expired in the last 30. An expired clearance counts as none.`,
-      o.expiring, [level, { label: "Expires", cell: (x) => [dateText(x.expires), x.expired ? h("span", { class: "badge bad", text: "Expired" }) : null] }], "Nothing expiring soon.",
-      { words: (x) => [dateText(x.expires), x.expired ? "Expired" : null],
-        filters: [KIND_FILTER, LEVEL_FILTER, { key: "state", label: "Expired and expiring", value: (x) => (x.expired ? "Expired" : "Expiring") }] }),
+    holderPanel("debriefed", "Recently debriefed", `Debriefs of the last ${o.recentDays} days, with the clearance each was left with. Check that any badge needing more has come back.`,
+      o.debriefed, [{ label: "Clearance now", cell: (x) => x.levelName || "Uncleared" }, { label: "Debriefed", cell: (x) => `${dateText(x.debriefed)}${x.debriefedBy ? ` by ${x.debriefedBy}` : ""}` }], `Nobody debriefed in the last ${o.recentDays} days.`,
+      { words: (x) => [dateText(x.debriefed), x.debriefedBy, x.levelName ? null : "Uncleared"],
+        filters: [KIND_FILTER, LEVEL_FILTER, { key: "by", label: "Debriefed by anyone", value: (x) => x.debriefedBy }] }),
     holderPanel("recent", "Recently validated", null,
       o.recent, [level, { label: "Validated", cell: (x) => `${fmtDateTime(x.validatedAt)}${x.validatedBy ? ` by ${x.validatedBy}` : ""}` }], `Nothing validated in the last ${o.recentDays} days.`,
       { words: (x) => [fmtDateTime(x.validatedAt), x.validatedBy],
@@ -390,7 +435,7 @@ function recheckPanel() {
   const days = h("input", { type: "number", min: "1", max: "3650", step: "1", value: String(state.config.clearance?.visitorRecheckDays || 90), "aria-label": "Days between re-checks", class: "narrow" });
   return h("div", { class: "panel" },
     h("div", { class: "panel-head" }, h("h3", { text: "Visitor clearance re-check" })),
-    h("p", { class: "muted", text: "A visitor's validated clearance counts for this many days; after that it shows Re-check due and counts as none until Security validates it again. People's validations don't lapse (their clearance's own expiry date still applies)." }),
+    h("p", { class: "muted", text: "A visitor's validated clearance counts for this many days; after that it shows Re-check due and counts as none until Security validates it again. People's validations don't lapse: a person's clearance stands until Security debriefs them." }),
     h("div", { class: "btn-row" }, h("span", { text: "Re-check every" }), days, h("span", { text: "days" }),
       h("button", { type: "button", class: "primary small", text: "Save", onclick: async () => {
         try {

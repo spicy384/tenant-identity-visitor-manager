@@ -322,7 +322,7 @@ async function main() {
   r = await clearRun(security, "Name,Company,Level,Validated,Expires\nDee Dunn,Dunn Partners,TS,2025-04-01,2030-01-31\nAnn Able,,Uncleared,2024-01-01,\n", {}, { ...clearMap, company: { column: "Company" }, level: { column: "Level" }, validated: { column: "Validated" }, expires: { column: "Expires" } });
   check("clearances: a company tells two people apart; one validated more recently here is left as it is", r.status === 200 && r.data.updated === 1 && r.data.unchanged === 1, JSON.stringify(r.data));
   const dunns = (await security.get("/api/people?q=Dunn")).data.people;
-  check("clearances: the right Dee Dunn, with the expiry given", dunns.find((p) => p.companyName === "Dunn Partners").clearanceLevelName === "TS" && dunns.find((p) => p.companyName === "Dunn Partners").clearanceExpires === "2030-01-31"
+  check("clearances: the right Dee Dunn; an expiry column is no longer read", dunns.find((p) => p.companyName === "Dunn Partners").clearanceLevelName === "TS" && dunns.find((p) => p.companyName === "Dunn Partners").clearanceExpires === undefined
     && !dunns.find((p) => p.companyName === "Acme Corp").clearanceLevelName);
   ann = await personAs(security, "Able");
   check("clearances: the newer validation kept", ann.clearanceLevelName === "Secret");

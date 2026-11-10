@@ -55,9 +55,10 @@ const BUILT_IN = {
     { key: "clearanceStatus", label: "Clearance validation", type: "clearanceStatus", system: true },
     { key: "clearanceLevel", label: "Clearance level", type: "clearance", sensitive: true, security: true },
     { key: "clearanceGranted", label: "Clearance granted", type: "date", sensitive: true, security: true },
-    { key: "clearanceExpires", label: "Clearance expires", type: "date", sensitive: true, security: true },
     { key: "clearanceValidatedAt", label: "Clearance validated", type: "datetime", sensitive: true, system: true },
     { key: "clearanceValidatedBy", label: "Validated by", type: "text", sensitive: true, system: true },
+    { key: "clearanceDebriefed", label: "Debriefed", type: "date", sensitive: true, system: true },
+    { key: "clearanceDebriefedBy", label: "Debriefed by", type: "text", sensitive: true, system: true },
     { key: "active", label: "Active", type: "boolean", locked: true }
   ],
   // `system` fields are kept by the app: anyone may be allowed to see them, nobody edits them.
@@ -74,9 +75,10 @@ const BUILT_IN = {
     { key: "clearanceStatus", label: "Clearance validation", type: "clearanceStatus", system: true },
     { key: "clearanceLevel", label: "Clearance level", type: "clearance", sensitive: true, security: true },
     { key: "clearanceGranted", label: "Clearance granted", type: "date", sensitive: true, security: true },
-    { key: "clearanceExpires", label: "Clearance expires", type: "date", sensitive: true, security: true },
     { key: "clearanceValidatedAt", label: "Clearance validated", type: "datetime", sensitive: true, system: true },
     { key: "clearanceValidatedBy", label: "Validated by", type: "text", sensitive: true, system: true },
+    { key: "clearanceDebriefed", label: "Debriefed", type: "date", sensitive: true, system: true },
+    { key: "clearanceDebriefedBy", label: "Debriefed by", type: "text", sensitive: true, system: true },
     { key: "verified", label: "Checked by staff", type: "boolean", locked: true },
     { key: "blocked", label: "Blocked", type: "boolean", locked: true },
     { key: "lastVisitAt", label: "Last visit", type: "datetime", locked: true, system: true }

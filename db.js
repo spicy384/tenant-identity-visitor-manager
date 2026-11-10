@@ -766,6 +766,12 @@ const ADDED_COLUMNS = [
   ["people", "clearance_validated_by", "TEXT"],
   ["visitors", "clearance_validated_at", "INTEGER"],
   ["visitors", "clearance_validated_by", "TEXT"],
+  // A debrief: the day Security removed a clearance (or lowered it), and who did. The
+  // clearance_expires columns above are no longer used: clearances don't expire.
+  ["people", "clearance_debriefed", "TEXT"],
+  ["people", "clearance_debriefed_by", "TEXT"],
+  ["visitors", "clearance_debriefed", "TEXT"],
+  ["visitors", "clearance_debriefed_by", "TEXT"],
   // Which roles see clearance level names (the rest see badge template images).
   ["roles", "clearances", "INTEGER NOT NULL DEFAULT 0"],
   // A kiosk visit staff marked as needing no badge (it then leaves the "needs a badge" banner).

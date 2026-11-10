@@ -52,8 +52,7 @@ const IMPORT_FIELDS = {
     // Security only: each visitor validated on the date given.
     { key: "level", label: "Clearance level", security: true, hint: "A level's name, or Uncleared. Each visitor with one is validated by you, on the date validated.", names: ["level", "clearance", "clearancelevel", "lvl", "classification"] },
     { key: "validated", label: "Date validated", security: true, hint: "YYYY-MM-DD or M/D/YYYY. Empty for today.", names: ["validated", "datevalidated", "validatedon", "validateddate", "validationdate", "verified", "dateverified", "verifiedon"] },
-    { key: "granted", label: "Clearance granted", security: true, names: ["granted", "dategranted", "grantdate", "granteddate", "grantedon"] },
-    { key: "expires", label: "Clearance expires", security: true, names: ["expires", "expiry", "expiration", "expirationdate", "expirydate", "expireson", "clearanceexpires"] }
+    { key: "granted", label: "Clearance granted", security: true, names: ["granted", "dategranted", "grantdate", "granteddate", "grantedon"] }
   ],
   badges: [
     { key: "facility_code", label: "Facility code", hint: "2 or 3 digits, if the badge has one", names: ["facilitycode", "facility", "fc", "sitecode", "facilitycodenumber"] },
@@ -87,7 +86,6 @@ const IMPORT_FIELDS = {
     { key: "level", label: "Clearance level", required: true, hint: "A level's name, or Uncleared.", names: ["level", "clearance", "clearancelevel", "lvl", "classification"] },
     { key: "validated", label: "Date validated", hint: "YYYY-MM-DD or M/D/YYYY. Empty for today.", names: ["validated", "datevalidated", "validatedon", "validateddate", "validationdate", "dateofvalidation", "verified", "dateverified", "verifiedon", "date"] },
     { key: "granted", label: "Granted", hint: "When the clearance was granted, if known.", names: ["granted", "dategranted", "grantdate", "granteddate", "grantedon"] },
-    { key: "expires", label: "Expires", hint: "When the clearance expires, if it does.", names: ["expires", "expiry", "expiration", "expirationdate", "expirydate", "expireson", "expdate"] },
     // For visitors added from the file (with "Add visitors who aren't on record yet").
     { key: "visiting", label: "Company they visit", hint: "For visitors added: the tenant they visit. Needed if your account is limited to some sites.", names: ["visiting", "visitingcompany", "visitingfirm", "companyvisited", "hostcompany"] },
     { key: "phone", label: "Phone", hint: "For visitors added.", names: ["phone", "telephone", "tel", "mobile", "cell"] },

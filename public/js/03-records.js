@@ -57,14 +57,11 @@ function recordFacts(fields, record, skip = []) {
   return dl.children.length ? dl : h("p", { class: "muted", text: "No other details." });
 }
 
-/** "TS//SCI", with "(expired)" when its expiry date has passed. */
+/** A record's clearance level by name: "TS//SCI", or "None". */
 function clearanceText(record) {
-  if (!record?.clearanceLevelName) return "None";
-  const expired = record.clearanceExpires && record.clearanceExpires < localToday();
-  return `${record.clearanceLevelName}${expired ? ` (expired ${fmtDate(Date.parse(`${record.clearanceExpires}T12:00:00`))})` : ""}`;
+  return record?.clearanceLevelName || "None";
 }
 
-/** Today as YYYY-MM-DD on this device. */
 function localToday(offsetDays = 0) {
   const d = new Date(Date.now() + offsetDays * DAY_MS);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
