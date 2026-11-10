@@ -14,6 +14,8 @@
  * The log of checks says how many came and what was kept, never subjects or senders' words:
  * administrators, who aren't Security, see it.
  */
+const { unreachable } = require("./net-reason");
+
 const DOC = "security-mail";
 const MINUTE = 60 * 1000;
 const DAY_MS = 24 * MINUTE * 60;
@@ -97,6 +99,8 @@ function createSecurityMailbox({ store, reports, token, graphBase, fetchImpl = g
       return body;
     } catch (error) {
       if (error.name === "AbortError") throw fail(502, "Microsoft Graph didn't answer in time.");
+      const why = unreachable(error, url, { who: "Microsoft Graph" });
+      if (why) throw fail(502, why.message);
       throw error;
     } finally {
       clearTimeout(timer);

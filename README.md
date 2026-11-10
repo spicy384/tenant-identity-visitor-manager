@@ -735,6 +735,25 @@ Nginx Proxy Manager on another host terminates HTTPS and connects to the contain
 HTTPS with the self-signed certificate the app makes (`TLS_ENABLED=true`), as with Equipment
 Checkout. Set `APP_URL` to the public address for Microsoft sign-in.
 
+**When Microsoft sign-in fails for everyone.** The last step of a Microsoft sign-in is the
+server itself calling `login.microsoftonline.com`, so it needs DNS and outbound HTTPS from
+inside the container. A call that gets no answer is tried up to three times; after that the
+sign-in page, the audit log (`auth.entra_failed`) and `docker compose logs` all give the
+reason as a code: `ENOTFOUND` or `EAI_AGAIN` is DNS, `ECONNREFUSED`, `ENETUNREACH` or
+`ETIMEDOUT` is the route out or a firewall, a certificate code is a proxy inspecting the
+connection. To test from the container:
+
+```bash
+docker compose exec identity node -e "fetch('https://login.microsoftonline.com/common/discovery/v2.0/keys').then(r=>console.log(r.status),e=>console.log(e.cause))"
+```
+
+A container keeps the DNS servers and network rules it was given when it started. If the
+host's DNS servers change, or its firewall or Docker itself is reloaded, a running container
+can lose its way out while still answering browsers; `docker compose up -d --force-recreate`
+gives it a fresh start. Where the host's DNS can change, name the servers in the compose
+file (`dns: ["10.0.0.2", "10.0.0.3"]` under the service). Keep one local administrator
+account: **Sign in with a local account** needs nothing outside the server.
+
 ### Settings in the environment
 
 The compose file sets what most installs need. Anything else goes in a `.env` file next to

@@ -8,6 +8,7 @@ const os = require("os");
 const path = require("path");
 const { createChecker } = require("./helpers/assert");
 const { createEntra, roleFromClaims, rolesFromClaims } = require("../entra");
+const { unreachable, networkCodes } = require("../net-reason");
 
 const { check, report } = createChecker("Entra ID: OpenID Connect flow and token checks");
 
@@ -202,6 +203,70 @@ async function expectFail(promise, pattern) {
   check("expiry: an expired certificate turns sign-in off", entra.isReady() && !at(notAfter + 1000).isReady());
   check("expiry: and can't be chosen", await attemptFails(() => at(notAfter + 1000).useCertificate(second.id), /expired/));
   entra.save({ credential: "secret" });
+
+  // --- a Microsoft that can't be reached ---------------------------------------------------
+  // What node's fetch throws: "fetch failed", with the reason on its cause.
+  const netError = (code, text = code) => Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(text), { code }) });
+  const manyAddresses = () => Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new AggregateError([Object.assign(new Error("a"), { code: "ENETUNREACH" }), Object.assign(new Error("b"), { code: "ETIMEDOUT" })], ""), { code: "ETIMEDOUT" })
+  });
+  let failures = [];
+  let calls = 0;
+  const waits = [];
+  const flaky = createEntra({
+    store, roles: () => ROLES, env: {},
+    fetchImpl: async (url, init) => {
+      calls += 1;
+      const next = failures.shift();
+      if (typeof next === "number") return { ok: false, status: next, json: async () => ({ error: "temporarily_unavailable" }) };
+      if (next) throw next;
+      return fakeFetch(url, init);
+    },
+    wait: async (ms) => { waits.push(ms); }
+  });
+  const signIn = async (plan) => {
+    const s = flaky.begin({ redirectUri });
+    nextToken = makeToken(claimsFor(s));
+    failures = plan;
+    calls = 0;
+    waits.length = 0;
+    return flaky.complete({ state: s.state, code: "c", cookieState: s.state });
+  };
+  const failsWith = async (plan) => {
+    try {
+      await signIn(plan);
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+
+  const recovered = await signIn([netError("EAI_AGAIN"), netError("ECONNRESET")]);
+  check("unreachable: two passing faults, then the sign-in goes through", recovered.oid === "oid-123" && waits.join() === "300,1500");
+  const hiccup = await signIn([503]);
+  check("unreachable: Microsoft's own 5xx is tried again", hiccup.oid === "oid-123" && waits.length === 1);
+
+  const dns = await failsWith([netError("ENOTFOUND", "getaddrinfo ENOTFOUND login.microsoftonline.com"), netError("ENOTFOUND"), netError("ENOTFOUND")]);
+  check("unreachable: three tries, then the reason in place of 'fetch failed'", calls === 3 && dns.status === 502 && dns.unreachable
+    && dns.message === "The server couldn't reach Microsoft at login.microsoftonline.com: its name couldn't be looked up in DNS (ENOTFOUND).");
+  check("unreachable: the message has no part of the request", !/oauth2|c0de|s3cret|code_verifier|11111111/.test(dns.message));
+
+  const cert = await failsWith([netError("UNABLE_TO_GET_ISSUER_CERT_LOCALLY"), netError("ENOTFOUND")]);
+  check("unreachable: a certificate that isn't accepted is not tried again", calls === 1 && /certificate wasn't accepted.*proxy or firewall.*\(UNABLE_TO_GET_ISSUER_CERT_LOCALLY\)\.$/.test(cert.message));
+  const slow = await failsWith([Object.assign(new Error("This operation was aborted"), { name: "AbortError" })]);
+  check("unreachable: no answer in time is not tried again", calls === 1 && slow.message === "The server couldn't reach Microsoft at login.microsoftonline.com: it didn't answer in 15 seconds.");
+  const routes = await failsWith([manyAddresses(), manyAddresses(), manyAddresses()]);
+  check("unreachable: every address tried is named", /no connection could be made \(ETIMEDOUT, ENETUNREACH\)\.$/.test(routes.message));
+  const down = await failsWith([503, 503, 503]);
+  check("unreachable: a 5xx that stays is Microsoft's answer", calls === 3 && /Microsoft refused the sign-in/.test(down.message) && !down.unreachable);
+  const bug = await failsWith([new Error("unexpected")]);
+  check("unreachable: any other error is left alone", calls === 1 && bug.message === "unexpected" && !bug.unreachable);
+
+  check("reason: codes only from where node puts them", networkCodes(manyAddresses()).join() === "ETIMEDOUT,ENETUNREACH" && networkCodes(new Error("x")).length === 0
+    && networkCodes({ code: "not a code; drop table" }).length === 0);
+  check("reason: a bare 'fetch failed' still reads as unreachable, and can be retried", unreachable(new TypeError("fetch failed"), "https://graph.microsoft.com/v1.0/users/a@b.c/messages?$top=5", { who: "Microsoft Graph" }).message
+    === "The server couldn't reach Microsoft Graph at graph.microsoft.com: the request failed before any answer." && unreachable(new TypeError("fetch failed"), "x").retry);
+  check("reason: a refusal the app made itself is not a network fault", unreachable(Object.assign(new Error("no"), { status: 401, code: "ECONNRESET" }), "https://x.example") === null);
 
   // --- environment configuration ---------------------------------------------------------
   const envEntra = createEntra({ store, roles: () => ROLES, env: { ENTRA_TENANT_ID: TENANT, ENTRA_CLIENT_ID: CLIENT, ENTRA_CLIENT_SECRET: "x", ENTRA_DEFAULT_ROLE: "viewer" }, fetchImpl: fakeFetch });

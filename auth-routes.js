@@ -752,7 +752,9 @@ function createAuth({ store, roles, sites = { exists: () => true }, audit = () =
       });
     } catch (error) {
       log(req, "auth.entra_failed", null, error.message, null);
-      return entraFail(res, error.message);
+      if (!error.unreachable) return entraFail(res, error.message);
+      console.error(`Microsoft sign-in: ${error.message}`);
+      return entraFail(res, `${error.message} Try again in a moment. If it keeps happening, tell an administrator.`);
     }
     const result = entraAccount(identity);
     if (!result.user) {

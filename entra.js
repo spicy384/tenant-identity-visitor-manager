@@ -18,6 +18,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const { generateCertificate, readPem, readPfx, certificateInfo, certificateDer, clientAssertion } = require("./entra-cert");
+const { unreachable } = require("./net-reason");
 
 const DEFAULT_AUTHORITY = "https://login.microsoftonline.com";
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -27,6 +28,11 @@ const JWKS_TTL_MS = 24 * 60 * 60 * 1000;
 const JWKS_REFRESH_MIN_MS = 5 * 60 * 1000;
 const CLOCK_SKEW_S = 300;
 const HTTP_TIMEOUT_MS = 15 * 1000;
+// A request that got no answer (or a 5xx) is tried again on a new connection: up to three
+// times in all, and not once the first try is this far behind, so a sign-in never hangs.
+const HTTP_ATTEMPTS = 3;
+const HTTP_RETRY_WAITS_MS = [300, 1500];
+const HTTP_RETRY_WITHIN_MS = 12 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Settings warns this many days before the certificate in use expires.
 const CERT_WARN_DAYS = 30;
@@ -70,7 +76,7 @@ const roleFromClaims = (claims, appRoles) => rolesFromClaims(claims, appRoles)[0
  * roles(): the account roles, highest first ({ id, name }), for app-role claims and the
  * default role of a first sign-in.
  */
-function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator" }], env = process.env, fetchImpl = globalThis.fetch, now = Date.now } = {}) {
+function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator" }], env = process.env, fetchImpl = globalThis.fetch, now = Date.now, wait = (ms) => new Promise((done) => setTimeout(done, ms)) } = {}) {
   const DOC = "entra";
   // "none", or any account role but Administrator: nobody becomes an administrator by default.
   const defaultRoles = () => ["none", ...roles().map((r) => r.id).filter((id) => id !== "admin")];
@@ -405,15 +411,30 @@ function createEntra({ store, roles = () => [{ id: "admin", name: "Administrator
     return { state, url: `${authorityHost}/${c.tenantId}/oauth2/v2.0/authorize?${params}` };
   }
 
+  /**
+   * One request to Microsoft: { ok, status, body }. A passing fault (a name that didn't
+   * resolve, a dropped connection, Microsoft's own 5xx) is tried again; an authorization code
+   * can only be redeemed once, so a repeat of one that did get through is simply refused.
+   * What can't be reached fails with the reason, as a code, in place of "fetch failed".
+   */
   async function fetchJson(url, init = {}) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
-    try {
-      const res = await fetchImpl(url, { ...init, signal: controller.signal });
-      const body = await res.json().catch(() => ({}));
-      return { ok: res.ok, status: res.status, body };
-    } finally {
-      clearTimeout(timer);
+    const started = Date.now();
+    for (let attempt = 1; ; attempt += 1) {
+      const last = attempt >= HTTP_ATTEMPTS || Date.now() - started > HTTP_RETRY_WITHIN_MS;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+      try {
+        const res = await fetchImpl(url, { ...init, signal: controller.signal });
+        const body = await res.json().catch(() => ({}));
+        if (res.status < 500 || last) return { ok: res.ok, status: res.status, body };
+      } catch (error) {
+        const why = unreachable(error, url, { timeoutMs: HTTP_TIMEOUT_MS });
+        if (!why) throw error;
+        if (last || !why.retry) throw Object.assign(fail(502, why.message), { unreachable: true, codes: why.codes });
+      } finally {
+        clearTimeout(timer);
+      }
+      await wait(HTTP_RETRY_WAITS_MS[attempt - 1] ?? HTTP_RETRY_WAITS_MS.at(-1));
     }
   }
 
