@@ -94,6 +94,9 @@ async function openLease(id, onChange = () => {}) {
   const raised = lease.increases > 0;
   const customRooms = lease.offices.filter((o) => o.rateSource === "leaseRoom").length;
   const nextYear = lease.schedule.find((y) => y.when === "next");
+  // The year after a term that ends before it: no increase is due, but a renewal would start here.
+  const yearAfter = lease.schedule.find((y) => y.when === "after");
+  const yearText = (y) => `${dateText(y.from)}: ${y.rate !== null ? `${fmtRate(y.rate)}, ` : ""}${y.monthly === null ? "" : `${fmtMoney(y.monthly)}/month`}`;
   const rentBasis = fixed ? `${fmtMoney(lease.monthlyRent)} a month${lease.escalationPct ? " in the first year" : ", fixed"}`
     : lease.classRates.length || customRooms ? [lease.classRates.length ? `Rates at the start: ${lease.classRates.map((c) => `${c.name} ${fmtRate(c.rate)}`).join(", ")} a month` : null, customRooms ? `${customRooms} ${customRooms === 1 ? "room" : "rooms"} at a custom rate` : null].filter(Boolean).join("; ")
     : "From the rates: each office's size times its rate (or its fixed monthly rent)";
@@ -108,7 +111,8 @@ async function openLease(id, onChange = () => {}) {
       fact("Rent", `${rentBasis}${lease.escalationPct ? `, up ${lease.escalationPct}% each year from ${lease.commencementSet ? "its commencement" : "its start"} (${dateText(lease.commencementDate)})` : ""}`),
       fact(asOfWord ? `Rent ${asOfWord}` : "Last rent", h("span", {}, h("strong", { text: rentText(lease) }), lease.currentYearly === null ? "" : ` (${fmtMoney(lease.currentYearly)} a year)`, raised ? ` after ${lease.increases} yearly ${lease.increases === 1 ? "increase" : "increases"}` : "")),
       fact(asOfWord ? `Rate ${asOfWord}` : "Last rate", lease.currentRate === null ? null : `${fmtRate(lease.currentRate)} a month`),
-      fact("Next increase", nextYear ? `${dateText(nextYear.from)}: ${nextYear.rate !== null ? `${fmtRate(nextYear.rate)}, ` : ""}${nextYear.monthly === null ? "" : `${fmtMoney(nextYear.monthly)}/month`}` : null),
+      fact("Next increase", nextYear ? yearText(nextYear) : null),
+      fact("If renewed", yearAfter ? `${yearText(yearAfter)}, at the same yearly increase` : null),
       fact("Deposit", lease.deposit ? fmtMoney(lease.deposit) : null),
       fact("Space", lease.sqft ? fmtSqft(lease.sqft) : null),
       fact("Invoiced", [lease.invoiced.length ? lease.invoiced.map((p) => monthText(p)).join(", ") : null,
@@ -185,7 +189,7 @@ async function openLease(id, onChange = () => {}) {
   return null;
 }
 
-/** A lease's rent year by year, with the year it is in and the next one marked. */
+/** A lease's rent year by year, with the year it is in and the next one marked (or the one a renewal would start with). */
 function leaseScheduleTable(lease) {
   const rated = lease.schedule.some((y) => y.rate !== null);
   return h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
@@ -195,7 +199,7 @@ function leaseScheduleTable(lease) {
       rated ? h("td", { class: "small-text", text: fmtRate(y.rate) }) : null,
       h("td", { class: "small-text" }, y.when === "now" ? h("strong", { text: fmtMoney(y.monthly) }) : fmtMoney(y.monthly)),
       h("td", { class: "small-text", text: fmtMoney(y.yearly) }),
-      h("td", {}, y.when === "now" ? h("span", { class: "badge ok", text: lease.status === "ended" ? "Last" : lease.status === "upcoming" ? "First" : "Now" }) : y.when === "next" ? h("span", { class: "badge muted", text: "Next" }) : null))))));
+      h("td", {}, y.when === "now" ? h("span", { class: "badge ok", text: lease.status === "ended" ? "Last" : lease.status === "upcoming" ? "First" : "Now" }) : y.when === "next" ? h("span", { class: "badge muted", text: "Next" }) : y.when === "after" ? h("span", { class: "badge muted", text: "If renewed" }) : null))))));
 }
 
 /** Whole years from one date to another, and a date's nth anniversary, as the server counts them. */

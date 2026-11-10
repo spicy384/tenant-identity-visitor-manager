@@ -477,7 +477,8 @@ Home.
   percentage, compounding, on each anniversary of its **commencement**, so a lease that began
   years ago is entered with the rent it began with: the form works out what that comes to today,
   and the lease shows its rent and rate now, its next increase and its rent by the month and the
-  year, year by year. Each office's rent is rounded to the cent every year and the lease's rent is
+  year, year by year. A lease in the last year of its term lists the year after too, marked
+  **If renewed**: what the rent would be if it carried on at the same yearly increase. Each office's rent is rounded to the cent every year and the lease's rent is
   their sum, so it agrees to the cent with a spreadsheet that does the same (half a cent goes up,
   as it does there: 101 sq ft at $2.675 is $270.18). Rooms,
   a company's page, Home and invoices all use that same figure. An office let for a fixed amount

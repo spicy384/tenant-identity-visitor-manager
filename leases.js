@@ -181,10 +181,12 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
 
   /**
    * A lease's rent year by year as of `asOf`, when it has a yearly increase: from when it starts,
-   * up to the year after `asOf` (or its last). Each is { from, increases, rate, monthly, yearly, when }, when
-   * being past, now or next.
+   * up to the year after `asOf`. Each is { from, increases, rate, monthly, yearly, when }, when
+   * being past, now, next, or after: the year that would follow a term ending before it, at the
+   * same yearly increase, which is what a renewal would start at. A lease that is `over` stops
+   * at its last year.
    */
-  function scheduleOf(r, offices, asOf) {
+  function scheduleOf(r, offices, asOf, { over = false } = {}) {
     if (!r.escalation_pct) return [];
     const commences = commencementOf(r);
     const rate = sharedRate(r, offices);
@@ -192,7 +194,8 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
     const rows = [];
     for (let n = 0; n <= 100; n += 1) {
       const from = anniversary(commences, n);
-      if (r.end_date && n > 0 && from > r.end_date) break;
+      const after = Boolean(r.end_date) && n > 0 && from > r.end_date;
+      if (after && over) break;
       const monthly = monthlyAfter(r, offices, n);
       rows.push({
         from: n === 0 && r.start_date < from ? r.start_date : from,
@@ -200,7 +203,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
         rate: rate === null ? null : rate4(rate * factorAfter(r, n)),
         monthly,
         yearly: yearlyOf(monthly),
-        when: n < current ? "past" : n === current ? "now" : "next"
+        when: after ? "after" : n < current ? "past" : n === current ? "now" : "next"
       });
       if (n > current) break;
     }
@@ -238,7 +241,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
       // The rate per square foot now, when its offices have just one.
       currentRate: shared === null ? null : rate4(shared * k),
       increases,
-      schedule: scheduleOf(r, offices, asOf),
+      schedule: scheduleOf(r, offices, asOf, { over: Boolean(r.end_date && r.end_date < day) }),
       offices: offices.map((o) => {
         const monthly = o.monthly === null ? null : escalate(o.monthly, r, increases);
         return { ...o, currentRate: o.rate === null ? null : rate4(o.rate * k), currentMonthly: monthly, currentYearly: yearlyOf(monthly) };

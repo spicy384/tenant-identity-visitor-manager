@@ -388,6 +388,15 @@ async function main() {
   check("fixed rent: an office shows its share, by size", seen.rateSource === "fixedLease" && seen.effectiveRate === null && seen.monthly === cents(chain(10000, 2.75, years) * 0.75), JSON.stringify(seen));
   r = await manager.post("/api/leases", { companyId: wayne.id, rentMode: "fixed", monthlyRent: 1000, escalationPct: 10, startDate: "2020-01-01", endDate: "2022-06-30" });
   check("ended: its rent stays as it last was, and the schedule stops there", r.data.lease.currentMonthly === 1210 && r.data.lease.increases === 2 && r.data.lease.schedule.length === 3 && r.data.lease.schedule.at(-1).when === "now", JSON.stringify(r.data.lease));
+  // A term that ends before its next anniversary: the year after is still listed, as a renewal's.
+  const sinceJan = passedSince("2020-01-01");
+  r = await manager.post("/api/leases", { companyId: wayne.id, rentMode: "fixed", monthlyRent: 1000, escalationPct: 10, startDate: "2020-01-01", endDate: todayText });
+  const lastYear = r.data.lease.schedule.at(-1);
+  check("final year: the year after the term is listed, as what a renewal would start at", r.data.lease.status !== "ended" && lastYear.when === "after" && lastYear.from === `${2020 + sinceJan + 1}-01-01`
+    && lastYear.increases === sinceJan + 1 && lastYear.monthly === chain(1000, 10, sinceJan + 1) && lastYear.yearly === cents(chain(1000, 10, sinceJan + 1) * 12), JSON.stringify(r.data.lease.schedule.slice(-2)));
+  check("final year: the year it is in is still the one marked now, and nothing is marked next", r.data.lease.schedule.at(-2).when === "now" && r.data.lease.schedule.at(-2).monthly === r.data.lease.currentMonthly
+    && !r.data.lease.schedule.some((y) => y.when === "next") && r.data.lease.schedule.filter((y) => y.when === "after").length === 1);
+  await manager.del(`/api/leases/${r.data.lease.id}`);
   r = await manager.post("/api/leases", { companyId: wayne.id, rentMode: "fixed", monthlyRent: 1000, startDate: "2020-01-01" });
   check("no yearly increase: no schedule", r.data.lease.schedule.length === 0 && r.data.lease.currentMonthly === 1000);
 
