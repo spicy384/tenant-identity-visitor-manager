@@ -193,9 +193,9 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     if (!existing) throw fail(404, "No such badge.");
     const body = req.body || {};
     const values = customValues(req, body, { recordId: id });
-    const badge = badges.update(id, levelInput(req, body, body.type || existing.type), { sites: req.ctx.sites });
+    const badge = badges.update(id, levelInput(req, body, body.type || existing.type), { sites: req.ctx.sites, security: access.isSecurity(req.ctx) });
     fields.writeValues(id, values);
-    auditFrom(req, "badge.update", badge.label, [...Object.keys(body).filter((k) => k !== "custom"), ...Object.keys(body.custom || {}).map((k) => `custom.${k}`)].join(", "));
+    auditFrom(req, "badge.update", badge.label, `${[...Object.keys(body).filter((k) => k !== "custom"), ...Object.keys(body.custom || {}).map((k) => `custom.${k}`)].join(", ")}${heldRelevel(existing, badge)}`);
     res.json({ ok: true, badge: badgeOut(req, badge) });
   });
 
@@ -205,6 +205,12 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     auditFrom(req, "badge.remove", badge.label);
     res.json({ ok: true });
   });
+
+  /** For the audit log: a clearance level changed while someone held the badge, with both levels and who. */
+  function heldRelevel(before, after) {
+    if (!before.holder || before.clearanceLevelId === after.clearanceLevelId) return "";
+    return `; clearance level ${before.clearanceLevelName || "Uncleared"} to ${after.clearanceLevelName || "Uncleared"} while held by ${before.holder.name}`;
+  }
 
   // --- several badges at once (Security) ---------------------------------------------------------
 
@@ -244,7 +250,8 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
   /**
    * Changes the same things on several badges: their facility code, move them to another type
    * (visitor, tenant, personnel), clearance level, the sites they are valid at, temporary, expiry date, status, notes.
-   * A badge that is out can't change its type, level or temporary flag.
+   * A badge that is out can't change its type or temporary flag; its level only for the
+   * Security role, while a person (not a visitor) holds it.
    */
   router.post("/api/badges/bulk", manageBadges, (req, res) => {
     const ids = badgeIds(req.body);
@@ -253,12 +260,19 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const hasCustom = patch.custom && typeof patch.custom === "object" && Object.keys(patch.custom).length > 0;
     if (!Object.keys(input).length && !hasCustom) throw fail(400, "Choose what to change.");
     const values = hasCustom ? customValues(req, { custom: patch.custom }) : new Map();
+    const releveled = [];
     const done = allOrNothing(ids, (id) => {
       const badge = badges.get(id, { sites: req.ctx.sites });
       if (!badge) throw fail(404, "no such badge, or not at your sites.");
-      if (Object.keys(input).length) badges.update(id, levelInput(req, input, input.type || badge.type), { sites: req.ctx.sites });
+      if (Object.keys(input).length) {
+        const after = badges.update(id, levelInput(req, input, input.type || badge.type), { sites: req.ctx.sites, security: access.isSecurity(req.ctx) });
+        const note = heldRelevel(badge, after);
+        if (note) releveled.push([after.label, note.slice(2)]);
+      }
       if (values.size) fields.writeValues(id, values);
     });
+    // One entry for each badge whose level changed while someone held it, beside the one for them all.
+    for (const [label, note] of releveled) auditFrom(req, "badge.update", label, note);
     auditFrom(req, "badge.bulk_update", `${done} badges`, [...Object.keys(input), ...Object.keys(hasCustom ? patch.custom : {}).map((k) => `custom.${k}`)].join(", "));
     res.json({ ok: true, updated: done });
   });

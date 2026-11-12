@@ -274,6 +274,12 @@ The design and decisions are in [PLAN.md](PLAN.md).
   cancels, when the person is deleted, after the hours set under Settings > Logs and retention (36 to start with, at most 168; a shorter time applies to digits held already), or when the server stops (a restart
   loses them, and the request then shows "Wiped"; ask again). The audit trail records that
   digits were given or viewed, never what they were.
+- **The badge follows the clearance, if Security says so.** When Security validates a person
+  who holds a badge of their own at a different clearance level, it is asked whether the badge
+  should change to the level just validated. Yes changes it (each in the audit log); No leaves
+  it. Only the Security role is asked (it can also change the level by editing the badge). It
+  never applies to a visitor's validation, a visitor badge, or a badge lent
+  for the day. Validating several people at once asks once, for all their badges.
 - **Validating several at once.** For people already checked outside the app, Security ticks
   them on **People** or **Visitors** (one box for the whole page; picks carry across pages and
   searches) and chooses **Validate clearance**: one level (or no clearance), and optional
@@ -311,8 +317,11 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Several badges at once** (Security): tick boxes on the Badges page, then **Change** to move
   them to another type (visitor, tenant or personnel), clearance level, the sites they are
   valid at, temporary, expiry date, status or notes, or **Retire** or **Delete** them. A badge that is out
-  can't change type, level or temporary until it is taken back, and one that
-  has been given out can only be retired; if any chosen badge can't take the change, none does.
+  can't change type or temporary until it is taken back, and one that
+  has been given out can only be retired. Its clearance level can change while a person holds
+  it, for the **Security** role only and never above what that person's validated clearance
+  covers; a badge a visitor holds, and a visitor badge lent to a person, keep their level until
+  taken back. The audit log has both levels and who held it; if any chosen badge can't take the change, none does.
 - **Access.** Each role has a badge level as well as directory and visitor levels: read to
   look; issue and return to give badges out and take them back (Front desk and Manager to
   start with); or issue, return and manage, which also adds, changes, retires and removes

@@ -164,10 +164,42 @@ async function validateClearance(kind, record, request = null) {
     if (done) {
       toast(`Validated: ${done.level ? done.level.name : "no clearance"}.${done.closed ? " The request is closed and its digits wiped." : ""}`);
       refreshCounts();
+      await offerBadgeMatch(done.badges, done.level);
     }
     return Boolean(done);
   } finally {
     hideDigits();
+  }
+}
+
+/**
+ * Security has just validated a person whose own badge is at another clearance level: asks
+ * whether the badge should follow, and changes it on a yes. `list` comes with the validation
+ * and never holds a visitor's badge, a visitor badge, or one lent for the day.
+ */
+async function offerBadgeMatch(list, level) {
+  if (!list?.length) return;
+  const to = level ? level.name : "Uncleared";
+  const one = list.length === 1;
+  const shown = 12;
+  const several = new Set(list.map((b) => b.holderId)).size > 1;
+  const yes = await openDialog({
+    title: one ? "Change the badge's clearance level too?" : "Change the badges' clearance level too?",
+    body: h("div", { class: "stack" },
+      h("p", { text: one
+        ? `${list[0].holderName} holds a badge at a different clearance level from the one you validated (${to}):`
+        : `${several ? "They hold" : `${list[0].holderName} holds`} badges at a different clearance level from the one you validated (${to}):` }),
+      h("ul", {}, list.slice(0, shown).map((b) => h("li", { text: `Badge ${b.label}, now ${b.levelName || "Uncleared"}${several ? `, held by ${b.holderName}` : ""}` })),
+        list.length > shown ? h("li", { class: "muted", text: `and ${list.length - shown} more` }) : null),
+      h("p", { class: "muted", text: `Yes changes ${one ? "the badge" : `all ${list.length} badges`} to ${to}. No leaves ${one ? "it as it is" : "them as they are"}.` })),
+    actions: [{ label: "No", value: false }, { label: `Yes, change to ${to}`, kind: "primary", value: true }]
+  });
+  if (!yes) return;
+  try {
+    const { changed } = await api("/api/clearance/match-badges", { method: "POST", body: { badgeIds: list.map((b) => b.id) } });
+    toast(changed.length === 1 ? `Badge ${changed[0].label} is now ${changed[0].to || "Uncleared"}.` : `${changed.length} badges are now ${to}.`);
+  } catch (error) {
+    toast(error.message, "error");
   }
 }
 
@@ -247,6 +279,7 @@ async function validateClearances(kind, list) {
   if (done) {
     toast(`Validated ${done.validated} ${noun}: ${done.level ? done.level.name : "no clearance"}.${done.closed ? ` ${done.closed} waiting ${done.closed === 1 ? "request" : "requests"} closed.` : ""}`);
     refreshCounts();
+    await offerBadgeMatch(done.badges, done.level);
   }
   return Boolean(done);
 }

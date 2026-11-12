@@ -313,6 +313,60 @@ check("debrief: the badges still held that the new level doesn't cover are named
     && badges.get(high.id).holder.name === "Dee Briefed";
 })());
 
+// --- a badge following its holder's validated clearance ---------------------------------------
+{
+  const mo = directory.createPerson({ firstName: "Mo", lastName: "Match", companyId: acme.id });
+  clearance.validate({ kind: "person", id: mo.id, levelId: L["TS//SCI"].id, by: "security" });
+  const own = make("M-OWN", "tenant", L["TS//SCI"], { facilityCode: "34" });
+  const same = make("M-SAME", "tenant", L.TS);
+  const lent = make("M-LENT", "tenant", null, { temporary: true });
+  const pass = make("M-VIS", "visitor");
+  for (const b of [own, same]) badges.assign(b.id, { kind: "person", holderId: mo.id }, { by: "desk" });
+  check("match: a badge at the holder's level isn't out of step", badges.outOfStep([mo.id]).map((b) => b.label).join() === "M-SAME");
+  clearance.validate({ kind: "person", id: mo.id, levelId: L.TS.id, by: "security" });
+  badges.assign(lent.id, { kind: "person", holderId: mo.id }, { by: "desk" });
+  const step = badges.outOfStep([mo.id, plain.id]);
+  check("match: after a new validation, the person's own badge at another level is named", step.length === 1 && step[0].label === "34-M-OWN" && step[0].levelName === "TS//SCI" && step[0].holderName === "Mo Match" && step[0].type === "tenant");
+  check("held: without the Security role, a held badge's level can't be changed by editing it", throwsStatus(() => badges.update(own.id, { clearanceLevelId: L.TS.id }), 409, /only the Security role/) === true
+    && badges.get(own.id).clearanceLevelId === L["TS//SCI"].id);
+  check("held: Security can't raise it above what the holder's clearance covers", throwsStatus(() => badges.update(own.id, { clearanceLevelId: L["TS//SCI CI"].id }, { security: true }), 409, /doesn't cover.*Validate their clearance first/) === true);
+  check("held: nor change its type or whether it is temporary while it is out", throwsStatus(() => badges.update(own.id, { type: "personnel" }, { security: true }), 409, /take it back/) === true
+    && throwsStatus(() => badges.update(own.id, { temporary: true }, { security: true }), 409, /take it back/) === true);
+  check("held: Security changes the level of a badge a person holds, and it stays with them", (() => {
+    // Mo is at TS: the badge can go anywhere up to that.
+    const down = badges.update(same.id, { clearanceLevelId: L.Secret.id }, { security: true });
+    const none = badges.update(same.id, { clearanceLevelId: null }, { security: true });
+    const back = badges.update(same.id, { clearanceLevelId: L.TS.id, notes: "as issued" }, { security: true });
+    return down.clearanceLevelId === L.Secret.id && none.clearanceLevelId === null && back.clearanceLevelId === L.TS.id && back.notes === "as issued" && back.holder.name === "Mo Match";
+  })());
+  check("held: never a badge a visitor holds, nor a visitor badge lent to a person", (() => {
+    const visitorHeld = throwsStatus(() => badges.update(vTs.id, { clearanceLevelId: null }, { security: true }), 409, /take it back/) === true;
+    // Lent to someone with no badge for the day yet (Mo has one).
+    const forgot = directory.createPerson({ firstName: "Flo", lastName: "Forgot", companyId: acme.id });
+    badges.assign(pass.id, { kind: "person", holderId: forgot.id }, { by: "desk" });
+    const lentPass = throwsStatus(() => badges.update(pass.id, { clearanceLevelId: L.TS.id }, { security: true }), 409, /take it back/) === true;
+    badges.takeBack(pass.id);
+    return visitorHeld && lentPass && badges.get(vTs.id).holder.kind === "visitor";
+  })());
+  check("held: a badge lent to a person for the day can be changed by Security too", badges.update(lent.id, { clearanceLevelId: L.Secret.id }, { security: true }).clearanceLevelId === L.Secret.id
+    && badges.update(lent.id, { clearanceLevelId: null }, { security: true }).clearanceLevelId === null);
+  check("match: not a badge lent for the day, a visitor's badge, a free one, or one that doesn't exist", [lent.id, vTs.id, pass.id, 999999].every((id) => throwsStatus(() => badges.matchHolderLevel([id]), 404) === true)
+    && throwsStatus(() => badges.matchHolderLevel([own.id, lent.id]), 404) === true && badges.get(own.id).clearanceLevelId === L["TS//SCI"].id);
+  check("match: not for someone the caller can't see", throwsStatus(() => badges.matchHolderLevel([own.id], { canSee: () => false }), 404) === true);
+  check("match: none chosen is refused", throwsStatus(() => badges.matchHolderLevel([]), 400) === true);
+  const changed = badges.matchHolderLevel([own.id, same.id]);
+  check("match: the badge takes its holder's validated level, and stays with them", changed.length === 1 && changed[0].label === "34-M-OWN" && changed[0].from === "TS//SCI" && changed[0].to === "TS" && changed[0].holderName === "Mo Match"
+    && badges.get(own.id).clearanceLevelId === L.TS.id && badges.get(own.id).holder.name === "Mo Match" && badges.outOfStep([mo.id]).length === 0);
+  clearance.validate({ kind: "person", id: mo.id, levelId: null, by: "security" });
+  check("match: validated as uncleared, the badge can become uncleared too", badges.outOfStep([mo.id]).length === 2 && badges.matchHolderLevel([own.id])[0].to === null && badges.get(own.id).clearanceLevelId === null);
+  // Someone whose clearance was never validated: nothing to match to.
+  const raw = directory.createPerson({ firstName: "Rae", lastName: "Raw", companyId: acme.id });
+  const rawBadge = make("M-RAW", "tenant");
+  badges.assign(rawBadge.id, { kind: "person", holderId: raw.id }, { by: "desk" });
+  db.raw.prepare("UPDATE people SET clearance_level_id = ? WHERE id = ?").run(L.TS.id, raw.id);
+  check("match: not to a clearance Security hasn't validated", throwsStatus(() => badges.matchHolderLevel([rawBadge.id]), 409) === true && badges.get(rawBadge.id).clearanceLevelId === null);
+}
+
 db.close();
 fs.rmSync(tmp, { recursive: true, force: true });
 process.exit(report() ? 0 : 1);

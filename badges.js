@@ -296,14 +296,26 @@ function createBadges({ db, clearance, now = Date.now }) {
     return made;
   }
 
-  function update(id, input, { sites = null } = {}) {
+  /**
+   * `security`: the caller has the Security role, which alone may change the clearance level of
+   * a badge while a person holds it (never a visitor, never a visitor badge), and only to a
+   * level that person's clearance covers.
+   */
+  function update(id, input, { sites = null, security = false } = {}) {
     const existing = get(id, { sites });
     if (!existing) throw fail(404, "No such badge.");
     const v = clean(input, existing);
     const siteIds = v.siteIds !== undefined ? mergeSites(v.siteIds, existing.sites.map((x) => x.id), sites) : null;
     if (existing.holder) {
-      if ((v.type && v.type !== existing.type) || (v.clearanceLevelId !== undefined && v.clearanceLevelId !== existing.clearanceLevelId) || (v.temporary !== undefined && v.temporary !== existing.temporary)) {
+      const relevel = v.clearanceLevelId !== undefined && v.clearanceLevelId !== existing.clearanceLevelId;
+      const withPerson = existing.holder.kind === "person" && existing.type !== "visitor";
+      if ((v.type && v.type !== existing.type) || (v.temporary !== undefined && v.temporary !== existing.temporary) || (relevel && !withPerson)) {
         throw fail(409, `${existing.holder.name} holds this badge; take it back before changing its type, clearance level or whether it is temporary.`);
+      }
+      if (relevel && !security) throw fail(409, `${existing.holder.name} holds this badge; only the Security role changes its clearance level while it is out.`);
+      if (relevel) {
+        const why = clearanceRefusal({ ...existing, clearanceLevelId: v.clearanceLevelId }, holder("person", existing.holder.id));
+        if (why) throw fail(409, `${why} Validate their clearance first, or take the badge back.`);
       }
       if (v.status && v.status !== "active") throw fail(409, `${existing.holder.name} holds this badge; mark it returned or lost instead.`);
     }
@@ -323,6 +335,53 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (raw.prepare("SELECT 1 FROM badge_assignments WHERE badge_id = ?").get(id)) throw fail(409, `Badge ${existing.label} has been assigned before; retire it instead, so its history stays.`);
     raw.prepare("DELETE FROM badges WHERE id = ?").run(id);
     return existing;
+  }
+
+  // --- a badge's level following its holder's clearance -------------------------------------------
+
+  // A person's own badge that is out: never a visitor badge, nor one lent for the day.
+  const OWN_BADGES = `FROM badge_assignments a JOIN badges b ON b.id = a.badge_id JOIN people p ON p.id = a.holder_id
+    LEFT JOIN clearance_levels l ON l.id = b.clearance_level_id
+    WHERE a.holder_kind = 'person' AND a.returned_at IS NULL AND a.temporary = 0 AND b.temporary = 0 AND b.type <> 'visitor'`;
+
+  /**
+   * The badges these people hold as their own whose clearance level isn't the one their holder
+   * has on record: for Security to bring into line once it has validated the clearance. Each is
+   * { id, label, type, levelName, holderId, holderName }.
+   */
+  function outOfStep(personIds) {
+    const ids = [...new Set(personIds.map(Number))].filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length) return [];
+    return raw.prepare(`SELECT b.id, b.number, b.facility_code, b.type, l.name AS level_name, p.id AS holder_id, p.first_name, p.last_name ${OWN_BADGES}
+      AND p.id IN (${inList(ids)}) AND b.clearance_level_id IS NOT p.clearance_level_id ORDER BY p.last_name, p.first_name, a.assigned_at`).all(...ids)
+      .map((r) => ({ id: r.id, label: badgeLabel(r.facility_code, r.number), type: r.type, levelName: r.level_name || null, holderId: r.holder_id, holderName: `${r.first_name} ${r.last_name}` }));
+  }
+
+  /**
+   * Sets badges to the clearance their holder has on record, while they are out: for Security
+   * once it has validated that clearance (update() is the other way, a level it chooses). Only a person's
+   * own badge, held by someone `canSee` allows and whose clearance is validated; all or nothing.
+   * Returns those changed, each { id, label, holderName, from, to } (level names, null for none).
+   */
+  function matchHolderLevel(badgeIds, { canSee = () => true } = {}) {
+    const ids = [...new Set(badgeIds.map(Number))].filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length) throw fail(400, "Choose at least one badge.");
+    const rows = raw.prepare(`SELECT b.id, b.number, b.facility_code, b.clearance_level_id, l.name AS level_name, p.id AS holder_id, p.first_name, p.last_name,
+      p.clearance_level_id AS holder_level, p.clearance_validated_at ${OWN_BADGES} AND b.id IN (${inList(ids)})`).all(...ids);
+    if (rows.length !== ids.length || rows.some((r) => !canSee(r.holder_id))) {
+      throw fail(404, "One of those isn't a person's own badge that is out. A visitor badge, or one lent for the day, keeps its level.");
+    }
+    const unvalidated = rows.find((r) => !r.clearance_validated_at);
+    if (unvalidated) throw fail(409, `${unvalidated.first_name} ${unvalidated.last_name}'s clearance hasn't been validated, so their badge keeps its level.`);
+    const changed = [];
+    db.transaction(() => {
+      for (const r of rows) {
+        if (r.clearance_level_id === r.holder_level) continue;
+        raw.prepare("UPDATE badges SET clearance_level_id = ?, updated_at = ? WHERE id = ?").run(r.holder_level, now(), r.id);
+        changed.push({ id: r.id, label: badgeLabel(r.facility_code, r.number), holderName: `${r.first_name} ${r.last_name}`, from: r.level_name || null, to: r.holder_level ? clearance.level(r.holder_level)?.name ?? null : null });
+      }
+    });
+    return changed;
   }
 
   // --- who may hold what ----------------------------------------------------------------------
@@ -574,7 +633,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     return [...out.values()];
   }
 
-  return { list, get, history, forHolder, openForHolder, heldByPeople, create, createRange, update, remove, holder, refusal, clearanceRefusal, availableFor, availableLater, assign, recordForVisit, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
+  return { list, get, history, forHolder, openForHolder, heldByPeople, outOfStep, matchHolderLevel, create, createRange, update, remove, holder, refusal, clearanceRefusal, availableFor, availableLater, assign, recordForVisit, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
 }
 
 module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES, FACILITY_CODE_RE, badgeLabel, RECORDED_NOTE };

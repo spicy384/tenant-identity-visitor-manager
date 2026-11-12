@@ -300,7 +300,7 @@ app.use("/api", authGuard.requireAuth, (req, res, next) => {
   next();
 });
 const admin = authGuard.requireAdmin;
-const clearanceRoutes = createClearanceRoutes({ access, clearance, directory, visitors, admin, auditFrom });
+const clearanceRoutes = createClearanceRoutes({ access, clearance, directory, visitors, badges, admin, auditFrom });
 
 /** Requires at least `level` ("read" or "edit") on the directory. */
 function directoryAccess(level) {

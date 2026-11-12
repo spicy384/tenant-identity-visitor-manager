@@ -501,6 +501,53 @@ async function overHttp() {
   check("badges: but they issue and take them back", (await desk.post(`/api/badges/${secBadge.id}/assign`, { kind: "visitor", holderId: visitor.id })).status === 200
     && (await manager.post(`/api/badges/${secBadge.id}/return`)).status === 200);
   check("badges: only Security changes one", (await desk.put(`/api/badges/${secBadge.id}`, { notes: "x" })).status === 403 && (await security.put(`/api/badges/${secBadge.id}`, { notes: "spare" })).status === 200);
+  // --- a person's badge following the clearance Security validated ---------------------------------
+  const holderP = (await manager.post("/api/people", { firstName: "Bea", lastName: "Badged", companyId: acme.id })).data.person;
+  await security.post("/api/clearance/validate", { kind: "person", id: holderP.id, levelId: L["TS//SCI"].id });
+  const ownBadge = (await security.post("/api/badges", { number: "OWN-1", type: "tenant", clearanceLevelId: L["TS//SCI"].id })).data.badge;
+  await desk.post(`/api/badges/${ownBadge.id}/assign`, { kind: "person", holderId: holderP.id });
+  r = await security.post("/api/clearance/validate", { kind: "person", id: holderP.id, levelId: L["TS//SCI"].id });
+  check("match http: validating the level the badge already has names no badge", r.status === 200 && r.data.badges.length === 0, JSON.stringify(r.data));
+  r = await security.post("/api/clearance/validate", { kind: "person", id: holderP.id, levelId: L.TS.id });
+  check("match http: validating another level names the person's own badge, with its level", r.data.badges.length === 1 && r.data.badges[0].id === ownBadge.id && r.data.badges[0].label === "OWN-1" && r.data.badges[0].levelName === "TS//SCI" && r.data.badges[0].holderName === "Bea Badged", JSON.stringify(r.data.badges));
+  check("match http: nothing changes until Security says so", (await security.get(`/api/badges/${ownBadge.id}`)).data.badge.clearanceLevelId === L["TS//SCI"].id);
+  const matchBody = { badgeIds: [ownBadge.id] };
+  check("match http: only the Security role", (await admin.post("/api/clearance/match-badges", matchBody)).status === 403 && (await manager.post("/api/clearance/match-badges", matchBody)).status === 403
+    && (await desk.post("/api/clearance/match-badges", matchBody)).status === 403 && (await riverSecurity.post("/api/clearance/match-badges", matchBody)).status === 404
+    && (await security.get(`/api/badges/${ownBadge.id}`)).data.badge.clearanceLevelId === L["TS//SCI"].id);
+  // A visitor's badge is never offered, nor changed.
+  const visBadge = (await security.post("/api/badges", { number: "VIS-9", type: "visitor", clearanceLevelId: L.Secret.id })).data.badge;
+  await security.post("/api/clearance/validate", { kind: "visitor", id: visitor.id, levelId: L.Secret.id });
+  await desk.post(`/api/badges/${visBadge.id}/assign`, { kind: "visitor", holderId: visitor.id });
+  r = await security.post("/api/clearance/validate", { kind: "visitor", id: visitor.id, levelId: L.TS.id });
+  check("match http: a visitor's validation never names a badge, and a visitor badge can't be matched", r.status === 200 && r.data.badges.length === 0
+    && (await security.post("/api/clearance/match-badges", { badgeIds: [visBadge.id] })).status === 404 && (await security.get(`/api/badges/${visBadge.id}`)).data.badge.clearanceLevelId === L.Secret.id, JSON.stringify(r.data));
+  await desk.post(`/api/badges/${visBadge.id}/return`);
+  check("match http: no badges given is refused", (await security.post("/api/clearance/match-badges", { badgeIds: [] })).status === 400 && (await security.post("/api/clearance/match-badges", { badgeIds: ["x"] })).status === 400);
+  r = await security.post("/api/clearance/match-badges", matchBody);
+  check("match http: on a yes, the badge takes the validated level", r.status === 200 && r.data.changed.length === 1 && r.data.changed[0].from === "TS//SCI" && r.data.changed[0].to === "TS"
+    && (await security.get(`/api/badges/${ownBadge.id}`)).data.badge.clearanceLevelId === L.TS.id && (await security.get(`/api/badges/${ownBadge.id}`)).data.badge.holder.name === "Bea Badged", JSON.stringify(r.data));
+  r = await admin.get("/api/audit?action=badge.match_clearance");
+  check("match http: in the audit log, with both levels and whose clearance", r.data.entries.some((e) => e.target === "OWN-1" && /^TS\/\/SCI to TS, to match Bea Badged's validated clearance$/.test(e.detail)), JSON.stringify(r.data.entries.slice(0, 2)));
+  r = await security.post("/api/clearance/validate-bulk", { kind: "person", ids: [holderP.id], levelId: L["TS//SCI CI"].id });
+  check("match http: validating several names their badges too", r.status === 200 && r.data.badges.length === 1 && r.data.badges[0].id === ownBadge.id && r.data.badges[0].levelName === "TS");
+  // --- Security edits the level of a badge a person holds -------------------------------------------
+  r = await security.put(`/api/badges/${ownBadge.id}`, { clearanceLevelId: L.Secret.id });
+  check("held http: Security changes the level of a badge a person holds", r.status === 200 && r.data.badge.clearanceLevelId === L.Secret.id && r.data.badge.holder.name === "Bea Badged", JSON.stringify(r.data));
+  check("held http: not above the holder's clearance", (await security.put(`/api/badges/${ownBadge.id}`, { clearanceLevelId: L["TS//SCI FSP"].id })).status === 409);
+  check("held http: an administrator without the Security role doesn't", (await admin.put(`/api/badges/${ownBadge.id}`, { clearanceLevelId: L.TS.id })).status !== 200
+    && (await security.get(`/api/badges/${ownBadge.id}`)).data.badge.clearanceLevelId === L.Secret.id);
+  r = await admin.get("/api/audit?action=badge.update");
+  check("held http: the audit log has both levels and who held it", r.data.entries.some((e) => e.target === "OWN-1" && /clearance level TS to Secret while held by Bea Badged$/.test(e.detail)), JSON.stringify(r.data.entries.slice(0, 2)));
+  r = await security.post("/api/badges/bulk", { ids: [ownBadge.id], patch: { clearanceLevelId: L.TS.id } });
+  check("held http: several at once, each in the audit log", r.status === 200 && (await security.get(`/api/badges/${ownBadge.id}`)).data.badge.clearanceLevelId === L.TS.id
+    && (await admin.get("/api/audit?action=badge.update")).data.entries.some((e) => e.target === "OWN-1" && e.detail === "clearance level Secret to TS while held by Bea Badged"), JSON.stringify(r.data));
+  await security.post(`/api/badges/${visBadge.id}/assign`, { kind: "visitor", holderId: visitor.id });
+  check("held http: never a badge a visitor holds", (await security.put(`/api/badges/${visBadge.id}`, { clearanceLevelId: null })).status === 409
+    && (await security.get(`/api/badges/${visBadge.id}`)).data.badge.clearanceLevelId === L.Secret.id);
+  await desk.post(`/api/badges/${visBadge.id}/return`);
+  await desk.post(`/api/badges/${ownBadge.id}/return`);
+
   check("roles: badge access has a manage level", (await admin.get("/api/roles")).data.badgeLevels.join() === "none,read,edit,manage"
     && (await admin.get("/api/roles")).data.roles.find((x) => x.id === "security").badges === "manage" && (await admin.get("/api/roles")).data.roles.find((x) => x.id === "frontdesk").badges === "edit");
 

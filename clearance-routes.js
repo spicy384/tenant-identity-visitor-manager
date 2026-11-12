@@ -75,7 +75,7 @@ function positiveInt(value, fallback = null) {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-function createClearanceRoutes({ access, clearance, directory, visitors, admin, auditFrom }) {
+function createClearanceRoutes({ access, clearance, directory, visitors, badges = null, admin, auditFrom }) {
   const router = express.Router();
   const staffName = (req) => req.user?.displayName || req.user?.username || null;
 
@@ -182,7 +182,29 @@ function createClearanceRoutes({ access, clearance, directory, visitors, admin, 
     if (!holder) throw fail(404, kind === "person" ? "No such person." : "No such visitor.");
     const result = clearance.validate({ kind, id, levelId: body.levelId, granted: body.granted, by: staffName(req) });
     auditFrom(req, "clearance.validate", nameOf(holder), `${kind}; ${result.level ? result.level.name : "no clearance"}${result.closed ? "; request closed, digits wiped" : ""}`);
-    res.json({ ok: true, level: result.level, closed: result.closed });
+    res.json({ ok: true, level: result.level, closed: result.closed, badges: ownBadgesToMatch(kind, [id]) });
+  });
+
+  /**
+   * A person's own badges whose level isn't the one just validated, for the page to ask
+   * about. Never a visitor's badges, a visitor badge a person has, or one lent for the day.
+   */
+  function ownBadgesToMatch(kind, ids) {
+    return kind === "person" && badges ? badges.outOfStep(ids) : [];
+  }
+
+  /**
+   * After validating: Security may set the badges a person holds as their own to the clearance
+   * it validated; each is in the audit log. (Security can also change one by editing the badge.)
+   */
+  router.post("/api/clearance/match-badges", security, (req, res) => {
+    if (!badges) throw fail(404, "Badges aren't available.");
+    const ids = [...new Set((Array.isArray(req.body?.badgeIds) ? req.body.badgeIds : []).map((v) => positiveInt(v)))];
+    if (!ids.length || ids.includes(null)) throw fail(400, "Choose at least one badge.");
+    if (ids.length > 1000) throw fail(400, "At most 1,000 at once.");
+    const changed = badges.matchHolderLevel(ids, { canSee: (personId) => Boolean(directory.getPerson(personId, { sites: req.ctx.sites })) });
+    for (const c of changed) auditFrom(req, "badge.match_clearance", c.label, `${c.from || "Uncleared"} to ${c.to || "Uncleared"}, to match ${c.holderName}'s validated clearance`);
+    res.json({ ok: true, changed });
   });
 
   /**
@@ -214,7 +236,7 @@ function createClearanceRoutes({ access, clearance, directory, visitors, admin, 
     // One entry each, as when validated one at a time.
     const detail = `${kind}; ${result.level ? result.level.name : "no clearance"}; one of ${ids.length} validated together`;
     for (const holder of holders) auditFrom(req, "clearance.validate", nameOf(holder), detail);
-    res.json({ ok: true, validated: ids.length, level: result.level, closed: result.closed });
+    res.json({ ok: true, validated: ids.length, level: result.level, closed: result.closed, badges: ownBadgesToMatch(kind, ids) });
   });
 
   // --- settings --------------------------------------------------------------------------------
