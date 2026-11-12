@@ -658,7 +658,7 @@ function badgeSection(kind, holderId) {
             }
           } })))));
       } else {
-        parts.push(h("p", { class: "muted small-text", text: `No ${kind === "visitor" ? "visitor " : ""}badge is free that they may hold${kind === "person" ? " (personnel badges are for building staff, tenant badges for everyone else, and a cleared badge needs a clearance that covers it)" : " (a cleared badge needs a clearance that covers it)"}.` }));
+        parts.push(h("p", { class: "muted small-text", text: kind === "visitor" ? "No visitor badge at their clearance level is free (uncleared ones, until Security validates their clearance)." : `No badge is free that they may hold${kind === "person" ? " (personnel badges are for building staff, tenant badges for everyone else, and a cleared badge needs a clearance that covers it)" : " (a cleared badge needs a clearance that covers it)"}.` }));
       }
     }
     // Forgot their badge today: one lent for the day (a visitor badge, or a temporary one), standing in for theirs.

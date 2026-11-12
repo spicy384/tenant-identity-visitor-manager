@@ -139,7 +139,7 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
   function hostsOf(companyId, siteId) {
     return raw.prepare(`SELECT p.id, p.first_name, p.last_name, p.preferred_name FROM people p
       WHERE p.company_id = ? AND p.active = 1 AND p.can_host = 1
-        AND (p.site_id IS NULL OR p.site_id = ? OR p.id IN (SELECT host_id FROM visitor_events WHERE company_id = p.company_id AND site_id = ? AND date = ?))
+        AND (p.site_id IS NULL OR p.site_id = ? OR p.id IN (SELECT ec.person_id FROM event_contacts ec JOIN visitor_events e ON e.id = ec.event_id WHERE e.company_id = p.company_id AND e.site_id = ? AND e.date = ?))
       ORDER BY coalesce(p.preferred_name, p.first_name) COLLATE NOCASE, p.last_name COLLATE NOCASE`).all(companyId, siteId, siteId, siteToday(siteId))
       .map((p) => ({ id: p.id, name: visitors.hostDisplayName(p) }));
   }
@@ -264,9 +264,14 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
       audit(req, "kiosk.blocked", `${blocked.first_name} ${blocked.last_name}`, `tried to check in to see ${company.name}`);
       return res.json({ ok: false, seeReception: true });
     }
-    const { visit, already } = visitors.checkIn({ visitorId, siteId: req.site.id, companyId: company.id, hostId, purpose, by: `kiosk:${req.kiosk.name}`, kioskId: req.kiosk.id });
+    // Expected today by this company: the event's other points of contact come with the visit,
+    // after the one they chose (or all of them, when they weren't sure whom).
+    const expected = events ? events.expectedToday(visitorId, req.site.id).find((e) => e.companyId === company.id && (!hostId || e.hostIds.includes(hostId))) : null;
+    const hostIds = [...new Set([...(hostId ? [hostId] : []), ...(expected ? expected.hostIds : [])])];
+    const { visit, already } = visitors.checkIn({ visitorId, siteId: req.site.id, companyId: company.id, hostIds, purpose, by: `kiosk:${req.kiosk.name}`, kioskId: req.kiosk.id });
     if (!already) audit(req, "visit.checkin", `${visit.visitor.firstName} ${visit.visitor.lastName}`, `${visit.companyName}${visit.hostName ? `, host ${visit.hostName}` : ""}${created ? "; new visitor" : ""}`);
-    res.json({ ok: true, already, firstName: visit.visitor.firstName, companyName: visit.companyName, hostName: visit.hostName });
+    // "Jane Doe, Sam Roe and Lee Poe", for the kiosk's closing words.
+    res.json({ ok: true, already, firstName: visit.visitor.firstName, companyName: visit.companyName, hostName: visit.hostName ? visit.hostName.replace(/, ([^,]*)$/, " and $1") : null });
   });
 
   /** Check-out lookup: open visits at this site for this name, with the company only. */

@@ -65,6 +65,19 @@ function longText(v, max = 4000) {
 
 const inList = (ids) => ids.map(() => "?").join(",");
 
+// How many points of contact an event or a visit may have.
+const MAX_CONTACTS = 10;
+
+/**
+ * The ids in a list of points of contact (or one id, or nothing), each once in the order
+ * given; null when one of them isn't an id.
+ */
+function contactIds(value) {
+  const list = Array.isArray(value) ? value : value === null || value === undefined || value === "" ? [] : [value];
+  const ids = [...new Set(list.map(Number))];
+  return ids.every((n) => Number.isInteger(n) && n > 0) ? ids : null;
+}
+
 /** "Jane Doe", or "Janie Doe" when she goes by another name: how a host is shown. */
 function hostDisplayName(p) {
   return `${p.preferred_name || p.first_name} ${p.last_name}`.trim();
@@ -435,7 +448,10 @@ function createVisitors({ db, fields }) {
       visitor: { id: r.visitor_id, firstName: r.first_name, lastName: r.last_name, organization: r.organization, verified: Boolean(r.verified), blocked: Boolean(r.blocked), citizenship: r.citizenship ?? null },
       companyId: r.company_id,
       companyName: r.company_name,
+      // Its points of contact: hostId is the first, hostIds all of them in the order given (those
+      // still in the directory), and hostName their names as they were when the visit was made.
       hostId: r.host_id,
+      hostIds: r.host_ids ? String(r.host_ids).split(",").map(Number) : r.host_id ? [r.host_id] : [],
       hostName: r.host_name,
       purpose: r.purpose,
       visitorType: r.visitor_type || null,
@@ -473,6 +489,7 @@ function createVisitors({ db, fields }) {
     (SELECT c.reason FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_reason,
     (SELECT c.changed_by FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_by,
     (SELECT c.changed_at FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_at,
+    (SELECT group_concat(vc.person_id ORDER BY vc.position, vc.person_id) FROM visit_contacts vc WHERE vc.visit_id = x.id) AS host_ids,
     ${VISIT_BADGES}
     FROM visits x JOIN sites s ON s.id = x.site_id JOIN visitors v ON v.id = x.visitor_id LEFT JOIN kiosks k ON k.id = x.kiosk_id`;
 
@@ -500,7 +517,7 @@ function createVisitors({ db, fields }) {
     if (from) { where.push("x.checked_in_at >= ?"); params.push(from); }
     if (to) { where.push("x.checked_in_at < ?"); params.push(to); }
     if (companyId) { where.push("x.company_id = ?"); params.push(companyId); }
-    if (hostId) { where.push("x.host_id = ?"); params.push(hostId); }
+    if (hostId) { where.push("(x.host_id = ? OR EXISTS (SELECT 1 FROM visit_contacts vc WHERE vc.visit_id = x.id AND vc.person_id = ?))"); params.push(hostId, hostId); }
     if (visitorId) { where.push("x.visitor_id = ?"); params.push(visitorId); }
     // Only visits whose times have been corrected.
     if (corrected) where.push("EXISTS (SELECT 1 FROM visit_time_changes c WHERE c.visit_id = x.id)");
@@ -546,24 +563,46 @@ function createVisitors({ db, fields }) {
   const activeCompany = (id) => raw.prepare("SELECT * FROM companies WHERE id = ? AND active = 1").get(Number(id)) || null;
 
   /**
-   * Checks a visitor in at `siteId` to see `companyId` (and `hostId`, optional). The company
-   * must be active, wherever it is (a tenant may use a room at another site; the kiosk checks
-   * for itself that a company is at its site), and the host in that company. A visitor already
-   * in the building at that site gets their open visit back rather than a second one.
-   * Links the visitor to the company, with the host as their usual one when given.
+   * The points of contact given for a visit to `company`, as their directory rows in the order
+   * given: active people in that company. Throws when one isn't, or there are too many.
    */
-  function checkIn({ visitorId, siteId, companyId, hostId = null, purpose = null, by = null, kioskId = null, idType = null, idOther = null, now = Date.now() }) {
+  function contactsFor(company, given, { one = "The host must be someone in that company." } = {}) {
+    const ids = contactIds(given);
+    if (!ids) throw fail(400, one);
+    if (ids.length > MAX_CONTACTS) throw fail(400, `A visit has at most ${MAX_CONTACTS} points of contact.`);
+    const find = raw.prepare("SELECT * FROM people WHERE id = ? AND company_id = ? AND active = 1");
+    const people = ids.map((id) => find.get(id, company.id));
+    if (people.some((p) => !p)) throw fail(400, ids.length > 1 ? "Each point of contact must be someone in that company." : one);
+    return people;
+  }
+
+  /** Makes `people` a visit's points of contact, in that order. */
+  function setVisitContacts(visitId, people) {
+    raw.prepare("DELETE FROM visit_contacts WHERE visit_id = ?").run(visitId);
+    const add = raw.prepare("INSERT INTO visit_contacts (visit_id, person_id, position) VALUES (?, ?, ?)");
+    people.forEach((p, i) => add.run(visitId, p.id, i));
+  }
+
+  /** The names of a visit's points of contact, as kept with it: "Jane Doe, Sam Roe". */
+  const contactNames = (people) => people.map(hostDisplayName).join(", ") || null;
+
+  /**
+   * Checks a visitor in at `siteId` to see `companyId` and its points of contact there
+   * (`hostIds`, a list, or `hostId`, one; optional). The company must be active, wherever it is
+   * (a tenant may use a room at another site; the kiosk checks for itself that a company is at
+   * its site), and each contact in that company. A visitor already in the building at that
+   * site gets their open visit back rather than a second one. Links the visitor to the
+   * company, with the first contact as their usual host when given.
+   */
+  function checkIn({ visitorId, siteId, companyId, hostId = null, hostIds = null, purpose = null, by = null, kioskId = null, idType = null, idOther = null, now = Date.now() }) {
     const visitor = raw.prepare("SELECT * FROM visitors WHERE id = ?").get(visitorId);
     if (!visitor) throw fail(404, "No such visitor.");
     const site = raw.prepare("SELECT * FROM sites WHERE id = ?").get(siteId);
     if (!site || !site.active) throw fail(400, "That site isn't open.");
     const company = activeCompany(companyId);
     if (!company) throw fail(400, "Choose an active company.");
-    let host = null;
-    if (hostId !== null && hostId !== undefined && hostId !== "") {
-      host = raw.prepare("SELECT * FROM people WHERE id = ? AND company_id = ? AND active = 1").get(Number(hostId), company.id);
-      if (!host) throw fail(400, "The host must be someone in that company.");
-    }
+    const hosts = contactsFor(company, hostIds ?? hostId);
+    const host = hosts[0] || null;
     if (idType !== null && !ID_TYPES.includes(idType)) throw fail(400, `The ID is one of: ${ID_TYPES.join(", ")}.`);
     const other = idType ? cleanIdOther(idType, idOther) : null;
     const already = openVisit(visitorId, siteId);
@@ -573,8 +612,9 @@ function createVisitors({ db, fields }) {
       // Checked by the desk as they arrive: on to the badge. Otherwise (the kiosk) the desk checks their ID first.
       id = raw.prepare(`INSERT INTO visits (site_id, visitor_id, company_id, company_name, host_id, host_name, purpose, visitor_type, checkin_stage, id_type, id_other, id_verified_at, id_verified_by, checked_in_at, checked_in_by, kiosk_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(siteId, visitorId, company.id, company.name, host ? host.id : null, host ? hostDisplayName(host) : null, text(purpose, 200), visitor.visitor_type || "Guest",
+        .run(siteId, visitorId, company.id, company.name, host ? host.id : null, contactNames(hosts), text(purpose, 200), visitor.visitor_type || "Guest",
           idType ? "badge" : "id", idType, other, idType ? now : null, idType ? by : null, now, by, kioskId).lastInsertRowid;
+      setVisitContacts(id, hosts);
       const link = raw.prepare("SELECT host_id FROM visitor_links WHERE visitor_id = ? AND company_id = ?").get(visitorId, company.id);
       if (!link) raw.prepare("INSERT INTO visitor_links (visitor_id, company_id, host_id, created_at) VALUES (?, ?, ?, ?)").run(visitorId, company.id, host ? host.id : null, now);
       else if (host && link.host_id !== host.id) raw.prepare("UPDATE visitor_links SET host_id = ? WHERE visitor_id = ? AND company_id = ?").run(host.id, visitorId, company.id);
@@ -613,16 +653,23 @@ function createVisitors({ db, fields }) {
     return getVisit(visitId);
   }
 
-  /** Changes an open visit's purpose, company and host (the desk's confirm step); the host is required. */
-  function updateVisit(visitId, { companyId, hostId, purpose } = {}, { sites = null } = {}) {
+  /**
+   * Changes an open visit's purpose, company and points of contact (the desk's confirm step):
+   * `hostIds`, a list, or `hostId`, one. At least one is required.
+   */
+  function updateVisit(visitId, { companyId, hostId, hostIds, purpose } = {}, { sites = null } = {}) {
     const visit = getVisit(visitId, { sites });
     if (!visit || visit.checkedOutAt) throw fail(404, "No such visit in the building.");
     const company = activeCompany(companyId ?? visit.companyId);
     if (!company) throw fail(400, "Choose an active company.");
-    const host = raw.prepare("SELECT * FROM people WHERE id = ? AND company_id = ? AND active = 1").get(Number(hostId ?? visit.hostId), company.id);
-    if (!host) throw fail(400, "Choose the point of contact, someone at that company.");
-    raw.prepare("UPDATE visits SET company_id = ?, company_name = ?, host_id = ?, host_name = ?, purpose = ? WHERE id = ?")
-      .run(company.id, company.name, host.id, hostDisplayName(host), purpose !== undefined ? text(purpose, 200) : visit.purpose, visitId);
+    const one = "Choose the point of contact, someone at that company.";
+    const hosts = contactsFor(company, hostIds ?? hostId ?? visit.hostIds, { one });
+    if (!hosts.length) throw fail(400, one);
+    db.transaction(() => {
+      raw.prepare("UPDATE visits SET company_id = ?, company_name = ?, host_id = ?, host_name = ?, purpose = ? WHERE id = ?")
+        .run(company.id, company.name, hosts[0].id, contactNames(hosts), purpose !== undefined ? text(purpose, 200) : visit.purpose, visitId);
+      setVisitContacts(visitId, hosts);
+    });
     return getVisit(visitId);
   }
 
@@ -783,4 +830,4 @@ function createVisitors({ db, fields }) {
   };
 }
 
-module.exports = { createVisitors, hostDisplayName, CHECKOUT_METHODS, VISITOR_TYPES, ID_TYPES, OTHER_ID, cleanIdOther, idText, STAGES };
+module.exports = { createVisitors, hostDisplayName, contactIds, MAX_CONTACTS, CHECKOUT_METHODS, VISITOR_TYPES, ID_TYPES, OTHER_ID, cleanIdOther, idText, STAGES };

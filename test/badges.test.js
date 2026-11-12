@@ -112,7 +112,7 @@ check("holding: a badge held can't be given again", throwsStatus(give(tCi, "pers
 check("holding: the holder is named on the badge", badges.get(tCi.id).holder.name === "Fran Poly" && badges.get(tCi.id).holder.company === "Acme Corp");
 check("available: only badges the holder may hold are offered", badges.availableFor("person", fsp.id).map((b) => b.number).join() === "T-001,X-1");
 check("available: building staff are offered personnel badges", badges.availableFor("person", guard.id).map((b) => b.number).join() === "P-001");
-check("available: a visitor is offered visitor badges their clearance covers", badges.availableFor("visitor", visitorNone.id).map((b) => b.number).join() === "V-002");
+check("available: a visitor without a clearance that counts is offered uncleared visitor badges", badges.availableFor("visitor", visitorNone.id).map((b) => b.number).join() === "V-002");
 
 const back = badges.takeBack(tCi.id, { note: "end of contract" }, { by: "desk" });
 check("taking back: the badge is free again", !back.badge.holder && back.from.name === "Fran Poly");
@@ -365,6 +365,111 @@ check("debrief: the badges still held that the new level doesn't cover are named
   badges.assign(rawBadge.id, { kind: "person", holderId: raw.id }, { by: "desk" });
   db.raw.prepare("UPDATE people SET clearance_level_id = ? WHERE id = ?").run(L.TS.id, raw.id);
   check("match: not to a clearance Security hasn't validated", throwsStatus(() => badges.matchHolderLevel([rawBadge.id]), 409) === true && badges.get(rawBadge.id).clearanceLevelId === null);
+}
+
+// --- a visitor is offered only the badges at their own clearance level --------------------------
+{
+  const own = visitors.create({ firstName: "Olga", lastName: "Ownlevel" });
+  const numbers = () => badges.availableFor("visitor", own.id).map((b) => b.number).filter((n) => n.startsWith("OL-")).join();
+  const olU = badges.create({ number: "OL-U", type: "visitor" });
+  const olS = badges.create({ number: "OL-S", type: "visitor", clearanceLevelId: L.Secret.id });
+  badges.create({ number: "OL-TS", type: "visitor", clearanceLevelId: L.TS.id });
+  check("own level: no clearance, the uncleared ones", numbers() === "OL-U");
+  db.raw.prepare("UPDATE visitors SET clearance_level_id = ? WHERE id = ?").run(L.TS.id, own.id);
+  check("own level: one Security hasn't validated doesn't count", numbers() === "OL-U");
+  clearance.validate({ kind: "visitor", id: own.id, levelId: L.TS.id, by: "security" });
+  check("own level: validated at TS, only the TS ones", numbers() === "OL-TS");
+  check("own level: an event still to come lists the same", badges.availableLater(own.id, "2099-01-01").map((b) => b.number).filter((n) => n.startsWith("OL-")).join() === "OL-TS");
+  check("own level: a lower one they may hold can still be given", badges.refusal(badges.get(olS.id), badges.holder("visitor", own.id)) === null && badges.assign(olS.id, { kind: "visitor", holderId: own.id }, { by: "desk" }).holder.name === "Olga Ownlevel");
+  badges.takeBack(olS.id);
+  clearance.validate({ kind: "visitor", id: own.id, levelId: null, by: "security" });
+  check("own level: validated as uncleared, the uncleared ones", numbers() === "OL-U");
+  check("own level: a person borrowing a visitor badge still sees all they may hold", badges.availableFor("person", fsp.id, { temporary: true }).filter((b) => b.number.startsWith("OL-")).length === 3);
+  void olU;
+}
+
+// --- several points of contact -------------------------------------------------------------------
+{
+  const co = directory.createCompany({ name: "Contact Co", sites: [{ siteId: site.id }] });
+  const [ann, bo, cy] = ["Ann", "Bo", "Cy"].map((n) => directory.createPerson({ firstName: n, lastName: "Contact", companyId: co.id }));
+  const far = "2098-05-05";
+  const ids = (e) => e.hosts.map((p) => p.id).join();
+  const ev = events.create({ siteId: site.id, title: "Design review", date: far, companyId: co.id, hostIds: [bo.id, ann.id, bo.id] });
+  check("contacts: an event has several, in the order given, each once", ev.hosts.map((p) => p.name).join() === "Bo Contact,Ann Contact" && ev.hostId === bo.id && ev.hostName === "Bo Contact");
+  check("contacts: one alone still works", ids(events.create({ siteId: site.id, title: "One", date: far, companyId: co.id, hostId: cy.id })) === String(cy.id));
+  check("contacts: each must be in the event's company", throwsStatus(() => events.update(ev.id, { hostIds: [ann.id, guard.id] }), 400, /Each point of contact/) === true
+    && throwsStatus(() => events.update(ev.id, { hostIds: ["x"] }), 400) === true && throwsStatus(() => events.create({ siteId: site.id, title: "X", date: far, hostIds: [ann.id] }), 400) === true && ids(events.get(ev.id)) === `${bo.id},${ann.id}`);
+  const many = Array.from({ length: 11 }, (x, i) => directory.createPerson({ firstName: `P${i}`, lastName: "Many", companyId: co.id }).id);
+  check("contacts: at most ten", throwsStatus(() => events.update(ev.id, { hostIds: many }), 400, /at most 10/) === true && ids(events.update(ev.id, { hostIds: many.slice(0, 10) })) === many.slice(0, 10).join());
+  const changed = events.update(ev.id, { hostIds: [ann.id, cy.id, bo.id] });
+  check("contacts: changed, the first being the event's host", ids(changed) === [ann.id, cy.id, bo.id].join() && changed.hostId === ann.id && db.raw.prepare("SELECT host_id FROM visitor_events WHERE id = ?").get(ev.id).host_id === ann.id);
+  check("contacts: another change leaves them as they are", ids(events.update(ev.id, { title: "Design review, part two" })) === [ann.id, cy.id, bo.id].join());
+  check("contacts: a new company needs its own", throwsStatus(() => events.update(ev.id, { companyId: acme.id }), 400) === true && events.update(ev.id, { companyId: acme.id, hostIds: [plain.id] }).hostName === "Pat Plain");
+  const none = events.update(ev.id, { hostIds: [] });
+  check("contacts: all taken off", none.hosts.length === 0 && none.hostId === null && none.companyName === "Acme Corp");
+  events.update(ev.id, { companyId: co.id, hostIds: [ann.id, bo.id, cy.id] });
+
+  // A repeating event: each date has them, and a change can reach the later dates.
+  const series = events.create({ siteId: site.id, title: "Standing", date: "2098-06-01", companyId: co.id, hostIds: [ann.id, bo.id], repeat: { freq: "daily", until: "2098-06-03" } });
+  const dates = events.list({ from: "2098-06-01", to: "2098-06-03" });
+  check("contacts: every date of a repeating event has them", series.count === 3 && dates.length === 3 && dates.every((e) => ids(e) === `${ann.id},${bo.id}`));
+  events.update(dates[1].id, { hostIds: [cy.id] }, { scope: "following" });
+  check("contacts: changed for a date and its later ones", events.list({ from: "2098-06-01", to: "2098-06-03" }).map(ids).join("|") === [`${ann.id},${bo.id}`, cy.id, cy.id].join("|"));
+
+  // Today's event: the kiosk is offered the first contact still active, and all of those.
+  const todays = events.create({ siteId: site.id, title: "Contacts today", date: day, companyId: co.id, hostIds: [ann.id, bo.id, cy.id] });
+  const expectedGuest = visitors.create({ firstName: "Eve", lastName: "Expected" });
+  events.addGuest(todays.id, expectedGuest.id);
+  directory.updatePerson(ann.id, { active: false });
+  const offer = events.expectedToday(expectedGuest.id, site.id)[0];
+  check("contacts: the kiosk's offer skips one who is inactive", offer.hostId === bo.id && offer.hostName === "Bo Contact" && offer.hostIds.join() === `${bo.id},${cy.id}`);
+  directory.updatePerson(ann.id, { active: true });
+
+  // A visit.
+  const several = visitors.create({ firstName: "Vera", lastName: "Several" });
+  const v1 = visitors.checkIn({ visitorId: several.id, siteId: site.id, companyId: co.id, hostIds: [bo.id, ann.id] }).visit;
+  check("contacts: a visit has several, their names kept with it", v1.hostIds.join() === `${bo.id},${ann.id}` && v1.hostId === bo.id && v1.hostName === "Bo Contact, Ann Contact");
+  check("contacts: the first is the visitor's usual host there", visitors.get(several.id).companies.find((c) => c.companyId === co.id).hostId === bo.id);
+  check("contacts: each must be in the company visited", throwsStatus(() => visitors.checkIn({ visitorId: expectedGuest.id, siteId: site.id, companyId: co.id, hostIds: [ann.id, guard.id] }), 400, /Each point of contact/) === true
+    && throwsStatus(() => visitors.checkIn({ visitorId: expectedGuest.id, siteId: site.id, companyId: co.id, hostIds: many }), 400, /at most 10/) === true);
+  check("contacts: visits are found by any of them", visitors.listVisits({ hostId: ann.id }).visits.some((v) => v.id === v1.id) && !visitors.listVisits({ hostId: cy.id }).visits.some((v) => v.id === v1.id));
+  const v2 = visitors.updateVisit(v1.id, { hostIds: [cy.id, bo.id] });
+  check("contacts: changed on an open visit", v2.hostIds.join() === `${cy.id},${bo.id}` && v2.hostName === "Cy Contact, Bo Contact" && v2.hostId === cy.id);
+  check("contacts: a visit at the desk needs at least one", throwsStatus(() => visitors.updateVisit(v1.id, { hostIds: [] }), 400) === true && visitors.getVisit(v1.id).hostIds.length === 2);
+  check("contacts: a visit with none still checks in (the kiosk's 'not sure')", visitors.checkIn({ visitorId: expectedGuest.id, siteId: site.id, companyId: co.id }).visit.hostIds.length === 0);
+
+  // Someone who leaves the directory: off the lists, their name still on the visit.
+  directory.deletePerson(cy.id);
+  const after = visitors.getVisit(v1.id);
+  check("contacts: one deleted leaves the others, the next becoming first", ids(events.get(ev.id)) === `${ann.id},${bo.id}` && events.get(todays.id).hostId === ann.id && after.hostIds.join() === String(bo.id));
+  check("contacts: the visit keeps the names as they were", after.hostName === "Cy Contact, Bo Contact");
+}
+
+// A database from before: an event and a visit with one host each get their list at start-up.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ivm-contacts-"));
+  const key = generateKey();
+  const old = openDatabase({ dataDir: dir, key });
+  const oldFields = createFields({ db: old });
+  const oldDirectory = createDirectory({ db: old, fields: oldFields });
+  const oldSite = createSites({ db: old }).create({ name: "Old Site", timeZone: "America/New_York" });
+  const oldCo = oldDirectory.createCompany({ name: "Old Co", sites: [{ siteId: oldSite.id }] });
+  const oldHost = oldDirectory.createPerson({ firstName: "Otto", lastName: "Old", companyId: oldCo.id });
+  const oldVisitor = createVisitors({ db: old, fields: oldFields }).create({ firstName: "Val", lastName: "Before" });
+  const t = Date.now();
+  const eventId = Number(old.raw.prepare("INSERT INTO visitor_events (site_id, title, date, company_id, host_id, created_at, updated_at) VALUES (?, 'Before', '2098-01-01', ?, ?, ?, ?)").run(oldSite.id, oldCo.id, oldHost.id, t, t).lastInsertRowid);
+  const visitId = Number(old.raw.prepare("INSERT INTO visits (site_id, visitor_id, company_id, company_name, host_id, host_name, checked_in_at) VALUES (?, ?, ?, 'Old Co', ?, 'Otto Old', ?)").run(oldSite.id, oldVisitor.id, oldCo.id, oldHost.id, t).lastInsertRowid);
+  old.close();
+  const again = openDatabase({ dataDir: dir, key });
+  const event = createEvents({ db: again }).get(eventId);
+  const visit = createVisitors({ db: again, fields: createFields({ db: again }) }).getVisit(visitId);
+  check("contacts: an event from before keeps its host as its one contact", event.hosts.length === 1 && event.hosts[0].name === "Otto Old" && event.hostId === oldHost.id);
+  check("contacts: so does a visit from before", visit.hostIds.join() === String(oldHost.id) && visit.hostName === "Otto Old");
+  again.close();
+  const third = openDatabase({ dataDir: dir, key });
+  check("contacts: and starting again adds nothing twice", third.raw.prepare("SELECT count(*) AS n FROM event_contacts").get().n === 1 && third.raw.prepare("SELECT count(*) AS n FROM visit_contacts").get().n === 1);
+  third.close();
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 db.close();

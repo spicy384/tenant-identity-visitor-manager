@@ -767,6 +767,26 @@ input[type="color"] { width: 64px; min-height: 36px; padding: 2px; cursor: point
 .choices-list.short { max-height: 30vh; }
 .contact-card { padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); display: flex; flex-direction: column; gap: 2px; }
 .chosen-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; }
+/* Several points of contact: a card each at check-in, a chip each on the event form. */
+.contact-cards { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
+.contact-card .row-between .link-btn { min-height: 24px; }
+.poc-picked { display: flex; flex-direction: column; gap: 6px; }
+.poc-picked p { margin: 0; }
+.poc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.poc-chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 12px; border-radius: 999px; background: var(--secondary-bg); color: var(--secondary-text); font-size: 0.9rem; font-weight: 600; }
+.poc-chip-x { min-height: 26px; min-width: 26px; padding: 0; border: none; border-radius: 999px; background: none; color: inherit; font-size: 1.05rem; line-height: 1; }
+.poc-chip-x:hover { background: var(--border); }
+/* An event on the Expected page: its time and points of contact stand out under its name. */
+.panel .panel-head > .event-head { display: block; min-width: 0; flex: 1 1 320px; }
+.event-head h3 { margin: 0; }
+.event-head > p { margin: 4px 0 0; }
+.event-facts { display: flex; flex-wrap: wrap; gap: 8px 32px; margin-top: 8px; }
+.event-fact { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.event-fact-label { font-size: 0.78rem; font-weight: 600; color: var(--text-muted); }
+.event-fact-value { font-size: 1.05rem; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+.event-fact-value a { font-weight: inherit; }
+.event-fact-none { font-weight: 400; color: var(--text-muted); }
+.event-fact-more { margin-left: 10px; font-size: 0.92rem; font-weight: 400; color: var(--text-muted); }
 .citizenship-field .btn-row { gap: 18px; }
 .citizen-country { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 .check-row.inline { display: inline-flex; }

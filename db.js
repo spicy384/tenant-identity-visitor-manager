@@ -344,6 +344,25 @@ CREATE TABLE IF NOT EXISTS event_guests (
 );
 CREATE INDEX IF NOT EXISTS event_guests_visitor ON event_guests(visitor_id);
 
+-- An event's points of contact, in the order given. The first is also visitor_events.host_id.
+CREATE TABLE IF NOT EXISTS event_contacts (
+  event_id INTEGER NOT NULL REFERENCES visitor_events(id) ON DELETE CASCADE,
+  person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (event_id, person_id)
+);
+CREATE INDEX IF NOT EXISTS event_contacts_person ON event_contacts(person_id);
+
+-- A visit's points of contact, in the order given. The first is also visits.host_id, and
+-- visits.host_name keeps all their names as they were, so the log still reads after someone leaves.
+CREATE TABLE IF NOT EXISTS visit_contacts (
+  visit_id INTEGER NOT NULL REFERENCES visits(id) ON DELETE CASCADE,
+  person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (visit_id, person_id)
+);
+CREATE INDEX IF NOT EXISTS visit_contacts_person ON visit_contacts(person_id);
+
 -- Requests for the Security role to validate someone's clearance. The last four of an SSN
 -- given with one is never stored here (clearance.js keeps it in memory only); had_digits
 -- just says some were given.
@@ -852,6 +871,12 @@ function addColumns(db) {
   rebuildBadges(db);
   db.exec(BADGE_KEY_INDEX);
   db.exec("CREATE INDEX IF NOT EXISTS visitor_events_series ON visitor_events(series_id, date)");
+  // Events and visits first had one point of contact (host_id); now a list, of which host_id is
+  // always the first. One with a host_id and no list yet is from before: its list starts with it.
+  db.exec(`INSERT OR IGNORE INTO event_contacts (event_id, person_id, position)
+      SELECT e.id, e.host_id, 0 FROM visitor_events e WHERE e.host_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM event_contacts c WHERE c.event_id = e.id);
+    INSERT OR IGNORE INTO visit_contacts (visit_id, person_id, position)
+      SELECT x.id, x.host_id, 0 FROM visits x WHERE x.host_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM visit_contacts c WHERE c.visit_id = x.id);`);
 }
 
 // A badge's number is unique within its facility code (no code counts as one code of its own).

@@ -13,74 +13,87 @@ const CHECKIN_STEPS = [
 const isTechnician = (v) => v?.visitorType === "Service Technician";
 
 /**
- * Picks a visit's point of contact by name: anyone in the directory, at any site, whose company
- * comes with them (a tenant may use a room at another site). Someone not assigned to the visit's
- * site gets a warning, and can still be chosen. With no site chosen yet, onSite(siteId) is called
- * with their company's site when there's only one it can be. Returns { node, value() ({ companyId,
- * hostId } or nulls), setSite(siteId) }; a new site keeps the contact.
+ * Picks a visit's points of contact by name: anyone in the directory, at any site, whose company
+ * comes with them (a tenant may use a room at another site); after the first, more people of
+ * that company can be added. Someone not assigned to the visit's site gets a warning, and can
+ * still be chosen. With no site chosen yet, onSite(siteId) is called with the first contact's
+ * company's site when there's only one it can be. hostIds: those to start with, loaded as the
+ * picker opens; until they are, value() answers with them and `initial` ({ companyId,
+ * companyName, hostName }). Returns { node, value() ({ companyId, companyName, hostId (the
+ * first), hostIds, hostName (all their names) }, nulls and [] with no one), setSite(siteId) };
+ * a new site keeps the contacts.
  */
-function contactPicker({ siteId = "", companyId = null, hostId = null, onSite = () => {} } = {}) {
+function contactPicker({ siteId = "", hostIds = [], initial = {}, onSite = () => {} } = {}) {
   let site = siteId;
-  let chosen = { companyId: companyId || null, hostId: hostId || null };
-  const search = h("input", { type: "search", autocomplete: "off", "aria-label": "Point of contact", placeholder: "Type a name from the directory" });
-  const hint = h("span", { class: "hint", text: "Anyone in the directory, at any site; their company comes with them." });
+  let people = []; // those picked, as /api/contacts gives them, in the order picked
+  let loading = hostIds.length > 0;
+  const company = () => (people.length ? { id: people[0].companyId, name: people[0].companyName || null } : null);
+  const search = h("input", { type: "search", autocomplete: "off", "aria-label": "Point of contact" });
+  const hint = h("span", { class: "hint" });
   const note = h("p", { class: "message warn", role: "status", hidden: true });
-  const picked = h("div", { class: "chosen-row", hidden: true });
+  const cards = h("div", { class: "contact-cards", hidden: true });
   const results = h("div", { class: "choices-list short", hidden: true });
-  const card = h("div", { class: "contact-card", hidden: true });
+  const title = h("span", { text: "Point of contact *" });
   const node = h("div", { class: "full-row stack contact-picker" },
-    h("label", { class: "full-row" }, h("span", { text: "Point of contact *" }), picked, search, hint), note, results, card);
+    h("label", { class: "full-row" }, title, cards, search, hint), note, results);
 
-  /** The contact's details, as the caller's field access shows them. */
-  function showCard(person) {
+  /** A contact's details, as the caller's field access shows them, with a way to take them off. */
+  function card(person) {
     const line = (label, value) => (value ? h("div", { class: "small-text" }, h("span", { class: "muted", text: `${label} ` }), value) : null);
     const phone = (n) => h("a", { href: `tel:${String(n).replace(/[^\d+]/g, "")}`, text: n });
-    card.replaceChildren(...[
-      h("div", {}, h("strong", { text: personName(person) }), person.jobTitle ? h("span", { class: "muted", text: `, ${person.jobTitle}` }) : null),
+    return h("div", { class: "contact-card" }, ...[
+      h("div", { class: "row-between" },
+        h("span", {}, h("strong", { text: personName(person) }), person.jobTitle ? h("span", { class: "muted", text: `, ${person.jobTitle}` }) : null),
+        h("button", { type: "button", class: "link-btn", text: "Remove", "aria-label": `Remove ${personName(person)}`, onclick: (e) => { e.preventDefault(); remove(person.id); } })),
       line("Company", person.companyName),
       line("Work phone", person.workPhone ? phone(person.workPhone) : null),
       line("Mobile", person.mobile ? phone(person.mobile) : null),
       line("Email", person.email ? h("a", { href: `mailto:${person.email}`, text: person.email }) : null)
     ].filter(Boolean));
-    card.hidden = false;
   }
 
-  /** Warns, without stopping anyone, when the contact isn't assigned to the visit's site. */
+  /** Warns, without stopping anyone, when a contact isn't assigned to the visit's site. */
   function warnOfSite() {
-    const elsewhere = Boolean(site && chosen.hostId && chosen.assignedSiteIds && !chosen.assignedSiteIds.includes(Number(site)));
-    note.textContent = elsewhere ? `${chosen.hostName} isn't assigned to ${siteName(site) || "this site"}. You can still make them the point of contact.` : "";
-    note.hidden = !elsewhere;
+    const away = site ? people.filter((p) => p.assignedSiteIds && !p.assignedSiteIds.includes(Number(site))).map((p) => personName(p)) : [];
+    note.textContent = away.length ? `${away.join(" and ")} ${away.length > 1 ? "aren't" : "isn't"} assigned to ${siteName(site) || "this site"}. You can still make them ${away.length > 1 ? "points" : "the point"} of contact.` : "";
+    note.hidden = !away.length;
   }
 
-  function reset() {
-    chosen = { companyId: null, hostId: null };
-    picked.hidden = true;
-    card.hidden = true;
-    search.hidden = false;
-    search.value = "";
+  function render() {
+    cards.replaceChildren(...people.map(card));
+    cards.hidden = !people.length;
+    title.textContent = people.length > 1 ? "Points of contact *" : "Point of contact *";
+    const at = company();
+    search.placeholder = at ? `Add another from ${at.name || "their company"}` : "Type a name from the directory";
+    hint.textContent = at
+      ? `Anyone else at ${at.name || "their company"} they're visiting. Remove them all to choose someone elsewhere.`
+      : "Anyone in the directory, at any site; their company comes with them. More of its people can be added after.";
     results.hidden = true;
     warnOfSite();
   }
 
+  function remove(id) {
+    people = people.filter((p) => p.id !== id);
+    render();
+    search.focus();
+  }
+
   async function sitesOf(id) {
-    const { company } = await api(`/api/companies/${id}`).catch(() => ({ company: null }));
-    const at = new Set((company?.sites || []).map((s) => String(s.siteId)));
+    const { company: found } = await api(`/api/companies/${id}`).catch(() => ({ company: null }));
+    const at = new Set((found?.sites || []).map((s) => String(s.siteId)));
     return activeSites().filter((s) => at.has(String(s.id))).map((s) => String(s.id));
   }
 
   async function choose(p) {
-    chosen = { companyId: p.companyId, companyName: p.companyName || null, hostId: p.id, hostName: personName(p), assignedSiteIds: p.assignedSiteIds || null };
-    warnOfSite();
-    picked.replaceChildren(h("strong", { text: personName(p) }), h("span", { class: "muted", text: ` · ${p.companyName || ""}` }),
-      h("button", { type: "button", class: "link-btn", text: "Change", onclick: () => { reset(); search.focus(); } }));
-    picked.hidden = false;
-    search.hidden = true;
-    results.hidden = true;
-    showCard(p);
-    // No site yet: theirs, when it can only be one.
-    if (site) return;
+    const at = company();
+    if (people.some((x) => x.id === p.id) || (at && at.id !== p.companyId)) return;
+    people.push(p);
+    search.value = "";
+    render();
+    // No site yet: the first contact's, when it can only be one.
+    if (site || people.length > 1) return;
     const companySites = await sitesOf(p.companyId);
-    if (!site && chosen.hostId === p.id) {
+    if (!site && people[0]?.id === p.id) {
       const one = companySites.length === 1 ? companySites[0] : companySites.includes(String(p.siteId)) ? String(p.siteId) : "";
       if (one) {
         site = one;
@@ -93,12 +106,15 @@ function contactPicker({ siteId = "", companyId = null, hostId = null, onSite = 
   const run = debounce(async () => {
     const q = search.value.trim();
     if (q.length < 2) return (results.hidden = true);
-    const { people } = await api(`/api/contacts?${new URLSearchParams({ q })}`).catch(() => ({ people: [] }));
+    const { people: found } = await api(`/api/contacts?${new URLSearchParams({ q })}`).catch(() => ({ people: [] }));
     if (search.value.trim() !== q) return null; // typed on meanwhile: a newer search is coming
-    results.replaceChildren(...(people.length
-      ? people.map((p) => h("button", { type: "button", class: "pick-row", onclick: () => choose(p) }, h("strong", { text: personName(p) }),
+    // After the first, only people of the same company, and not those picked already.
+    const at = company();
+    const list = found.filter((p) => !people.some((x) => x.id === p.id) && (!at || p.companyId === at.id));
+    results.replaceChildren(...(list.length
+      ? list.map((p) => h("button", { type: "button", class: "pick-row", onclick: () => choose(p) }, h("strong", { text: personName(p) }),
         h("span", { class: "muted small-text", text: ` ${p.companyName || ""}${p.jobTitle ? ` · ${p.jobTitle}` : ""}` })))
-      : [h("p", { class: "muted small-text", text: "Nobody in the directory by that name." })]));
+      : [h("p", { class: "muted small-text", text: at ? `Nobody else by that name at ${at.name || "their company"}.` : "Nobody in the directory by that name." })]));
     results.hidden = false;
     return null;
   }, 200);
@@ -110,12 +126,20 @@ function contactPicker({ siteId = "", companyId = null, hostId = null, onSite = 
     results.querySelector(".pick-row")?.click();
   });
 
-  if (chosen.hostId) {
-    api(`/api/contacts/${chosen.hostId}`).then(({ person }) => choose(person)).catch(() => reset());
-  }
+  render();
+  // Those to start with, in their order; one who is no longer in the directory is left out.
+  (async () => {
+    for (const id of hostIds) {
+      const { person } = await api(`/api/contacts/${id}`).catch(() => ({ person: null }));
+      if (person) await choose(person);
+    }
+    loading = false;
+  })();
   return {
     node,
-    value: () => ({ companyId: chosen.companyId, companyName: chosen.companyName ?? null, hostId: chosen.hostId, hostName: chosen.hostName ?? null }),
+    value: () => (loading
+      ? { companyId: initial.companyId ?? null, companyName: initial.companyName ?? null, hostId: hostIds[0], hostIds: [...hostIds], hostName: initial.hostName ?? null }
+      : { companyId: company()?.id ?? null, companyName: company()?.name ?? null, hostId: people[0]?.id ?? null, hostIds: people.map((p) => p.id), hostName: people.map((p) => personName(p)).join(", ") || null }),
     setSite: (id) => {
       site = id;
       warnOfSite();
@@ -138,8 +162,10 @@ function checkInWizard(start = {}) {
       siteId: String(start.visit?.siteId || start.event?.siteId || state.site || (usable.length === 1 ? usable[0].id : "")),
       companyId: start.visit?.companyId || start.event?.companyId || null,
       companyName: start.visit?.companyName || start.event?.companyName || null,
+      // The points of contact: the visit's, or the event's (all of them), the first being hostId.
       hostId: start.visit?.hostId || start.event?.hostId || null,
-      hostName: start.visit?.hostName || start.event?.hostName || null,
+      hostIds: start.visit ? start.visit.hostIds || [start.visit.hostId].filter(Boolean) : (start.event?.hosts || []).map((p) => p.id),
+      hostName: start.visit?.hostName || (start.event?.hosts || []).map((p) => p.name).join(", ") || null,
       purpose: start.visit?.purpose || start.event?.title || "",
       overrideBlock: false,
       changed: false
@@ -311,9 +337,9 @@ function checkInWizard(start = {}) {
       // Who they usually visit here, when nothing says otherwise.
       if (!w.hostId && !w.event && !w.visit) {
         const usual = (v.companies || []).find((c) => c.hostId);
-        if (usual) Object.assign(w, { companyId: usual.companyId, companyName: usual.companyName, hostId: usual.hostId, hostName: usual.hostName });
+        if (usual) Object.assign(w, { companyId: usual.companyId, companyName: usual.companyName, hostId: usual.hostId, hostIds: [usual.hostId], hostName: usual.hostName });
       }
-      const contact = contactPicker({ siteId: w.siteId, companyId: w.companyId, hostId: w.hostId, onSite: (id) => { w.siteId = id; if (site) site.value = id; } });
+      const contact = contactPicker({ siteId: w.siteId, hostIds: w.hostIds, initial: { companyId: w.companyId, companyName: w.companyName, hostName: w.hostName }, onSite: (id) => { w.siteId = id; if (site) site.value = id; } });
       if (site) site.addEventListener("change", () => { w.siteId = site.value; contact.setSite(site.value); });
       const purpose = h("input", { type: "text", value: w.purpose, maxlength: "200", placeholder: "Meeting, interview, repair…", "aria-label": "Purpose of the visit" });
       const override = h("input", { type: "checkbox" });
@@ -387,7 +413,7 @@ function checkInWizard(start = {}) {
           h("div", { class: "id-name", text: name() }),
           h("dl", { class: "facts inline-facts" },
             fact("Company", v.organization), fact("Visitor type", v.visitorType), fact("Citizenship", citizenshipText(v.citizenship)),
-            fact("Visiting", w.companyName), fact("Point of contact", w.hostName),
+            fact("Visiting", w.companyName), fact(w.hostIds.length > 1 ? "Points of contact" : "Point of contact", w.hostName),
             fact("Purpose", w.purpose), multiSite() ? fact("Site", siteName()) : null),
           h("button", { type: "button", class: "link-btn small-text", text: "Change these details", onclick: detailsStep })),
         h("fieldset", { class: "id-types" }, h("legend", { text: "Which ID did they show?" }), types),
@@ -402,7 +428,7 @@ function checkInWizard(start = {}) {
           throw new Error("Say what the other government ID was.");
         }
         if (!match.checked) throw new Error(`Tick the box once the ID matches ${name()}. If it doesn't, don't check them in.`);
-        const visit = { hostId: w.hostId, companyId: w.companyId, purpose: w.purpose };
+        const visit = { hostIds: w.hostIds, companyId: w.companyId, purpose: w.purpose };
         // A visit under way (from a kiosk, or back here from the badge step): checked on that visit.
         if (w.visit && ["id", "badge"].includes(w.visit.checkinStage)) {
           w.visit = (await api(`/api/visits/${w.visit.id}/verify-id`, { method: "POST", body: { idType, idOther, ...visit } })).visit;
@@ -458,7 +484,9 @@ function checkInWizard(start = {}) {
             plan.uncleared ? h("p", { class: "message warn", text: `${name()}'s clearance hasn't been validated, so give them an uncleared visitor badge.` }) : null,
             h("p", {}, plan.available.length
               ? [`Give them ${plan.uncleared ? "an uncleared" : "a"} visitor badge${!plan.uncleared && kinds.length ? ` (${kinds.join(" or ")})` : ""}, and enter its number.`, h("span", { class: "muted small-text", text: ` ${plan.available.length} free${multiSite() ? ` at ${plan.visit.siteName}` : ""}.` })]
-              : h("span", { class: "message error", text: `No ${plan.uncleared ? "uncleared " : ""}visitor badge is free${multiSite() ? ` at ${plan.visit.siteName}` : ""} that ${name()} may hold.` })),
+              : h("span", { class: "message error", text: plan.uncleared
+                ? `No uncleared visitor badge is free${multiSite() ? ` at ${plan.visit.siteName}` : ""}.`
+                : `No visitor badge at ${name()}'s clearance level is free${multiSite() ? ` at ${plan.visit.siteName}` : ""}. A lower one they may hold can still be given by its number.` })),
             h("div", { class: "btn-row" }, code, number, issue),
             plan.available.length ? h("button", { type: "button", class: "link-btn small-text", text: "Show the free badges", onclick: (e) => { free.hidden = !free.hidden; e.target.textContent = free.hidden ? "Show the free badges" : "Hide the free badges"; } }) : null,
             free)));
@@ -516,7 +544,7 @@ function checkInWizard(start = {}) {
         h("div", { class: "tick", "aria-hidden": "true" }, "✓"),
         h("p", { text })),
       [btn("Check in someone else", "secondary", () => {
-        Object.assign(w, { visitor: null, visit: null, event: null, companyId: null, companyName: null, hostId: null, hostName: null, purpose: "", overrideBlock: false });
+        Object.assign(w, { visitor: null, visit: null, event: null, companyId: null, companyName: null, hostId: null, hostIds: [], hostName: null, purpose: "", overrideBlock: false });
         findStep();
       }), btn("Close", "primary", finish)]);
       stepper.querySelectorAll("li").forEach((li) => { li.className = "done"; });

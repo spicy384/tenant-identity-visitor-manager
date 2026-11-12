@@ -373,7 +373,7 @@ function createAccess({ db, fields }) {
   /** Every field of `entity` (built-in, then custom) in the shape the grid and forms use. */
   function allFields(entity, { recordId = null, allRecords = false } = {}) {
     return [
-      ...builtIn(entity).map((f) => ({ key: f.key, label: f.label, type: f.type, builtIn: true, locked: Boolean(f.locked), system: Boolean(f.system), security: Boolean(f.security), sensitive: Boolean(f.sensitive), required: Boolean(f.required), choices: [], recordId: null })),
+      ...builtIn(entity).map((f) => ({ key: f.key, label: f.label, type: f.type, builtIn: true, locked: Boolean(f.locked), system: Boolean(f.system), security: Boolean(f.security), sensitive: Boolean(f.sensitive), required: Boolean(f.required), choices: f.choices || [], recordId: null })),
       ...fields.list(entity, { recordId, allRecords }).map((d) => ({ key: customKey(d.id), id: d.id, apiKey: d.key, label: d.label, type: d.type, builtIn: false, locked: false, required: d.required, choices: d.choices, recordId: d.recordId }))
     ];
   }

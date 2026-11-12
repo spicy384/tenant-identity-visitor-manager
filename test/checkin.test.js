@@ -97,6 +97,11 @@ async function main() {
   r = await desk.post("/api/visitors", { firstName: "Ann", lastName: "Arrival", organization: "Arrival Ltd", citizenship: "united kingdom" });
   const ann = r.data.visitor;
   check("record: a country by name is kept as its code, and the type starts as Guest", r.status === 200 && ann.citizenship === "GB" && ann.visitorType === "Guest", JSON.stringify(r.data));
+  // The edit form builds its Visitor type dropdown from the choices sent with the field.
+  r = await desk.get(`/api/visitors/${ann.id}`);
+  check("record: the visitor type comes with its choices, for the edit form", r.data.fields.find((f) => f.key === "visitorType")?.choices.join() === "Guest,Service Technician", JSON.stringify(r.data.fields.find((f) => f.key === "visitorType")));
+  check("record: and the type can be changed and changed back", (await desk.put(`/api/visitors/${ann.id}`, { visitorType: "Service Technician" })).data.visitor?.visitorType === "Service Technician"
+    && (await desk.put(`/api/visitors/${ann.id}`, { visitorType: "Guest" })).data.visitor?.visitorType === "Guest");
   const tech = (await desk.post("/api/visitors", { firstName: "Tom", lastName: "Tech", organization: "Lift Co", citizenship: "US", visitorType: "Service Technician" })).data.visitor;
   check("record: a service technician", tech.visitorType === "Service Technician" && tech.citizenship === "US");
   const bare = (await desk.post("/api/visitors", { firstName: "Ben", lastName: "Bare" })).data.visitor;
@@ -456,7 +461,8 @@ async function main() {
   await security.post("/api/clearance/validate", { kind: "visitor", id: cleo.id, levelId: levelIds.TS });
   const offered = (list) => list.map((b) => b.number).filter((n) => n.startsWith("CL-")).sort().join();
   const atSite = (await desk.get(`/api/badge-holders/visitor/${cleo.id}?site=${site.id}`)).data.available;
-  check("clearance: TS is offered TS and below, on the list Pick badge shows", offered(atSite) === "CL-S,CL-TS,CL-U", offered(atSite));
+  check("clearance: TS is offered only TS badges, on the list Pick badge shows", offered(atSite) === "CL-TS", offered(atSite));
+  check("clearance: so is the list of an event still to come", offered((await desk.get(`/api/badge-holders/visitor/${cleo.id}`)).data.available) === "CL-TS");
   const clearedEvent = (await desk.post("/api/events", { siteId: site.id, title: "Cleared review", date: new Date().toISOString().slice(0, 10), companyId: acme.id, hostId: host.id })).data.event;
   await desk.post(`/api/events/${clearedEvent.id}/guests`, { visitorId: cleo.id });
   const pickFor = (visitor, badge) => desk.put(`/api/events/${clearedEvent.id}/guests/${visitor.id}/badge`, { badgeId: badge.id });
@@ -474,10 +480,40 @@ async function main() {
   await security.post("/api/clearance/validate", { kind: "visitor", id: cleo.id, levelId: levelIds.Secret });
   const cleoVisit = (await desk.post("/api/checkins", { visitorId: cleo.id, siteId: site.id, hostId: host.id, purpose: "Review", idType: "Passport" })).data.visit;
   r = (await desk.get(`/api/visits/${cleoVisit.id}/badge-plan`)).data;
-  check("clearance: one kept before a lower validation can't be handed over, and check-in says why", r.assigned?.number === "CL-TS" && /doesn't cover badge CL-TS/.test(r.assigned.problem || "") && offered(r.available) === "CL-S,CL-U", JSON.stringify(r).slice(0, 300));
+  check("clearance: one kept before a lower validation can't be handed over, and check-in says why", r.assigned?.number === "CL-TS" && /doesn't cover badge CL-TS/.test(r.assigned.problem || "") && offered(r.available) === "CL-S", JSON.stringify(r).slice(0, 300));
   check("clearance: nor issued by number", (await desk.post(`/api/visits/${cleoVisit.id}/badge`, { number: "CL-TS" })).status === 409);
+  check("clearance: a lower badge they may hold isn't offered, but can still be given by its number", (await desk.post(`/api/visits/${cleoVisit.id}/badge`, { number: "CL-U" })).status === 200);
 
   check("contact: but not at a site that isn't its own", (await harborDesk.post("/api/checkins", { visitorId: nia.id, siteId: other.id, hostId: riverRita.id, purpose: "Conference room", idType: "Passport" })).status === 403);
+
+  // --- several points of contact -------------------------------------------------------------------
+  const second = (await admin.post("/api/people", { firstName: "Sol", lastName: "Second", companyId: acme.id })).data.person;
+  const third = (await admin.post("/api/people", { firstName: "Tess", lastName: "Third", companyId: acme.id })).data.person;
+  r = await desk.post("/api/checkins", { visitorId: (await guest("Pia")).id, siteId: site.id, hostIds: [second.id, host.id], purpose: "Workshop", idType: "Passport" });
+  const piaVisit = r.data.visit;
+  check("contacts http: the desk checks someone in with two", r.status === 200 && piaVisit.hostIds.join() === `${second.id},${host.id}` && piaVisit.hostId === second.id && piaVisit.hostName === "Sol Second, Hana Host" && piaVisit.companyName === "Acme Corp", JSON.stringify(r.data));
+  check("contacts http: the audit log names them", (await admin.get("/api/audit?action=visit.checkin")).data.entries.some((e) => /contact Sol Second, Hana Host;/.test(e.detail)));
+  check("contacts http: each at the first one's company", (await desk.post("/api/checkins", { visitorId: (await guest("Quin")).id, siteId: site.id, hostIds: [host.id, riverRita.id], purpose: "Workshop", idType: "Passport" })).status === 400);
+  r = await desk.post(`/api/visits/${piaVisit.id}/verify-id`, { idType: "Passport", hostIds: [host.id, second.id, third.id] });
+  check("contacts http: changed until the badge is given", r.status === 200 && r.data.visit.hostIds.join() === [host.id, second.id, third.id].join() && r.data.visit.hostName === "Hana Host, Sol Second, Tess Third", JSON.stringify(r.data));
+  r = await desk.post(`/api/visits/${piaVisit.id}/verify-id`, { idType: "Passport" });
+  check("contacts http: kept when none are sent", r.status === 200 && r.data.visit.hostIds.length === 3);
+  check("contacts http: the visit log finds it by any of them", (await desk.get(`/api/visits?hostId=${third.id}`)).data.visits.some((v) => v.id === piaVisit.id)
+    && !(await desk.get(`/api/visits?hostId=${riverRita.id}`)).data.visits.some((v) => v.id === piaVisit.id));
+  // An event with two: an expected guest who names one at the kiosk gets both on their visit.
+  const twoEvent = (await desk.post("/api/events", { siteId: site.id, title: "Two contacts", date: day, companyId: acme.id, hostIds: [host.id, second.id] })).data.event;
+  check("contacts http: an event has two", twoEvent.hosts.map((p) => p.name).join() === "Hana Host,Sol Second" && twoEvent.hostName === "Hana Host", JSON.stringify(twoEvent.hosts));
+  r = await desk.put(`/api/events/${twoEvent.id}`, { hostIds: [second.id, host.id] });
+  check("contacts http: in a new order", r.status === 200 && r.data.event.hosts[0].id === second.id && r.data.event.hostId === second.id);
+  check("contacts http: each in the event's company", (await desk.put(`/api/events/${twoEvent.id}`, { hostIds: [second.id, riverRita.id] })).status === 400
+    && (await desk.get(`/api/events/${twoEvent.id}`)).data.event.hosts.length === 2);
+  await desk.post(`/api/events/${twoEvent.id}/guests`, { visitor: { firstName: "Kit", lastName: "Kiosker", organization: "Guest Co", citizenship: "US" } });
+  r = await kiosk.post("/kiosk/api/lookup", { name: "Kit Kiosker" });
+  check("contacts http: the kiosk offers the event's first", r.data.matches[0]?.companies[0].hostName === "Sol Second", JSON.stringify(r.data));
+  r = await kiosk.post("/kiosk/api/checkin", { ref: r.data.matches[0].ref, companyId: acme.id, hostId: host.id, purpose: "Two contacts" });
+  check("contacts http: the kiosk names them all", r.data.ok && r.data.hostName === "Hana Host and Sol Second", JSON.stringify(r.data));
+  const kitVisit = (await desk.get("/api/visits?status=open&q=Kiosker")).data.visits[0];
+  check("contacts http: the kiosk visit has the event's, the one chosen first", kitVisit?.hostIds.join() === `${host.id},${second.id}`, JSON.stringify(kitVisit?.hostIds));
 }
 
 main()

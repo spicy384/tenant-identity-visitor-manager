@@ -165,7 +165,11 @@ The design and decisions are in [PLAN.md](PLAN.md).
      them, and the site too when none is chosen and it can only be one). The point of contact
      can be anyone in the directory, at any site, even for an account limited to some sites, so
      a tenant can use a room at another site. Someone not assigned to the visit's site gets a
-     warning, but can still be used. Changing the site keeps the point of contact.
+     warning, but can still be used. Changing the site keeps the point of contact. A visit can
+     have several points of contact (up to ten), all at the first one's company: after the
+     first, the search adds more people of that company, each shown with their details and
+     **Remove**. In the building, the visit log and its export list all their names, and the
+     log is found by any of them. An expected guest starts with all of their event's.
   2. **Confirm** their details, the point of contact's (job title, phones, email, as the
      role's field access shows them) and the purpose of the visit.
   3. **ID**: which ID they showed (driver's license, passport, CAC, state ID or another
@@ -176,6 +180,9 @@ The design and decisions are in [PLAN.md](PLAN.md).
      for a regular visitor) is shown large, with **Badge handed over** and **Can't find it?
      Issue a different badge**. Otherwise the desk enters the number of the badge they hand
      over: it must be an active visitor badge, valid at the site, that the visitor may hold.
+     The free badges listed are only those at the visitor's own clearance level (the level
+     Security validated; uncleared ones while their clearance doesn't count). A lower badge
+     their clearance covers isn't listed, but can still be given by entering its number.
      A visitor whose clearance doesn't count (not validated by Security, or due a re-check)
      is shown the uncleared visitor badge image, with a note saying so, and can be
      sent to Security from here (**Request clearance validation**). **No badge needed**
@@ -251,7 +258,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
   a clearance level goes only to someone whose clearance covers it. A badge can be given to
   anyone, whatever site they work at. The app refuses anything else, whoever asks, and that
   includes a badge reserved for a visitor or picked ahead for an expected guest: Pick badge lists,
-  with a filter by number, only the ones that guest's clearance covers. A badge kept for someone whose clearance later
+  with a filter by number, only the ones at that guest's own clearance level, as does giving a
+  visitor a badge from their record or at check-in. A badge kept for someone whose clearance later
   no longer covers it can't be handed over; check-in says so and asks for another. Staff
   limited to some sites see the badges valid at any of their sites.
 - **Clearance levels** are an ordered list under Settings > Badges and clearances: Secret <
@@ -586,26 +594,31 @@ Home.
 
 ## Expected visitors
 
-**Expected** lists a day's visitor events: a name, time, site, company and host, and the guests
+**Expected** lists a day's visitor events: a name, and under it, set apart, its time and its
+Point of Contact (PoC), or Points of Contact when it has several, each a link to that person's
+record for those who see the directory, with their company; then the site and the guests
 expected. Each guest shows as expected, arrived but not yet through the desk, here (since
 when) or left. Staff who give badges out can pick the visitor badge to hand each guest
 (Badge column): check-in then shows that badge. Guests are picked from
 visitors on record, or typed in under Someone new: pressing Done (or Enter, to add another)
 looks the name and email up, offers the visitor on record when there is one, and otherwise
-asks before adding them as a new visitor. Guests are linked to the event's company and host,
+asks before adding them as a new visitor. Guests are linked to the event's company and first point of contact,
 so the kiosk recognizes them. For an event still to come (a later date, or today before its start
 time, or today with no start time), Pick badge also lists badges out now, marked as such, as
 they should be back by then; if one isn't, check-in says so and asks for another. **Check in**, here or on Home's Expected today card, starts the
-check-in with the event's company, host and purpose (its name) filled in. **Remove** takes a guest
+check-in with the event's company, points of contact and purpose (its name) filled in. **Remove** takes a guest
 off (Add guest lists the event's guests too, each with Remove). A guest who came stays on
 that date, their visit with it; on a repeating event they can be taken off its later dates.
-At the kiosk an expected guest is offered their event's company and host first; checking
+At the kiosk an expected guest is offered their event's company and first point of contact; if
+they choose that company, the event's other points of contact go on their visit too. Checking
 in, at the kiosk or the desk, marks them arrived. The navigation counts guests expected
 today who haven't arrived.
 
-An event's **point of contact** is picked by typing their name: the person comes with their
+An event's **points of contact** are picked by typing a name: the first person comes with their
 company (type a company's name instead for no one in particular), across every site the
-account sees. Every site is offered, and the company needn't be at the event's site: a tenant
+account sees. More people of that company can then be added, up to ten, each shown as a chip
+with a remove button; the first is the one the kiosk offers and a new guest's usual host. On a
+repeating event a change to them can reach the later dates too. Every site is offered, and the company needn't be at the event's site: a tenant
 may use another site's conference room. On the event's date the company counts as at that site,
 so its guests check in there (the kiosk offers it, with the event's host). On a new event,
 picking the point of contact moves the site to one of their company's until a site is chosen

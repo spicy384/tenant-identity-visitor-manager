@@ -445,9 +445,20 @@ function createBadges({ db, clearance, now = Date.now }) {
   }
 
   /**
+   * Whether a badge is one to offer `h`. A visitor is offered only the badges at their own
+   * clearance level: the level Security validated, or uncleared badges while their clearance
+   * doesn't count. They may still hold a lower one (refusal decides that), given by its number.
+   */
+  function offered(h) {
+    if (h.kind !== "visitor") return () => true;
+    const own = clearance.effectiveLevel(h)?.id ?? null;
+    return (b) => (b.clearanceLevelId ?? null) === own;
+  }
+
+  /**
    * Active, unheld badges `h` may be given, among those `sites` sees: their own kind, or with
    * `temporary` (a person only) the ones they may borrow for the day, the temporary stock of
-   * their kind first, then visitor badges.
+   * their kind first, then visitor badges. For a visitor, only those at their own clearance level.
    */
   function availableFor(kind, holderId, { sites = null, temporary = false } = {}) {
     const h = holder(kind, holderId);
@@ -455,18 +466,18 @@ function createBadges({ db, clearance, now = Date.now }) {
     const own = kind === "visitor" ? "visitor" : h.buildingStaff ? "personnel" : "tenant";
     const found = list({ state: "available", type: own, temporary: kind === "visitor" ? null : temporary, sites, limit: 5000 }).badges;
     if (temporary && kind === "person") found.push(...list({ state: "available", type: "visitor", sites, limit: 5000 }).badges);
-    return found.filter((b) => !refusal(b, h));
+    return found.filter((b) => !refusal(b, h)).filter(offered(h));
   }
 
   /**
    * The visitor badges a visitor may be given at an event still to come on `day`, among those
    * `sites` sees: those out now count, being due back by then, but not one whose expiry comes
-   * before that day.
+   * before that day. Only those at their own clearance level, as in availableFor.
    */
   function availableLater(visitorId, day, { sites = null } = {}) {
     const h = holder("visitor", visitorId);
     if (!h) throw fail(404, "No such person or visitor.");
-    return list({ type: "visitor", sites, limit: 5000 }).badges.filter((b) => !refusal(b, h) && !(b.expiresOn && b.expiresOn < day));
+    return list({ type: "visitor", sites, limit: 5000 }).badges.filter((b) => !refusal(b, h) && !(b.expiresOn && b.expiresOn < day)).filter(offered(h));
   }
 
   /** Midnight at the end of today where `timeZone` is (or the server's), as a timestamp. */

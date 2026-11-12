@@ -1,6 +1,7 @@
 /**
  * Visitor events: a meeting, an interview day, a delivery window. Each is at a site on a
- * date, optionally for a company and host, with a list of expected guests (visitors).
+ * date, optionally for a company and its points of contact there (one or several people), with
+ * a list of expected guests (visitors).
  *
  * An event can repeat (daily, on weekdays, weekly on chosen days, or monthly) up to a year
  * ahead. Each date is an event of its own in a series (series_id, the first date's id), so a
@@ -10,9 +11,10 @@
  * The Expected page lists a day's events and whether each guest has arrived. A guest's
  * arrival is noted against the event when they check in at that site that day, at the
  * kiosk or the desk (visitors.checkIn). The kiosk offers an expected guest their event's
- * company and host first.
+ * company and first point of contact first.
  */
 const { today } = require("./clearance");
+const { contactIds, MAX_CONTACTS } = require("./visitors");
 
 const { badgeLabel } = require("./badges");
 
@@ -100,8 +102,28 @@ const hostName = (p) => (p && p.first_name ? `${p.preferred_name || p.first_name
 function createEvents({ db, now = Date.now }) {
   const raw = db.raw;
 
-  const SELECT = `SELECT e.*, s.name AS site_name, s.time_zone, c.name AS company_name, p.first_name, p.last_name, p.preferred_name
-    FROM visitor_events e JOIN sites s ON s.id = e.site_id LEFT JOIN companies c ON c.id = e.company_id LEFT JOIN people p ON p.id = e.host_id`;
+  const SELECT = `SELECT e.*, s.name AS site_name, s.time_zone, c.name AS company_name
+    FROM visitor_events e JOIN sites s ON s.id = e.site_id LEFT JOIN companies c ON c.id = e.company_id`;
+
+  /** Each event's points of contact, in the order given: a Map of event id to [{ id, name, active }]. */
+  function contactsOf(eventIds) {
+    const found = new Map();
+    if (!eventIds.length) return found;
+    const list = raw.prepare(`SELECT ec.event_id, p.id, p.first_name, p.last_name, p.preferred_name, p.active FROM event_contacts ec JOIN people p ON p.id = ec.person_id
+      WHERE ec.event_id IN (${inList(eventIds)}) ORDER BY ec.position, ec.person_id`).all(...eventIds);
+    for (const r of list) {
+      if (!found.has(r.event_id)) found.set(r.event_id, []);
+      found.get(r.event_id).push({ id: r.id, name: hostName(r), active: Boolean(r.active) });
+    }
+    return found;
+  }
+
+  /** Makes `ids` an event's points of contact, in that order. */
+  function setContacts(eventId, ids) {
+    raw.prepare("DELETE FROM event_contacts WHERE event_id = ?").run(eventId);
+    const add = raw.prepare("INSERT INTO event_contacts (event_id, person_id, position) VALUES (?, ?, ?)");
+    ids.forEach((id, i) => add.run(eventId, id, i));
+  }
 
   function guestsOf(eventIds) {
     const out = new Map();
@@ -136,6 +158,8 @@ function createEvents({ db, now = Date.now }) {
 
   function rows(list) {
     const guests = guestsOf(list.map((r) => r.id));
+    const contacts = contactsOf(list.map((r) => r.id));
+    const hostsOf = (id) => (contacts.get(id) || []).map((x) => ({ id: x.id, name: x.name }));
     return list.map((r) => ({
       id: r.id,
       siteId: r.site_id,
@@ -146,8 +170,10 @@ function createEvents({ db, now = Date.now }) {
       endTime: r.end_time,
       companyId: r.company_id,
       companyName: r.company_name,
-      hostId: r.host_id,
-      hostName: hostName(r),
+      // Its points of contact, in the order given; hostId and hostName are the first of them.
+      hosts: hostsOf(r.id),
+      hostId: hostsOf(r.id)[0]?.id ?? null,
+      hostName: hostsOf(r.id)[0]?.name ?? null,
       notes: r.notes,
       // The series a repeating event's date belongs to (null: it doesn't repeat), and how it repeats.
       seriesId: r.series_id ?? null,
@@ -231,11 +257,18 @@ function createEvents({ db, now = Date.now }) {
       }
     }
     const companyId = out.companyId !== undefined ? out.companyId : existing?.companyId ?? null;
-    if (input.hostId !== undefined || out.companyId !== undefined) {
-      const hid = input.hostId !== undefined ? input.hostId : existing?.hostId;
-      if (hid === null || hid === "" || hid === undefined) out.hostId = null;
-      else if (!companyId || !raw.prepare("SELECT 1 FROM people WHERE id = ? AND company_id = ?").get(Number(hid), companyId)) throw fail(400, "The host must be someone in the event's company.");
-      else out.hostId = Number(hid);
+    // Its points of contact: `hostIds`, a list (or `hostId`, one of them), each someone in the
+    // event's company. A new company with no list given keeps those it has, if they are in it.
+    const given = input.hostIds !== undefined ? input.hostIds : input.hostId;
+    if (given !== undefined || out.companyId !== undefined) {
+      const ids = given !== undefined ? contactIds(given) : (existing?.hosts || []).map((x) => x.id);
+      if (!ids) throw fail(400, "Choose each point of contact from the directory.");
+      if (ids.length > MAX_CONTACTS) throw fail(400, `An event has at most ${MAX_CONTACTS} points of contact.`);
+      const inCompany = raw.prepare("SELECT 1 FROM people WHERE id = ? AND company_id = ?");
+      if (ids.length && (!companyId || ids.some((id) => !inCompany.get(id, companyId)))) {
+        throw fail(400, ids.length > 1 ? "Each point of contact must be someone in the event's company." : "The point of contact must be someone in the event's company.");
+      }
+      out.hostIds = ids;
     }
     if (input.notes !== undefined) out.notes = String(input.notes || "").trim().slice(0, 2000) || null;
     return out;
@@ -256,7 +289,9 @@ function createEvents({ db, now = Date.now }) {
     const ids = [];
     db.transaction(() => {
       for (const date of dates) {
-        ids.push(Number(insert.run(v.siteId, v.title, date, v.startTime ?? null, v.endTime ?? null, v.companyId ?? null, v.hostId ?? null, v.notes ?? null, rule ? JSON.stringify(rule) : null, by, t, t).lastInsertRowid));
+        const id = Number(insert.run(v.siteId, v.title, date, v.startTime ?? null, v.endTime ?? null, v.companyId ?? null, v.hostIds?.[0] ?? null, v.notes ?? null, rule ? JSON.stringify(rule) : null, by, t, t).lastInsertRowid);
+        setContacts(id, v.hostIds || []);
+        ids.push(id);
       }
       if (rule) raw.prepare(`UPDATE visitor_events SET series_id = ? WHERE id IN (${inList(ids)})`).run(ids[0], ...ids);
     });
@@ -276,8 +311,11 @@ function createEvents({ db, now = Date.now }) {
       for (const eventId of ids) {
         const was = eventId === existing.id ? existing : get(eventId);
         const change = eventId === existing.id ? input : { ...input, date: undefined };
-        const next = { ...was, ...clean(change, was, sites) };
-        stmt.run(next.siteId, next.title, next.date, next.startTime, next.endTime, next.companyId, next.hostId, next.notes, now(), eventId);
+        const changed = clean(change, was, sites);
+        const next = { ...was, ...changed };
+        const hostIds = changed.hostIds ?? was.hosts.map((x) => x.id);
+        stmt.run(next.siteId, next.title, next.date, next.startTime, next.endTime, next.companyId, hostIds[0] ?? null, next.notes, now(), eventId);
+        if (changed.hostIds) setContacts(eventId, changed.hostIds);
       }
     });
     return { ...get(id), count: ids.length };
@@ -387,15 +425,20 @@ function createEvents({ db, now = Date.now }) {
 
   /**
    * Today's events at `siteId` a visitor is expected at and hasn't arrived for yet, with
-   * the company and host to offer them first (the kiosk).
+   * the company and point of contact to offer them first (the kiosk): hostId and hostName are
+   * the first of the event's contacts still active, hostIds all of those.
    */
   function expectedToday(visitorId, siteId) {
     const tz = raw.prepare("SELECT time_zone FROM sites WHERE id = ?").get(siteId)?.time_zone;
-    return raw.prepare(`SELECT e.id, e.title, e.company_id, c.name AS company_name, c.active AS company_active, e.host_id, p.first_name, p.last_name, p.preferred_name, p.active AS host_active, g.badge_id
-      FROM event_guests g JOIN visitor_events e ON e.id = g.event_id LEFT JOIN companies c ON c.id = e.company_id LEFT JOIN people p ON p.id = e.host_id
+    const found = raw.prepare(`SELECT e.id, e.title, e.company_id, c.name AS company_name, c.active AS company_active, g.badge_id
+      FROM event_guests g JOIN visitor_events e ON e.id = g.event_id LEFT JOIN companies c ON c.id = e.company_id
       WHERE g.visitor_id = ? AND g.visit_id IS NULL AND e.site_id = ? AND e.date = ? ORDER BY coalesce(e.start_time, '99')`).all(visitorId, siteId, today(tz, now()))
-      .filter((r) => r.company_id && r.company_active)
-      .map((r) => ({ eventId: r.id, title: r.title, companyId: r.company_id, companyName: r.company_name, hostId: r.host_id && r.host_active ? r.host_id : null, hostName: r.host_active ? hostName(r) : null, badgeId: r.badge_id ?? null }));
+      .filter((r) => r.company_id && r.company_active);
+    const contacts = contactsOf(found.map((r) => r.id));
+    return found.map((r) => {
+      const active = (contacts.get(r.id) || []).filter((x) => x.active);
+      return { eventId: r.id, title: r.title, companyId: r.company_id, companyName: r.company_name, hostId: active[0]?.id ?? null, hostName: active[0]?.name ?? null, hostIds: active.map((x) => x.id), badgeId: r.badge_id ?? null };
+    });
   }
 
   /** Expected guests at the caller's sites today who haven't arrived, for the navigation count. */

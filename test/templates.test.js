@@ -188,7 +188,7 @@ async function main() {
   const secretVisitor = (await admin.post("/api/visitors", { firstName: "Sid", lastName: "Secret" })).data.visitor;
   await security.post("/api/clearance/validate", { kind: "visitor", id: secretVisitor.id, levelId: L.Secret.id });
   r = await desk.get(`/api/badge-holders/visitor/${secretVisitor.id}`);
-  check("give: with no badge of their level free, the image of the one they can have", r.data.suggested === ref.noneVisitor && r.data.available.map((b) => b.number).join() === "V-2");
+  check("give: with no badge of their level free, none is offered, nor an image", r.data.suggested === null && r.data.available.length === 0);
   const nobodyFree = (await admin.post("/api/visitors", { firstName: "Bo", lastName: "Blocked", blocked: true })).data.visitor;
   check("give: nothing on offer, no image", (await desk.get(`/api/badge-holders/visitor/${nobodyFree.id}`)).data.suggested === null);
   check("give: someone who only reads badges isn't shown one", (await viewer.get(`/api/badge-holders/person/${tsPerson.id}`)).data.suggested === null);

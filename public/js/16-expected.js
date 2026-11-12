@@ -52,17 +52,47 @@ async function loadExpected() {
   for (const e of data.events) list.append(eventPanel(e));
 }
 
+/** "9:00 AM" from an event's "09:00", as the page shows every other time. */
+const eventClock = (hhmm) => {
+  const [hour, minute] = String(hhmm).split(":").map(Number);
+  return fmtTime(new Date(2000, 0, 1, hour, minute).getTime());
+};
+
+/** When an event is, for reading: "9:00 AM – 10:30 AM", "9:00 AM", "Until 10:30 AM", or "" with no time. */
+function eventTimeText(e) {
+  if (e.startTime && e.endTime) return `${eventClock(e.startTime)} – ${eventClock(e.endTime)}`;
+  if (e.startTime) return eventClock(e.startTime);
+  return e.endTime ? `Until ${eventClock(e.endTime)}` : "";
+}
+
+/**
+ * What the desk looks for first on an event: when it is, and its points of contact (each a
+ * link to their record, for those who see the directory) with the company they're at.
+ */
+function eventKeyFacts(e) {
+  const when = eventTimeText(e);
+  const hosts = e.hosts || [];
+  const fact = (label, ...value) => h("div", { class: "event-fact" }, h("span", { class: "event-fact-label", text: label }), h("span", { class: "event-fact-value" }, ...value));
+  const names = hosts.flatMap((p, i) => [i ? ", " : null, canReadDirectory() ? h("a", { href: `#person/${p.id}`, text: p.name }) : p.name]).filter(Boolean);
+  const time = when ? fact("Time", when) : null;
+  const contact = hosts.length || e.companyName
+    ? fact(hosts.length > 1 ? "Points of Contact (PoCs)" : "Point of Contact (PoC)",
+      ...(hosts.length ? names : [h("span", { class: "event-fact-none", text: "None given" })]),
+      e.companyName ? h("span", { class: "event-fact-more", text: e.companyName }) : null)
+    : null;
+  return time || contact ? h("div", { class: "event-facts" }, time, contact) : null;
+}
+
 function eventPanel(e) {
-  const when = [e.startTime, e.endTime].filter(Boolean).join("–");
   const counts = { expected: 0, here: 0, left: 0 };
   for (const g of e.guests) counts[g.status] += 1;
   const isToday = e.date === localToday();
   return h("div", { class: "panel" },
     h("div", { class: "panel-head" },
-      h("div", {},
+      h("div", { class: "event-head" },
         h("h3", { text: e.title }),
-        h("p", { class: "muted small-text", text: [when, multiSite() ? e.siteName : null, e.companyName ? `${e.companyName}${e.hostName ? `, host ${e.hostName}` : ""}` : null].filter(Boolean).join(" · ") }),
-        e.repeatText ? h("p", { class: "muted small-text", text: `Repeats ${repeatPhrase(e)}` }) : null),
+        eventKeyFacts(e),
+        multiSite() || e.repeatText ? h("p", { class: "muted small-text", text: [multiSite() ? e.siteName : null, e.repeatText ? `Repeats ${repeatPhrase(e)}` : null].filter(Boolean).join(" · ") }) : null),
       canEditVisitors() ? h("div", { class: "btn-row" },
         h("button", { type: "button", class: "secondary small", text: "Add guest", onclick: async () => {
           const scope = await seriesScope(e, { title: "Add guests", one: "To this date only", following: "To this and later dates" });
@@ -142,8 +172,8 @@ function guestBadgeCell(e, g) {
   const may = canGiveBadges() && canEditVisitors() && g.status === "expected";
   const reserved = g.badge?.source === "reserved";
   const pickBadge = async () => {
-    // Only the badges here that this guest may hold at the event: their clearance decides, and for
-    // an event still to come those out now are offered too.
+    // Only the badges here at this guest's own clearance level (uncleared ones, while their
+    // clearance doesn't count); for an event still to come those out now are offered too.
     let free;
     let later;
     try {
@@ -175,7 +205,7 @@ function guestBadgeCell(e, g) {
       results.replaceChildren(...badges.slice(0, LIST_MAX).map((b) => h("button", { type: "button", class: `pick-row${b.id === g.badge?.id ? " is-active" : ""}`, onclick: () => choose(b) },
         h("strong", { class: "mono", text: b.label }), " ", h("span", { class: "muted small-text", text: badgeLevelText(b) }), b.outNow ? h("span", { class: "badge warn", text: "Out now" }) : null)));
       if (badges.length > LIST_MAX) results.append(h("p", { class: "muted small-text", text: `The first ${LIST_MAX} of ${badges.length}. Filter by number to find the rest.` }));
-      if (q && !badges.length) results.append(h("p", { class: "muted small-text", text: `No ${later ? "" : "free "}visitor badge here with that number that ${g.firstName} may hold${later ? ` on ${eventDay(e.date)}` : ""}.` }));
+      if (q && !badges.length) results.append(h("p", { class: "muted small-text", text: `No ${later ? "" : "free "}visitor badge here with that number at ${g.firstName}'s clearance level${later ? ` on ${eventDay(e.date)}` : ""}.` }));
     };
     showBadges();
     search.addEventListener("input", showBadges);
@@ -190,7 +220,7 @@ function guestBadgeCell(e, g) {
       body: h("div", { class: "stack" },
         h("p", { class: "muted", text: `Check-in tells the front desk to hand them this badge when they arrive.${later ? " Badges out now are listed too: if one isn't back by then, check-in says so and asks for another." : ""}` }),
         h("label", {}, h("span", { text: "Visitor badge" }), search,
-          h("span", { class: "hint", text: total ? `${total} ${later ? `available on ${eventDay(e.date)}` : "free"} that ${g.firstName} may hold${multiSite() ? ` at ${e.siteName}` : ""}${g.badge ? `; now ${g.badge.label}${reserved ? ", reserved on their record. A badge picked here is for this event only" : ""}` : ""}.` : `No visitor badge is ${later ? `available on ${eventDay(e.date)}` : "free"}${multiSite() ? ` at ${e.siteName}` : ""} that ${g.firstName} may hold.` })),
+          h("span", { class: "hint", text: total ? `${total} ${later ? `available on ${eventDay(e.date)}` : "free"} at ${g.firstName}'s clearance level${multiSite() ? ` at ${e.siteName}` : ""}${g.badge ? `; now ${g.badge.label}${reserved ? ", reserved on their record. A badge picked here is for this event only" : ""}` : ""}.` : `No visitor badge at ${g.firstName}'s clearance level is ${later ? `available on ${eventDay(e.date)}` : "free"}${multiSite() ? ` at ${e.siteName}` : ""}.` })),
         results),
       actions: [{ label: "Cancel", value: null }],
       onOpen: (dlg) => { dialog = dlg; setTimeout(() => search.focus(), 50); }
@@ -256,42 +286,59 @@ function seriesScope(e, { title, one, following, danger = false }) {
 
 /**
  * Who an event is for: type a name, pick the person, and their company comes with them (or
- * pick a company, with no one in particular). onPick({ companyId, companyName, hostId,
- * hostName, siteId }) runs after each pick, with null when cleared. siteId: only people there.
+ * pick a company, with no one in particular). More people of that company can then be added:
+ * each is a point of contact, in the order picked. onPick({ companyId, companyName, hosts:
+ * [{ id, name }], siteId }) runs after each change, with null when cleared. siteId: only people there.
  */
 function eventContactPicker(initial, { siteId = null, onPick }) {
   let chosen = initial;
-  const search = h("input", { type: "search", placeholder: "Start typing a name", autocomplete: "off" });
+  const search = h("input", { type: "search", autocomplete: "off" });
   const results = h("div", { class: "choices-list short", hidden: true });
-  const shown = h("p", { class: "small-text" });
+  const shown = h("div", { class: "poc-picked" });
+  const hint = h("span", { class: "hint" });
   const show = () => {
-    if (!chosen) return shown.replaceChildren(h("span", { class: "muted", text: "No particular company." }));
-    shown.replaceChildren("Visiting ", h("strong", { text: chosen.companyName }), chosen.hostName ? `, host ${chosen.hostName}. ` : ", no one in particular. ",
-      h("button", { type: "button", class: "link-btn", text: "Clear", onclick: () => pick(null) }));
+    search.placeholder = chosen ? `Add another from ${chosen.companyName}` : "Start typing a name";
+    hint.textContent = chosen
+      ? `Anyone else at ${chosen.companyName} the guests may ask for. Clear to choose another company.`
+      : "The person they're visiting; their company comes with them, and more of its people can be added. Or type a company's name.";
+    if (!chosen) return shown.replaceChildren(h("p", { class: "small-text muted", text: "No particular company." }));
+    const remove = (p) => set({ ...chosen, hosts: chosen.hosts.filter((x) => x.id !== p.id) });
+    return shown.replaceChildren(...[
+      h("p", { class: "small-text" }, "Visiting ", h("strong", { text: chosen.companyName }), chosen.hosts.length ? ". " : ", no one in particular. ",
+        h("button", { type: "button", class: "link-btn", text: "Clear", onclick: () => set(null) })),
+      chosen.hosts.length ? h("div", { class: "poc-chips", role: "list", "aria-label": "Points of contact" }, chosen.hosts.map((p) => h("span", { class: "poc-chip", role: "listitem" },
+        h("span", { text: p.name }), h("button", { type: "button", class: "poc-chip-x", "aria-label": `Remove ${p.name}`, title: `Remove ${p.name}`, onclick: () => remove(p) }, "×")))) : null].filter(Boolean));
   };
-  const pick = (value) => {
+  function set(value) {
     chosen = value;
     search.value = "";
     clear(results).hidden = true;
     show();
     onPick(value);
+  }
+  // The first person brings their company; after that, only people of that company are added.
+  const addPerson = (p) => {
+    const person = { id: p.id, name: personName(p) };
+    if (chosen && chosen.companyId === p.companyId) return set({ ...chosen, hosts: [...chosen.hosts.filter((x) => x.id !== p.id), person] });
+    return set({ companyId: p.companyId, companyName: p.companyName, hosts: [person], siteId: p.siteId });
   };
   const row = (onclick, name, detail) => h("button", { type: "button", class: "pick-row", onclick }, h("strong", { text: name }), " ", h("span", { class: "muted small-text", text: detail }));
   const run = debounce(async () => {
     const q = search.value.trim();
     if (q.length < 2) return (clear(results).hidden = true);
+    const within = chosen;
     const where = { q, ...(siteId ? { site: String(siteId) } : {}) };
     const [people, companies] = await Promise.all([
-      api(`/api/people?${new URLSearchParams({ ...where, limit: "8" })}`).then((r) => r.people).catch(() => []),
-      api(`/api/companies?${new URLSearchParams({ ...where, limit: "4" })}`).then((r) => r.companies).catch(() => [])
+      api(`/api/people?${new URLSearchParams({ ...where, ...(within ? { companyId: String(within.companyId) } : {}), limit: "8" })}`).then((r) => r.people).catch(() => []),
+      within ? [] : api(`/api/companies?${new URLSearchParams({ ...where, limit: "4" })}`).then((r) => r.companies).catch(() => [])
     ]);
-    if (search.value.trim() !== q) return; // typed on meanwhile: a newer search is coming
+    if (search.value.trim() !== q || chosen !== within) return; // typed or picked meanwhile: a newer search is coming
     clear(results).hidden = false;
-    for (const p of people.filter((x) => x.canHost !== false)) {
-      results.append(row(() => pick({ companyId: p.companyId, companyName: p.companyName, hostId: p.id, hostName: personName(p), siteId: p.siteId }), personName(p), [p.companyName, p.jobTitle].filter(Boolean).join(" · ")));
+    for (const p of people.filter((x) => x.canHost !== false && !(within && within.hosts.some((y) => y.id === x.id)))) {
+      results.append(row(() => addPerson(p), personName(p), [p.companyName, p.jobTitle].filter(Boolean).join(" · ")));
     }
-    for (const c of companies) results.append(row(() => pick({ companyId: c.id, companyName: c.name, hostId: null, hostName: null, siteId: null }), c.name, "The company, no one in particular"));
-    if (!results.children.length) results.append(h("p", { class: "muted", text: "No one by that name, nor a company." }));
+    for (const c of companies) results.append(row(() => set({ companyId: c.id, companyName: c.name, hosts: [], siteId: null }), c.name, "The company, no one in particular"));
+    if (!results.children.length) results.append(h("p", { class: "muted", text: within ? `No one else by that name at ${within.companyName}.` : "No one by that name, nor a company." }));
   }, 200);
   search.addEventListener("input", run);
   // Enter picks the first match rather than saving the form.
@@ -302,7 +349,7 @@ function eventContactPicker(initial, { siteId = null, onPick }) {
   });
   show();
   const node = h("div", { class: "full-row stack" },
-    h("label", {}, h("span", { text: "Point of contact" }), search, h("span", { class: "hint", text: "The person they're visiting; their company comes with them. Or type a company's name." })),
+    h("label", {}, h("span", { text: "Points of Contact (PoCs)" }), search, hint),
     results, shown);
   return { node, value: () => chosen };
 }
@@ -321,16 +368,16 @@ function monthsAfter(iso, months) {
 }
 
 /**
- * The event form: site, name, date and times, point of contact (and so the company), notes,
+ * The event form: site, name, date and times, points of contact (and so the company), notes,
  * and for a new event how it repeats. scope "following" changes a repeating event's later
  * dates too (they keep their own dates).
  */
 async function editEvent(event, scope = "one") {
   const usable = state.config.sites.filter((s) => s.active || s.id === event?.siteId);
   const single = usable.length <= 1;
-  let picked = event?.companyId ? { companyId: event.companyId, companyName: event.companyName, hostId: event.hostId, hostName: event.hostName } : null;
+  let picked = event?.companyId ? { companyId: event.companyId, companyName: event.companyName, hosts: event.hosts || [] } : null;
   let siteInput = null;
-  // Every site in use is offered, and the point of contact may be from a company at another
+  // Every site in use is offered, and the points of contact may be from a company at another
   // site (a tenant using a conference room elsewhere): on the event's date their guests check in
   // here. Until the site is chosen by hand (a new event), picking a point of contact moves it to
   // one of their company's. companySites: the picked company's sites, or null when unknown.
@@ -419,7 +466,7 @@ async function editEvent(event, scope = "one") {
     submitLabel: event ? "Save" : "Add event",
     onSubmit: async (v) => {
       const who = contact.value();
-      const body = { title: v.title, startTime: v.startTime, endTime: v.endTime, companyId: who?.companyId ?? null, hostId: who?.hostId ?? null, notes: v.notes, siteId: Number(v.siteId || usable[0]?.id) };
+      const body = { title: v.title, startTime: v.startTime, endTime: v.endTime, companyId: who?.companyId ?? null, hostIds: (who?.hosts || []).map((p) => p.id), notes: v.notes, siteId: Number(v.siteId || usable[0]?.id) };
       if (scope !== "following") body.date = v.date;
       if (!event && v.repeat) {
         body.repeat = { freq: v.repeat, until: v.until, interval: Number(v.interval), by: v.by, days: dayBoxes.filter((b) => b.checked).map((b) => Number(b.value)) };
@@ -551,7 +598,7 @@ async function addGuestDialog(event, scope = "one") {
       h("h4", { text: "Add someone on record" }), search, results,
       h("h4", { text: "Someone new" }),
       h("div", { class: "form-grid" }, first, last, org, email),
-      h("p", { class: "muted small-text", text: "Type their name and press Done (or Enter, to add another after). If they're on record already you can add that visitor; otherwise you're asked before they're added as a new visitor, linked to the event's company and host, so the kiosk recognizes them on the day." })),
+      h("p", { class: "muted small-text", text: "Type their name and press Done (or Enter, to add another after). If they're on record already you can add that visitor; otherwise you're asked before they're added as a new visitor, linked to the event's company and point of contact, so the kiosk recognizes them on the day." })),
     actions: [{ label: "Done", kind: "primary", close: false, onClick: async () => { if (await addTyped()) dlg.finish(true); } }],
     onOpen: (d) => { dlg = d; setTimeout(() => search.focus(), 50); }
   });
