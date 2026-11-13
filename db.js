@@ -246,6 +246,16 @@ CREATE TABLE IF NOT EXISTS visit_time_changes (
 );
 CREATE INDEX IF NOT EXISTS visit_time_changes_visit ON visit_time_changes(visit_id);
 
+-- What staff note against a visit in the log, each with who wrote it and when.
+CREATE TABLE IF NOT EXISTS visit_comments (
+  id INTEGER PRIMARY KEY,
+  visit_id INTEGER NOT NULL REFERENCES visits(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  created_by TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS visit_comments_visit ON visit_comments(visit_id);
+
 CREATE TABLE IF NOT EXISTS api_clients (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL COLLATE NOCASE UNIQUE,

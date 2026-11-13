@@ -13,6 +13,7 @@ const { createAccess } = require("../access");
 const { createSites } = require("../sites");
 const { createDirectory } = require("../directory");
 const { createVisitors } = require("../visitors");
+const { createEvents } = require("../events");
 const { createVisitClock, endOfDayFor, zonedTime, monthsBefore } = require("../visit-clock");
 const { matchNames, isFullName, normalizeName } = require("../names");
 const { createKiosks, normalizeCode } = require("../kiosks");
@@ -234,6 +235,73 @@ check("upgrade: its office's rent doesn't change", leaseUpgraded.rentOf(leaseUpg
 check("upgrade: once", db.raw.prepare("SELECT base_rate FROM leases WHERE id = ?").get(oldLease).base_rate === null);
 db.raw.prepare("UPDATE lease_class_rates SET rate = 4 WHERE lease_id = ?").run(oldLease);
 check("upgrade: a later start leaves what was set since", createFacilities({ db, sites, directory }).leaseRates(oldLease).every((c) => c.rate === 4));
+
+// --- coming back the same day ------------------------------------------------------------------------
+{
+  // New York, 2026-11-10 (EST, UTC-5): events at 09:00-10:00, 14:00-15:00, 16:00 (no end), and one all day.
+  let at = Date.parse("2026-11-10T13:50:00Z"); // 08:50 there
+  const events = createEvents({ db, now: () => at });
+  const guest = visitors.create({ firstName: "Bea", lastName: "Back" });
+  const add = (title, start, end) => {
+    const id = Number(db.raw.prepare("INSERT INTO visitor_events (site_id, title, date, start_time, end_time, company_id, created_at, updated_at) VALUES (?, ?, '2026-11-10', ?, ?, ?, 0, 0)").run(ny.id, title, start, end, nyCo.id).lastInsertRowid);
+    db.raw.prepare("INSERT INTO event_guests (event_id, visitor_id, added_at) VALUES (?, ?, 0)").run(id, guest.id);
+    return id;
+  };
+  const morning = add("Morning", "09:00", "10:00");
+  const afternoon = add("Afternoon", "14:00", "15:00");
+  const late = add("Late", "16:00", null);
+  const allDay = add("All day", null, null);
+  const state = () => Object.fromEntries(events.list({ from: "2026-11-10" }).filter((e) => [morning, afternoon, late, allDay].includes(e.id)).map((e) => [e.title, e.guests[0]]));
+  const statuses = () => Object.values(state()).map((g) => g.status).join();
+  check("return: expected at each to start with", statuses() === "expected,expected,expected,expected" && events.expectedToday(guest.id, ny.id).length === 4, statuses());
+
+  const first = visitors.checkIn({ visitorId: guest.id, siteId: ny.id, companyId: nyCo.id, now: at }).visit;
+  check("return: in the building, here for each", statuses() === "here,here,here,here");
+  at = Date.parse("2026-11-10T15:05:00Z"); // 10:05 there
+  visitors.checkOut(first.id, { at });
+  let s = state();
+  check("return: left before the afternoon's began, so expected at them again", s.Morning.status === "left" && s.Afternoon.status === "expected" && s.Late.status === "expected", statuses());
+  check("return: the one that has ended is over", s.Morning.mayReturn === false && s.Morning.leftAt === at);
+  check("return: an all-day event is still on, so they may be back", s["All day"].status === "left" && s["All day"].mayReturn === true);
+  check("return: the kiosk and the count expect them again", events.expectedToday(guest.id, ny.id).map((e) => e.title).join() === "Afternoon,Late" && events.expectedCount(new Set([ny.id])) === 2);
+
+  at = Date.parse("2026-11-10T18:55:00Z"); // 13:55 there
+  const second = visitors.checkIn({ visitorId: guest.id, siteId: ny.id, companyId: nyCo.id, now: at }).visit;
+  s = state();
+  check("return: back for the afternoon, on a new visit", second.id !== first.id && s.Afternoon.status === "here" && s.Afternoon.visitId === second.id && s.Late.visitId === second.id);
+  check("return: the morning stays as it was, the all-day one has them again", s.Morning.status === "left" && s.Morning.visitId === first.id && s["All day"].status === "here" && s["All day"].visitId === second.id);
+
+  at = Date.parse("2026-11-10T19:30:00Z"); // 14:30 there, the afternoon's event under way
+  visitors.checkOut(second.id, { at });
+  s = state();
+  check("return: left one under way, they may be back until it ends", s.Afternoon.status === "left" && s.Afternoon.mayReturn === true && s.Late.status === "expected");
+  at = Date.parse("2026-11-10T20:10:00Z"); // 15:10 there
+  check("return: not once it has ended", state().Afternoon.mayReturn === false && state()["All day"].mayReturn === true);
+  const third = visitors.checkIn({ visitorId: guest.id, siteId: ny.id, companyId: nyCo.id, now: at }).visit;
+  s = state();
+  check("return: a later arrival isn't noted against one that has ended", s.Afternoon.visitId === second.id && s.Afternoon.status === "left" && s.Late.visitId === third.id);
+
+  // A corrected time: left before the late one began.
+  const fixed = visitors.correctTimes(third.id, { checkedOutAt: Date.parse("2026-11-10T20:30:00Z"), reason: "Left at half past three", now: Date.parse("2026-11-10T22:00:00Z") });
+  check("return: a corrected time they left lets go of a later event too", fixed.visit.checkedOutAt && state().Late.status === "expected");
+  // An event that began as they left (16:00, no end): they came to it, and it isn't still on.
+  at = Date.parse("2026-11-10T20:59:00Z");
+  const fourth = visitors.checkIn({ visitorId: guest.id, siteId: ny.id, companyId: nyCo.id, now: at }).visit;
+  at = Date.parse("2026-11-10T21:00:00Z"); // 16:00 there
+  visitors.checkOut(fourth.id, { at });
+  check("return: one that has begun is theirs, and with only a start time isn't still on", state().Late.status === "left" && state().Late.mayReturn === false);
+  // The next day nothing is still on.
+  at = Date.parse("2026-11-11T15:00:00Z");
+  check("return: not the day after", state()["All day"].mayReturn === false);
+
+  // Comments go with the visit, and with it when the visitor is removed.
+  const c = visitors.addComment(fourth.id, { body: "Came back for their coat", by: "desk", now: at });
+  check("comments: on the visit, and found by the log's search", c.visit.comments.length === 1 && c.comment.body === "Came back for their coat" && visitors.listVisits({ q: "coat" }).total === 1);
+  check("comments: must say something", throwsStatus(() => visitors.addComment(fourth.id, { body: " \n " }), 400) === true && throwsStatus(() => visitors.addComment(999999, { body: "x" }), 404) === true);
+  db.raw.prepare("DELETE FROM visitor_events WHERE id IN (?, ?, ?, ?)").run(morning, afternoon, late, allDay);
+  visitors.remove(guest.id);
+  check("comments: gone with the visitor's visits", db.raw.prepare("SELECT count(*) AS n FROM visit_comments").get().n === 0);
+}
 
 db.close();
 fs.rmSync(tmp, { recursive: true, force: true });

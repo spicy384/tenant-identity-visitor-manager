@@ -66,12 +66,10 @@ const DASHBOARD_MODULES = {
         e.stopPropagation();
         e.target.disabled = true;
         try {
-          await api(`/api/visits/${v.id}/checkout`, { method: "POST", body: {} });
-          toast(`${visitorName(v.visitor)} checked out.`);
-          loadDashboard();
-          refreshCounts();
+          if (await checkOutVisit(v)) loadDashboard();
         } catch (error) {
           toast(error.message, "error");
+        } finally {
           e.target.disabled = false;
         }
       };
@@ -86,7 +84,7 @@ const DASHBOARD_MODULES = {
   },
   expected: {
     title: "Expected today",
-    description: "Today's visitor events and their guests, with who has arrived.",
+    description: "Today's visitor events and their guests, with who has arrived. A guest who left before a later event is expected at it again.",
     href: "#expected",
     async load() {
       const { events } = await api(`/api/events?${siteParams({ date: localToday() })}`);
@@ -115,6 +113,11 @@ const DASHBOARD_MODULES = {
           return dashRow({ onclick: () => { location.hash = `#visitor/${g.visitorId}`; }, main: `${g.firstName} ${g.lastName}`, sub,
             right: h("button", { type: "button", class: "primary small", text: "Check in", onclick: (e) => checkIn(e, g) }) });
         }
+        // Left while the event is still on: they may be back for it.
+        if (g.mayReturn && canEditVisitors()) {
+          return dashRow({ onclick: () => { location.hash = `#visitor/${g.visitorId}`; }, main: `${g.firstName} ${g.lastName}`, sub,
+            right: h("span", { class: "btn-row" }, status(g), h("button", { type: "button", class: "secondary small", text: "Check in again", onclick: (e) => checkIn(e, g) })) });
+        }
         return dashRow({ href: `#visitor/${g.visitorId}`, main: `${g.firstName} ${g.lastName}`, sub, right: status(g) });
       }), events.length ? "Every guest has arrived." : "Nobody is expected today.", { more: "#expected" }) };
     }
@@ -135,7 +138,7 @@ const DASHBOARD_MODULES = {
   },
   badgesOut: {
     title: "Badges out past their time",
-    description: "Visitor badges with visitors who have left, and temporary badges not back by the end of their day.",
+    description: "Visitor badges with visitors who have left, and temporary badges not back by the end of their day, each with a button to take it back.",
     href: "#badges/visitors",
     async load() {
       const [left, overdue] = await Promise.all([
@@ -143,12 +146,22 @@ const DASHBOARD_MODULES = {
         api(`/api/badges?${siteParams({ state: "overdue", limit: "50" })}`)
       ]);
       const list = [...overdue.badges.map((b) => ({ b, why: "Temporary, overdue" })), ...left.badges.map((b) => ({ b, why: "Visitor has left" }))];
-      return { count: list.length, attention: list.length > 0, body: dashList(list.map(({ b, why }) => dashRow({
-        href: `#badge/${b.id}`,
-        main: h("span", { class: "with-thumb" }, templateImg(b.template), h("span", { class: "mono", text: b.label })),
-        sub: `${b.holder?.name || ""} · ${why}`,
-        right: h("span", { class: "muted small-text", text: b.holder ? fmtDateTime(b.holder.assignedAt) : "" })
-      })), "Every badge is where it should be.", { more: "#badges/visitors" }) };
+      const since = (b) => h("span", { class: "muted small-text", text: b.holder ? fmtDateTime(b.holder.assignedAt) : "" });
+      const label = (b) => h("span", { class: "with-thumb" }, templateImg(b.template), h("span", { class: "mono", text: b.label }));
+      // Handed back at last: taken back from here, by those who take badges back.
+      const takeBack = async (e, b) => {
+        e.stopPropagation();
+        if (await takeBackBadge(b.id, b.label, b.holder.name)) loadDashboard();
+      };
+      return { count: list.length, attention: list.length > 0, body: dashList(list.map(({ b, why }) => (canEditBadges() && b.holder
+        // A row with a button can't be a link: the badge's number is, and the rest of the row opens it too.
+        ? dashRow({
+          onclick: () => { location.hash = `#badge/${b.id}`; },
+          main: h("a", { href: `#badge/${b.id}`, onclick: (e) => e.stopPropagation() }, label(b)),
+          sub: `${b.holder.name || ""} · ${why}`,
+          right: h("span", { class: "btn-row" }, since(b), h("button", { type: "button", class: "secondary small", text: "Return", "aria-label": `Return badge ${b.label}`, onclick: (e) => takeBack(e, b) }))
+        })
+        : dashRow({ href: `#badge/${b.id}`, main: label(b), sub: `${b.holder?.name || ""} · ${why}`, right: since(b) }))), "Every badge is where it should be.", { more: "#badges/visitors" }) };
     }
   },
   tenants: {

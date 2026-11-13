@@ -172,8 +172,7 @@ async function main() {
   check("plan: his badge is the one on offer to him too", r.data.available.some((b) => b.number === "V-3"));
   r = await desk.post(`/api/visits/${techVisit.id}/badge`, { badgeId: v3.id });
   check("reserve: handed over, and still his", r.status === 200 && (await desk.get(`/api/visitors/${tech.id}`)).data.visitor.reservedBadge.number === "V-3");
-  await desk.post(`/api/visits/${techVisit.id}/checkout`);
-  await desk.post(`/api/badges/${v3.id}/return`);
+  await desk.post(`/api/visits/${techVisit.id}/checkout`, { badges: [{ id: v3.id, returned: true }] });
   check("reserve: back in stock after the visit, still kept for him", !(await desk.get(`/api/badges/${v3.id}`)).data.badge.holder && (await desk.get(`/api/visitors/${tech.id}`)).data.visitor.reservedBadge.number === "V-3");
   r = await desk.put(`/api/visitors/${tech.id}/reserved-badge`, { badgeId: null });
   check("reserve: released", r.status === 200 && r.data.reservedBadge === null);
@@ -213,7 +212,7 @@ async function main() {
   check("expected: and she shows as here", (await desk.get(`/api/events/${event.id}`)).data.event.guests.find((g) => g.visitorId === gail.visitorId).checkinStage === null);
 
   // A visitor already holding a badge: the desk confirms it rather than giving another.
-  const ann2 = (await desk.post(`/api/visits/${annVisit.id}/checkout`)).data.visit;
+  const ann2 = (await desk.post(`/api/visits/${annVisit.id}/checkout`, { badges: [{ id: v1.id, returned: false }] })).data.visit;
   check("visit: Ann leaves with V-1 still on her", ann2.checkedOutAt && (await desk.get(`/api/badges/${v1.id}`)).data.badge.holder.name === "Ann Arrival");
   r = await desk.post("/api/checkins", base);
   const again = r.data.visit;
@@ -514,6 +513,104 @@ async function main() {
   check("contacts http: the kiosk names them all", r.data.ok && r.data.hostName === "Hana Host and Sol Second", JSON.stringify(r.data));
   const kitVisit = (await desk.get("/api/visits?status=open&q=Kiosker")).data.visits[0];
   check("contacts http: the kiosk visit has the event's, the one chosen first", kitVisit?.hostIds.join() === `${host.id},${second.id}`, JSON.stringify(kitVisit?.hostIds));
+
+  // --- checking out with a badge: was it returned? ----------------------------------------------------
+  const quinn = (await desk.post("/api/visitors", { firstName: "Quinn", lastName: "Quits", organization: "Leaver Co", citizenship: "US" })).data.visitor;
+  const outA = (await security.post("/api/badges", { number: "V-OUT-A", type: "visitor" })).data.badge;
+  const outB = (await security.post("/api/badges", { number: "V-OUT-B", type: "visitor" })).data.badge;
+  const arrive = async () => (await desk.post("/api/checkins", { visitorId: quinn.id, siteId: site.id, hostId: host.id, purpose: "Audit", idType: "Passport" })).data.visit;
+  const holderOf = async (badge) => (await desk.get(`/api/badges/${badge.id}`)).data.badge.holder;
+  let quinnVisit = await arrive();
+  await desk.post(`/api/visits/${quinnVisit.id}/badge`, { badgeId: outA.id });
+  const leave = (body) => desk.post(`/api/visits/${quinnVisit.id}/checkout`, body);
+  r = await leave();
+  check("check-out: with a badge, asks first whether it was returned", r.status === 409 && r.data.code === "badges_out" && r.data.badges.length === 1 && r.data.badges[0].id === outA.id && r.data.badges[0].label === "V-OUT-A", JSON.stringify(r.data));
+  check("check-out: they stay in until it is said", (await desk.get(`/api/visits/${quinnVisit.id}`)).data.visit.checkedOutAt === null && Boolean(await holderOf(outA)));
+  check("check-out: an answer about another badge, or no yes or no, isn't one", (await leave({ badges: [{ id: outB.id, returned: true }] })).status === 409 && (await leave({ badges: [{ id: outA.id, returned: "yes" }] })).status === 409 && (await leave({ badges: "all" })).status === 409);
+  r = await leave({ badges: [{ id: outA.id, returned: true }] });
+  check("check-out: returned, the badge is taken back with it", r.status === 200 && r.data.visit.checkedOutAt && r.data.badges[0].returned === true && !(await holderOf(outA)), JSON.stringify(r.data).slice(0, 300));
+  r = await desk.get(`/api/badges/${outA.id}`);
+  check("check-out: the badge's history says who took it back", r.data.history[0].returnedBy === "desk" && r.data.history[0].outcome === "returned" && r.data.history[0].visitId === quinnVisit.id);
+  check("check-out: and the audit log that it was at check-out", (await admin.get("/api/audit?action=badge.return")).data.entries.some((e) => e.target === "V-OUT-A" && /Quinn Quits, at check-out/.test(e.detail)));
+  check("check-out: checked out already, nothing more is asked", (await leave()).data.already === true);
+
+  // Two badges: each is answered for; the one not returned stays out with them.
+  quinnVisit = await arrive();
+  await desk.post(`/api/visits/${quinnVisit.id}/badge`, { badgeId: outA.id });
+  r = await desk.post(`/api/badges/${outB.id}/assign`, { kind: "visitor", holderId: quinn.id, visitId: quinnVisit.id });
+  check("check-out: a second badge on the visit", r.status === 200, JSON.stringify(r.data));
+  r = await leave();
+  check("check-out: asks about both", r.status === 409 && r.data.badges.map((b) => b.label).join() === "V-OUT-A,V-OUT-B" && /each was/.test(r.data.error), JSON.stringify(r.data));
+  check("check-out: one answer of two isn't enough", (await leave({ badges: [{ id: outA.id, returned: true }] })).status === 409 && Boolean(await holderOf(outA)));
+  r = await leave({ badges: [{ id: outA.id, returned: false }, { id: outB.id, returned: true }] });
+  check("check-out: one kept, one returned", r.status === 200 && r.data.badges.map((b) => b.returned).join() === "false,true" && (await holderOf(outA))?.name === "Quinn Quits" && !(await holderOf(outB)));
+  check("check-out: the one kept is out with a visitor who has left", (await desk.get("/api/badges?state=left&limit=200")).data.badges.some((b) => b.id === outA.id));
+  check("check-out: the audit log says it wasn't returned", (await admin.get("/api/audit?action=visit.checkout")).data.entries.some((e) => e.target === "Quinn Quits" && /badge V-OUT-A not returned/.test(e.detail)));
+  await desk.post(`/api/badges/${outA.id}/return`);
+
+  // No badge: nothing to ask.
+  quinnVisit = await arrive();
+  await desk.post(`/api/visits/${quinnVisit.id}/badge-not-needed`);
+  r = await leave();
+  check("check-out: without a badge, straight out", r.status === 200 && r.data.visit.checkedOutAt && r.data.badges.length === 0);
+
+  // An account that checks visitors out but takes no badges back isn't asked: the badge stays out.
+  await admin.post("/api/roles", { name: "Greeter", directory: "read", visitors: "edit", badges: "none" });
+  const greeterPw = password();
+  await admin.post("/api/users", { username: "greta", password: greeterPw, role: "greeter" });
+  const greeter = await as("greta", greeterPw);
+  quinnVisit = await arrive();
+  await desk.post(`/api/visits/${quinnVisit.id}/badge`, { badgeId: outA.id });
+  r = await greeter.post(`/api/visits/${quinnVisit.id}/checkout`);
+  check("check-out: those who can't take badges back aren't asked, and it stays out", r.status === 200 && r.data.visit.checkedOutAt && r.data.badges.length === 0 && Boolean(await holderOf(outA)), JSON.stringify(r.data).slice(0, 300));
+  await desk.post(`/api/badges/${outA.id}/return`);
+
+  // A corrected time that checks them out says which badges they still have.
+  quinnVisit = await arrive();
+  await desk.post(`/api/visits/${quinnVisit.id}/badge`, { badgeId: outA.id });
+  r = await desk.put(`/api/visits/${quinnVisit.id}/times`, { checkedOutAt: Date.now(), reason: "Left without checking out" });
+  check("times: a time that checks them out names the badge they still have", r.status === 200 && r.data.visit.checkedOutAt && r.data.badgesOut.length === 1 && r.data.badgesOut[0].label === "V-OUT-A", JSON.stringify(r.data).slice(0, 300));
+  r = await desk.put(`/api/visits/${quinnVisit.id}/times`, { checkedOutAt: Date.now(), reason: "A minute later than first entered" });
+  check("times: changing a time they had left at asks nothing", r.status === 200 && r.data.badgesOut.length === 0);
+  await desk.post(`/api/badges/${outA.id}/return`);
+
+  // --- comments on a visit ---------------------------------------------------------------------------
+  const noted = (await desk.get(`/api/visits?visitorId=${quinn.id}`)).data.visits[0];
+  const comment = (who, body) => who.post(`/api/visits/${noted.id}/comments`, { body });
+  check("comments: none to start with", Array.isArray(noted.comments) && noted.comments.length === 0);
+  check("comments: not from a viewer", (await comment(viewer, "Hello")).status === 403);
+  check("comments: not empty, nor too long", (await comment(desk, "   ")).status === 400 && (await comment(desk, "x".repeat(1001))).status === 400 && (await desk.post(`/api/visits/${noted.id}/comments`)).status === 400);
+  check("comments: not on a visit that doesn't exist", (await desk.post("/api/visits/999999/comments", { body: "Hello" })).status === 404);
+  r = await comment(desk, "  Left a laptop bag\r\nat the desk.  ");
+  check("comments: kept with who wrote it and when", r.status === 200 && r.data.visit.comments.length === 1 && r.data.visit.comments[0].body === "Left a laptop bag\nat the desk." && r.data.visit.comments[0].by === "desk" && r.data.visit.comments[0].at > 0, JSON.stringify(r.data).slice(0, 300));
+  r = await comment(security, "Collected at 3 PM");
+  check("comments: Security notes them too, oldest first", r.status === 200 && r.data.visit.comments.map((c) => c.by).join() === "desk,sec");
+  check("comments: a viewer reads them in the log", (await viewer.get(`/api/visits?visitorId=${quinn.id}`)).data.visits.find((v) => v.id === noted.id).comments.length === 2);
+  check("comments: other visits have none of them", (await desk.get(`/api/visits?visitorId=${quinn.id}`)).data.visits.filter((v) => v.comments.length).length === 1);
+  r = await desk.get("/api/visits?q=laptop&limit=1000");
+  check("comments: the log finds a visit by what a comment says", r.data.total === 1 && r.data.visits[0].id === noted.id && (await desk.get("/api/visits?q=zebracrossing")).data.total === 0);
+  const firstComment = (await desk.get(`/api/visits/${noted.id}`)).data.visit.comments[0];
+  check("comments: only an administrator removes one", (await desk.del(`/api/visits/${noted.id}/comments/${firstComment.id}`)).status === 403 && (await security.del(`/api/visits/${noted.id}/comments/${firstComment.id}`)).status === 403);
+  check("comments: not one that isn't there, or is another visit's", (await admin.del(`/api/visits/${noted.id}/comments/999999`)).status === 404 && (await admin.del(`/api/visits/${tiaVisit.id}/comments/${firstComment.id}`)).status === 404);
+  r = await admin.del(`/api/visits/${noted.id}/comments/${firstComment.id}`);
+  check("comments: removed", r.status === 200 && r.data.visit.comments.length === 1 && r.data.visit.comments[0].body === "Collected at 3 PM");
+  check("comments: each in the audit log, and what a removed one said", (await admin.get("/api/audit?action=visit.comment")).data.entries.filter((e) => e.action === "visit.comment" && e.target === "Quinn Quits").length === 2
+    && (await admin.get("/api/audit?action=visit.comment_removed")).data.entries.some((e) => /desk wrote: Left a laptop bag/.test(e.detail)));
+
+  // --- back the same day: an event with no times is on all day -----------------------------------------
+  const allDay = (await desk.post("/api/events", { siteId: site.id, title: "Fit-out works", date: day, companyId: acme.id, hostId: host.id })).data.event;
+  await desk.post(`/api/events/${allDay.id}/guests`, { visitorId: quinn.id });
+  const quinnAt = async () => (await desk.get(`/api/events/${allDay.id}`)).data.event.guests.find((g) => g.visitorId === quinn.id);
+  check("return: expected, and not yet someone who may come back", (await quinnAt()).status === "expected" && (await quinnAt()).mayReturn === false);
+  quinnVisit = await arrive();
+  await desk.post(`/api/visits/${quinnVisit.id}/badge-not-needed`);
+  check("return: here", (await quinnAt()).status === "here" && (await quinnAt()).mayReturn === false);
+  await leave();
+  check("return: left an event still on, they may be checked in again", (await quinnAt()).status === "left" && (await quinnAt()).mayReturn === true);
+  const back = await arrive();
+  check("return: back, a new visit, and here again", back.id !== quinnVisit.id && (await quinnAt()).status === "here" && (await quinnAt()).visitId === back.id);
+  await desk.post(`/api/visits/${back.id}/badge-not-needed`);
+  await desk.post(`/api/visits/${back.id}/checkout`);
 }
 
 main()

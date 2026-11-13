@@ -316,6 +316,7 @@ async function main() {
   check("settings: the preview answers before saving", r.status === 200 && r.data.wouldDelete.visits === 0);
   check("export: visits CSV is for administrators", (await desk.get("/api/visits.csv", { raw: true })).status === 403);
   const csv = await (await admin.get("/api/visits.csv", { raw: true })).text();
+  check("export: the visits CSV has a comments column", csv.split(/\r?\n/)[0].split(",").pop() === "comments", csv.split(/\r?\n/)[0]);
   check("export: visits CSV has the visits", csv.startsWith("checked_in,checked_out,site") && csv.includes("Turing") && csv.includes("Interview"));
 
   r = await admin.post(`/api/kiosks/${lobby.id}/code`);

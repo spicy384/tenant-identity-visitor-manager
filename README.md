@@ -24,7 +24,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
   person's dashboard. **Customize** adds and removes modules, and they can be dragged into
   any order: who
   is in the building, who is expected today, visitors whose check-in the desk must finish, visitors to
-  check, badges out past their time, a quick list of tenants, offices by status with the space
+  check, badges out past their time (each with **Return**, to take it back there), a quick list of tenants, offices by status with the space
   let and the monthly rent (for those who see facilities), leases ending soon, insurance to renew, COIs expiring or expired, overdue invoices
   (for those who see the books), and for Security the clearance
   queue, visitor re-checks, recent debriefs and recent validations (administrators get
@@ -152,6 +152,15 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **In the building** lists everyone checked in (per site, with the header's site picker),
   with check-out buttons, a desk check-in, and a print-friendly evacuation list. A visitor's
   own page offers **Check in**, or **Check out** while they're in the building.
+- **Checking out with a badge**: every **Check out** button (In the building, Home, a visitor's
+  page) first asks, of each badge the visitor has, whether it was **Returned** or **Not
+  returned**; with two or more, each is answered for. A returned badge is taken back with the
+  check-out. One not returned stays out with them, among the badges out past their time and
+  noted in the audit log, until it is taken back. Closing the question leaves them checked in.
+  The server asks too, so nothing checks a badge holder out without an answer, except the
+  visitor's own check-out at a kiosk and the end-of-day check-out, which leave the badge out for
+  the desk to take back, and an account that can't take badges back. A corrected time that
+  checks someone out asks the same question straight after.
 - **Visitors** lists everyone, with those who registered themselves at a kiosk marked "To
   check": staff confirm them, correct them, or merge them into an existing visitor (a clearance
   only the merged-away record had moves across only when Security merges). A visitor
@@ -212,6 +221,12 @@ The design and decisions are in [PLAN.md](PLAN.md).
   later" and in the badge's history and the audit log, and refused if the badge was with
   someone else then; for someone still here it is given to them now. Staff who check visitors
   in and give badges out can, and so can Security.
+- **Comments on a visit**: the Visit log's Comments column (and a visitor's visits) shows each
+  visit's latest comment, with who wrote it and when. **Add comment**, or the comment itself,
+  opens them all, oldest first, with a box to add another (up to 1,000 characters). Staff who
+  check visitors in add them, and so does Security; everyone who sees visits reads them. A
+  comment can't be edited; an administrator can remove one, and what it said stays in the audit
+  log. The log's search also finds a visit by what a comment says, and the CSV export has them.
 - **Correcting arrival and departure times**: when a visitor didn't check in or out as they
   should have, **Correct times** on a visit (in the Visit log, or a visitor's visits) changes
   when they arrived and left, for staff who check visitors in, and for Security (which otherwise
@@ -614,6 +629,13 @@ At the kiosk an expected guest is offered their event's company and first point 
 they choose that company, the event's other points of contact go on their visit too. Checking
 in, at the kiosk or the desk, marks them arrived. The navigation counts guests expected
 today who haven't arrived.
+
+A guest coming twice in a day: someone who leaves before a later event of that day begins shows
+as expected at it again, with **Check in**, on Expected and on Home, and the kiosk and the
+count expect them again. Someone who leaves an event that is still on (its end time not
+reached, or an event with no times, which lasts the day) shows as left with **Check in
+again**; checking in again, there or anywhere, shows them as here. An event that has ended, or
+one with only a start time that they came to, stays as left.
 
 An event's **points of contact** are picked by typing a name: the first person comes with their
 company (type a company's name instead for no one in particular), across every site the

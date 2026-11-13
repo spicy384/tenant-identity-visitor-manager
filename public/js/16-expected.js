@@ -87,6 +87,14 @@ function eventPanel(e) {
   const counts = { expected: 0, here: 0, left: 0 };
   for (const g of e.guests) counts[g.status] += 1;
   const isToday = e.date === localToday();
+  const checkIn = async (g) => {
+    try {
+      const visitor = (await api(`/api/visitors/${g.visitorId}`)).visitor;
+      if (await checkInWizard({ visitor, event: e })) loadExpected();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
   return h("div", { class: "panel" },
     h("div", { class: "panel-head" },
       h("div", { class: "event-head" },
@@ -123,14 +131,9 @@ function eventPanel(e) {
           h("td", {}, GUEST_STATUS[g.status](g)),
           canReadBadges() ? h("td", {}, guestBadgeCell(e, g)) : null,
           h("td", {}, canEditVisitors() ? h("div", { class: "btn-row" },
-            g.status === "expected" && isToday ? h("button", { type: "button", class: "primary small", text: "Check in", onclick: async () => {
-              try {
-                const visitor = (await api(`/api/visitors/${g.visitorId}`)).visitor;
-                if (await checkInWizard({ visitor, event: e })) loadExpected();
-              } catch (error) {
-                toast(error.message, "error");
-              }
-            } }) : null,
+            g.status === "expected" && isToday ? h("button", { type: "button", class: "primary small", text: "Check in", onclick: () => checkIn(g) }) : null,
+            // Left while the event is still on: they may be back for it.
+            g.mayReturn && isToday ? h("button", { type: "button", class: "secondary small", text: "Check in again", onclick: () => checkIn(g) }) : null,
             g.checkinStage ? h("button", { type: "button", class: "primary small", text: "Finish check-in", onclick: async () => { if (await continueCheckIn(g.visitId)) loadExpected(); } }) : null,
             removeGuestButton(e, g, loadExpected)) : null))))))
       : h("p", { class: "muted", text: "No guests yet." }));

@@ -14,7 +14,7 @@
  * company and first point of contact first.
  */
 const { today } = require("./clearance");
-const { contactIds, MAX_CONTACTS } = require("./visitors");
+const { contactIds, MAX_CONTACTS, clockAt } = require("./visitors");
 
 const { badgeLabel } = require("./badges");
 
@@ -129,10 +129,12 @@ function createEvents({ db, now = Date.now }) {
     const out = new Map();
     if (!eventIds.length) return out;
     const kept = (id, number, code, source) => ({ id, number, facilityCode: code ?? null, label: badgeLabel(code, number), source });
-    const rows = raw.prepare(`SELECT g.event_id, g.visitor_id, g.visit_id, g.badge_id, b.number AS badge_number, b.facility_code AS badge_code, rb.id AS reserved_id, rb.number AS reserved_number, rb.facility_code AS reserved_code, v.first_name, v.last_name, v.organization, v.blocked, x.checked_in_at, x.checked_out_at, x.checkin_stage
-      FROM event_guests g JOIN visitor_events e ON e.id = g.event_id JOIN visitors v ON v.id = g.visitor_id LEFT JOIN visits x ON x.id = g.visit_id LEFT JOIN badges b ON b.id = g.badge_id
+    const rows = raw.prepare(`SELECT g.event_id, g.visitor_id, g.visit_id, g.badge_id, b.number AS badge_number, b.facility_code AS badge_code, rb.id AS reserved_id, rb.number AS reserved_number, rb.facility_code AS reserved_code, v.first_name, v.last_name, v.organization, v.blocked, x.checked_in_at, x.checked_out_at, x.checkin_stage, e.date, e.start_time, e.end_time, s.time_zone
+      FROM event_guests g JOIN visitor_events e ON e.id = g.event_id JOIN sites s ON s.id = e.site_id JOIN visitors v ON v.id = g.visitor_id LEFT JOIN visits x ON x.id = g.visit_id LEFT JOIN badges b ON b.id = g.badge_id
       LEFT JOIN badges rb ON rb.id = v.reserved_badge_id AND rb.status = 'active' AND (NOT EXISTS (SELECT 1 FROM badge_sites bs WHERE bs.badge_id = rb.id) OR EXISTS (SELECT 1 FROM badge_sites bs WHERE bs.badge_id = rb.id AND bs.site_id = e.site_id))
       WHERE g.event_id IN (${inList(eventIds)}) ORDER BY v.last_name COLLATE NOCASE, v.first_name COLLATE NOCASE`).all(...eventIds);
+    // An event still on today: its end time not reached, or with no times at all (the whole day).
+    const stillOn = (r) => r.date === today(r.time_zone, now()) && (r.end_time ? r.end_time > clockAt(r.time_zone, now()) : !r.start_time);
     for (const r of rows) {
       if (!out.has(r.event_id)) out.set(r.event_id, []);
       out.get(r.event_id).push({
@@ -142,7 +144,10 @@ function createEvents({ db, now = Date.now }) {
         organization: r.organization,
         blocked: Boolean(r.blocked),
         visitId: r.visit_id,
+        // Left before a later event began: expected at that one again (visitors.checkOut lets go of it).
         status: !r.visit_id ? "expected" : r.checked_out_at ? "left" : "here",
+        // Left while the event is still on: they may be checked in again for it.
+        mayReturn: Boolean(r.visit_id && r.checked_out_at && stillOn(r)),
         // Arrived, but the desk hasn't finished checking them in (their ID, or a badge).
         checkinStage: r.visit_id && !r.checked_out_at && ["id", "badge"].includes(r.checkin_stage) ? r.checkin_stage : null,
         // The visitor badge kept for them, as check-in will offer it: the one picked for this event,

@@ -37,7 +37,7 @@ function parseTime(value, name) {
   throw fail(400, `"${name}" must be a date (YYYY-MM-DD).`);
 }
 
-function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin, auditFrom, publicFields, kioskAddress = () => null, kioskPort = null, badges = null, events = null, clearance = null }) {
+function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin, auditFrom, publicFields, kioskAddress = () => null, kioskPort = null, badges = null, events = null, clearance = null, transaction = (fn) => fn() }) {
   const router = express.Router();
 
   const readVisitors = (req, res, next) => (access.canReadVisitors(req.ctx) ? next() : res.status(403).json({ error: "This account can't see visitors." }));
@@ -224,7 +224,26 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
     const fmt = (ms) => (ms ? new Intl.DateTimeFormat("en-US", { timeZone: timeZone || undefined, dateStyle: "medium", timeStyle: "short" }).format(ms) : "not checked out");
     const what = changes.map((c) => `${c.field === "in" ? "arrived" : "left"} ${fmt(c.from)} -> ${fmt(c.to)}`).join("; ");
     auditFrom(req, "visit.times_corrected", `${visit.visitor.firstName} ${visit.visitor.lastName}`, `${visit.siteName}, visit ${visit.id}: ${what}. Reason: ${reason}`);
-    res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0], timeChanges: visitors.timeChanges(visit.id) });
+    // Checked out by the correction: the badges they still have, for staff who take badges back to say of each.
+    const closed = changes.some((c) => c.field === "out" && c.from === null);
+    const badgesOut = closed && badges && access.canEditBadges(req.ctx) ? badges.outForVisit(visit).map((b) => ({ id: b.id, label: b.label })) : [];
+    res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0], timeChanges: visitors.timeChanges(visit.id), badgesOut });
+  });
+
+  // --- comments on a visit ----------------------------------------------------------------------
+
+  /** Notes a comment against a visit: { body }. Those who check visitors in, and those who correct visits. */
+  router.post("/api/visits/:id/comments", correctVisits, (req, res) => {
+    const { visit, comment } = visitors.addComment(positiveInt(req.params.id), { body: req.body?.body, by: staffName(req), sites: req.ctx.sites });
+    auditFrom(req, "visit.comment", fullName(visit.visitor), `${visit.siteName}, visit ${visit.id}: ${comment.body.slice(0, 300)}`);
+    res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0] });
+  });
+
+  /** Takes a comment off a visit (administrators); what it said stays in the audit log. */
+  router.delete("/api/visits/:id/comments/:commentId", admin, (req, res) => {
+    const { visit, comment } = visitors.removeComment(positiveInt(req.params.id), positiveInt(req.params.commentId), { sites: req.ctx.sites });
+    auditFrom(req, "visit.comment_removed", fullName(visit.visitor), `${visit.siteName}, visit ${visit.id}: ${comment.by || "staff"} wrote: ${comment.body.slice(0, 300)}`);
+    res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0] });
   });
 
   router.post("/api/visits/:id/badge-not-needed", giveBadges, (req, res) => {
@@ -237,8 +256,9 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
     const { visits } = visitors.listVisits({ ...visitFilter(req), limit: 1000000 });
     const iso = (ms) => (ms ? new Date(ms).toISOString() : "");
     const csv = toCsv(
-      ["checked_in", "checked_out", "site", "first_name", "last_name", "organization", "company", "host", "purpose", "checked_in_by", "checkout", "checked_out_by", "times_corrected", "badge"],
-      visits.map((v) => [iso(v.checkedInAt), iso(v.checkedOutAt), v.siteName, v.visitor.firstName, v.visitor.lastName, v.visitor.organization, v.companyName, v.hostName, v.purpose, v.checkedInBy, v.checkoutMethod, v.checkedOutBy, v.timesCorrected, (v.badges || []).join("; ")])
+      ["checked_in", "checked_out", "site", "first_name", "last_name", "organization", "company", "host", "purpose", "checked_in_by", "checkout", "checked_out_by", "times_corrected", "badge", "comments"],
+      visits.map((v) => [iso(v.checkedInAt), iso(v.checkedOutAt), v.siteName, v.visitor.firstName, v.visitor.lastName, v.visitor.organization, v.companyName, v.hostName, v.purpose, v.checkedInBy, v.checkoutMethod, v.checkedOutBy, v.timesCorrected, (v.badges || []).join("; "),
+        v.comments.map((c) => `${c.by || "staff"} (${iso(c.at)}): ${c.body}`).join(" | ")])
     );
     auditFrom(req, "export.visits", `${visits.length} visits`);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -354,10 +374,34 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
     res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0] });
   });
 
+  /**
+   * Checks a visitor out. While they have a badge, staff who take badges back must say of each
+   * whether it came back: { badges: [{ id, returned: true or false }] }. Without that the answer
+   * is 409 with code "badges_out" and the badges to ask about. One returned is taken back with
+   * the check-out; one not returned stays out with them, among the badges out past their time.
+   */
   router.post("/api/visits/:id/checkout", editVisitors, (req, res) => {
-    const { visit, already } = visitors.checkOut(positiveInt(req.params.id), { method: "staff", by: staffName(req), sites: req.ctx.sites });
-    if (!already) auditFrom(req, "visit.checkout", `${visit.visitor.firstName} ${visit.visitor.lastName}`, `${visit.siteName}: ${visit.companyName}`);
-    res.json({ ok: true, already, visit: visitsOut(req.ctx, [visit])[0] });
+    const before = visitors.getVisit(positiveInt(req.params.id), { sites: req.ctx.sites });
+    if (!before) throw fail(404, "No such visit.");
+    const held = badges && !before.checkedOutAt && access.canEditBadges(req.ctx) ? badges.outForVisit(before) : [];
+    const said = new Map((Array.isArray(req.body?.badges) ? req.body.badges : []).map((b) => [positiveInt(b?.id), b?.returned]));
+    if (held.some((b) => typeof said.get(b.id) !== "boolean")) {
+      return res.status(409).json({
+        error: `${fullName(before.visitor)} has badge${held.length === 1 ? "" : "s"} ${held.map((b) => b.label).join(", ")}. Say whether ${held.length === 1 ? "it was" : "each was"} returned.`,
+        code: "badges_out",
+        badges: held.map((b) => ({ id: b.id, label: b.label }))
+      });
+    }
+    let result;
+    transaction(() => {
+      for (const b of held) if (said.get(b.id)) badges.takeBack(b.id, { outcome: "returned" }, { by: staffName(req) });
+      result = visitors.checkOut(before.id, { method: "staff", by: staffName(req), sites: req.ctx.sites });
+    });
+    const { visit, already } = result;
+    for (const b of held) if (said.get(b.id)) auditFrom(req, "badge.return", b.label, `from ${fullName(visit.visitor)}, at check-out`);
+    const kept = held.filter((b) => !said.get(b.id));
+    if (!already) auditFrom(req, "visit.checkout", fullName(visit.visitor), `${visit.siteName}: ${visit.companyName}${kept.length ? `; badge${kept.length === 1 ? "" : "s"} ${kept.map((b) => b.label).join(", ")} not returned` : ""}`);
+    return res.json({ ok: true, already, visit: visitsOut(req.ctx, [visit])[0], badges: held.map((b) => ({ id: b.id, label: b.label, returned: Boolean(said.get(b.id)) })) });
   });
 
   // --- visits settings (administrators) ----------------------------------------------------

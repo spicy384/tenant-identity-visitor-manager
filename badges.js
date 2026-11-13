@@ -546,6 +546,17 @@ function createBadges({ db, clearance, now = Date.now }) {
     return badge;
   }
 
+  /**
+   * The badges a visitor still has as `visit` ends, oldest first: [{ id, number, label }]. Theirs
+   * now, but for one given with another visit they are still on (at another site).
+   */
+  function outForVisit(visit) {
+    return raw.prepare(`SELECT b.id, b.number, b.facility_code FROM badge_assignments a JOIN badges b ON b.id = a.badge_id
+      WHERE a.holder_kind = 'visitor' AND a.holder_id = ? AND a.returned_at IS NULL
+        AND (a.visit_id IS NULL OR a.visit_id = ? OR NOT EXISTS (SELECT 1 FROM visits x WHERE x.id = a.visit_id AND x.checked_out_at IS NULL))
+      ORDER BY a.assigned_at, a.id`).all(visit.visitorId, visit.id).map((r) => ({ id: r.id, number: r.number, label: badgeLabel(r.facility_code, r.number) }));
+  }
+
   /** Takes a badge back. outcome "lost" also marks the badge lost. */
   function takeBack(badgeId, { outcome = "returned", note = null } = {}, { by = null, sites = null } = {}) {
     if (!["returned", "lost"].includes(outcome)) throw fail(400, "A badge comes back returned, or is lost.");
@@ -644,7 +655,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     return [...out.values()];
   }
 
-  return { list, get, history, forHolder, openForHolder, heldByPeople, outOfStep, matchHolderLevel, create, createRange, update, remove, holder, refusal, clearanceRefusal, availableFor, availableLater, assign, recordForVisit, takeBack, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
+  return { list, get, history, forHolder, openForHolder, heldByPeople, outOfStep, matchHolderLevel, create, createRange, update, remove, holder, refusal, clearanceRefusal, availableFor, availableLater, assign, recordForVisit, takeBack, outForVisit, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
 }
 
 module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES, FACILITY_CODE_RE, badgeLabel, RECORDED_NOTE };

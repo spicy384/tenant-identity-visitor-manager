@@ -1,6 +1,7 @@
 // 11-visits.js: the visit log, with filters and CSV export, and the visits table the
 // visitor dialog shares. Staff who check visitors in can correct when one arrived or left,
-// giving the reason; each correction is kept with the visit and in the audit log.
+// giving the reason; each correction is kept with the visit and in the audit log. They can
+// also note comments against a visit, each kept with who wrote it and when.
 
 const VISITS_PAGE = 100;
 const visitsView = { offset: 0 };
@@ -29,7 +30,7 @@ function visitsTable(visits, { showVisitor = true, onChange = () => {} } = {}) {
   // The badge each visitor had, for those who see badges; entered later by those who give them out.
   const seesBadges = canReadBadges();
   const entersBadges = correcting && canEditBadges();
-  const head = ["Arrived", "Left", ...(showVisitor ? ["Visitor"] : []), "Visiting", "Host", ...(seesBadges ? ["Badge"] : []), ...(allSites ? ["Site"] : []), ...(correcting ? [""] : [])];
+  const head = ["Arrived", "Left", ...(showVisitor ? ["Visitor"] : []), "Visiting", "Host", ...(seesBadges ? ["Badge"] : []), ...(allSites ? ["Site"] : []), "Comments", ...(correcting ? [""] : [])];
   // When they left the day they came, the time is enough.
   const leftAt = (v) => (new Date(v.checkedOutAt).toDateString() === new Date(v.checkedInAt).toDateString() ? fmtTime(v.checkedOutAt) : fmtDateTime(v.checkedOutAt));
   return h("div", { class: "table-wrap" }, h("table", { class: "table compact phone-cards" },
@@ -47,7 +48,65 @@ function visitsTable(visits, { showVisitor = true, onChange = () => {} } = {}) {
         ? [h("span", { class: "mono", text: v.badges.join(", ") }), v.badgeRecordedLater ? h("div", { class: "muted", text: "entered later" }) : null]
         : entersBadges ? h("button", { type: "button", class: "link-btn small-text nowrap", text: "Add badge", onclick: async () => { if (await recordVisitBadge(v)) onChange(); } }) : h("span", { class: "muted", text: "None" })) : null,
       allSites ? h("td", { class: "small-text", text: v.siteName }) : null,
+      h("td", { class: "small-text" }, [visitCommentsCell(v, onChange)].filter(Boolean)),
       correcting ? h("td", {}, h("button", { type: "button", class: "link-btn small-text nowrap row-action", text: "Correct times", onclick: async () => { if (await correctVisitTimes(v)) onChange(); } })) : null)) : emptyRow(head.length, "No visits."))));
+}
+
+/**
+ * A visit's comments in its row: the latest, with who wrote it and how many came before, which
+ * opens them all; with none, Add comment for those who may.
+ */
+function visitCommentsCell(v, onChange) {
+  const list = v.comments || [];
+  const open = async () => { if (await visitComments(v)) onChange(); };
+  if (!list.length) return canCorrectVisits() ? h("button", { type: "button", class: "link-btn small-text nowrap", text: "Add comment", onclick: open }) : null;
+  const last = list[list.length - 1];
+  return h("button", { type: "button", class: "visit-comment", title: canCorrectVisits() ? "See the comments, or add one" : "See the comments", onclick: open },
+    h("span", { class: "visit-comment-text", text: last.body }),
+    h("span", { class: "muted", text: `${last.by || "staff"}, ${fmtDateTime(last.at)}${list.length > 1 ? ` · ${list.length - 1} earlier` : ""}` }));
+}
+
+/**
+ * A visit's comments, oldest first, and a box to add one (those who check visitors in or
+ * correct visits). An administrator can remove one; what it said stays in the audit log.
+ * Resolves true when a comment was added or removed.
+ */
+async function visitComments(v, changed = false) {
+  const name = visitorName(v.visitor);
+  const list = v.comments || [];
+  const remove = async (c, e) => {
+    const dlg = e.target.closest("dialog");
+    if (!(await confirmDialog(`Remove this comment by ${c.by || "staff"}? What it said stays in the audit log.`, { confirmLabel: "Remove", danger: true }))) return;
+    try {
+      dlg.finish({ visit: (await api(`/api/visits/${v.id}/comments/${c.id}`, { method: "DELETE" })).visit });
+    } catch (error) {
+      dlg.showError(error.message);
+    }
+  };
+  const about = h("p", { class: "muted", text: `${v.siteName}${v.companyName ? `, visiting ${v.companyName}` : ""}: arrived ${fmtDateTime(v.checkedInAt)}, ${v.checkedOutAt ? `left ${fmtDateTime(v.checkedOutAt)}` : "still in the building"}.` });
+  const past = list.length
+    ? h("ul", { class: "plain-list comment-list" }, list.map((c) => h("li", {},
+      h("p", { class: "pre", text: c.body }),
+      h("div", { class: "row-between muted small-text" }, h("span", { text: `${c.by || "staff"}, ${fmtDateTime(c.at)}` }),
+        isAdmin() ? h("button", { type: "button", class: "link-btn danger-text small-text", text: "Remove", onclick: (e) => remove(c, e) }) : null))))
+    : h("p", { class: "muted", text: "No comments yet." });
+  const title = `Comments on ${name}'s visit`;
+  const result = canCorrectVisits()
+    ? await formDialog({
+      title,
+      intro: h("div", { class: "stack full-row" }, about, past),
+      fields: [{ name: "body", label: list.length ? "Add another" : "Comment", type: "textarea", rows: 3, required: true, autofocus: true, placeholder: "Left a laptop bag at the desk; collected at 3 PM.", hint: "Kept with the visit, with your name and the time." }],
+      submitLabel: "Add comment",
+      onSubmit: async (values) => { await api(`/api/visits/${v.id}/comments`, { method: "POST", body: { body: values.body } }); return "added"; }
+    })
+    : await openDialog({ title, body: h("div", { class: "stack" }, about, past) });
+  if (result === "added") {
+    toast("Comment added.");
+    return true;
+  }
+  // One was removed: shown again without it.
+  if (result?.visit) return visitComments(result.visit, true);
+  return changed;
 }
 
 /**
@@ -143,13 +202,20 @@ async function correctVisitTimes(v, { look = false } = {}) {
       if (!same(values.checkedInAt, v.checkedInAt)) body.checkedInAt = at(values.checkedInAt, "Arrived");
       if (values.checkedOutAt && !same(values.checkedOutAt, v.checkedOutAt)) body.checkedOutAt = at(values.checkedOutAt, "Left");
       if (!values.checkedOutAt && v.checkedOutAt) body.checkedOutAt = null;
-      await api(`/api/visits/${v.id}/times`, { method: "PUT", body });
-      return true;
+      return api(`/api/visits/${v.id}/times`, { method: "PUT", body });
     }
   });
   if (saved) {
     toast("Times corrected.");
     refreshCounts();
+    // The corrected time checked them out with a badge still theirs: was it returned?
+    if (saved.badgesOut?.length) {
+      try {
+        await settleBadgesAfterVisit(v, saved.badgesOut);
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    }
   }
   return Boolean(saved);
 }

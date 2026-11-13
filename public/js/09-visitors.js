@@ -364,10 +364,8 @@ async function openVisitor(id, onChange = () => {}) {
       return again();
     }
     if (result === "checkout") {
-      for (const v of here) await api(`/api/visits/${v.id}/checkout`, { method: "POST", body: {} });
-      toast(`${visitorName(visitor)} checked out.`);
+      for (const v of here) if (!(await checkOutVisit(v, visitorName(visitor)))) break;
       onChange();
-      refreshCounts();
       return again();
     }
     if (result === "delete") {

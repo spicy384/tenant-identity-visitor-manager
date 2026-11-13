@@ -35,6 +35,12 @@ function cleanIdOther(idType, idOther) {
   return s;
 }
 
+/** The time of day at a site ("14:05"), as events keep theirs. */
+const clockAt = (timeZone, ms) => new Intl.DateTimeFormat("en-GB", { timeZone: timeZone || undefined, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(ms);
+
+// The longest a comment on a visit may be.
+const MAX_COMMENT = 1000;
+
 /** An ID as written in the audit log: "Other government ID: Military ID", else just its type. */
 const idText = (idType, idOther) => (idOther ? `${idType}: ${idOther}` : idType);
 // A visit's check-in: waiting for the desk to check their ID, then for a badge, then done.
@@ -473,7 +479,9 @@ function createVisitors({ db, fields }) {
       lastCorrection: r.time_changes ? { reason: r.last_reason, by: r.last_by, at: r.last_at } : null,
       // The visitor badges they had on this visit, and whether one was recorded after it.
       badges: r.badge_labels ? String(r.badge_labels).split(", ") : [],
-      badgeRecordedLater: Boolean(r.badge_recorded_later)
+      badgeRecordedLater: Boolean(r.badge_recorded_later),
+      // What staff have noted against it, oldest first: [{ id, body, by, at }].
+      comments: r.comments_json ? JSON.parse(r.comments_json) : []
     };
   }
 
@@ -490,6 +498,7 @@ function createVisitors({ db, fields }) {
     (SELECT c.changed_by FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_by,
     (SELECT c.changed_at FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_at,
     (SELECT group_concat(vc.person_id ORDER BY vc.position, vc.person_id) FROM visit_contacts vc WHERE vc.visit_id = x.id) AS host_ids,
+    (SELECT json_group_array(json_object('id', m.id, 'body', m.body, 'by', m.created_by, 'at', m.created_at) ORDER BY m.created_at, m.id) FROM visit_comments m WHERE m.visit_id = x.id) AS comments_json,
     ${VISIT_BADGES}
     FROM visits x JOIN sites s ON s.id = x.site_id JOIN visitors v ON v.id = x.visitor_id LEFT JOIN kiosks k ON k.id = x.kiosk_id`;
 
@@ -501,7 +510,8 @@ function createVisitors({ db, fields }) {
 
   /**
    * Visits the caller may see. status: "open", "closed" or "all". from/to: timestamps on
-   * the check-in time. q: words matched against visitor, company and host names.
+   * the check-in time. q: words matched against visitor, company and host names, and the
+   * visit's comments.
    */
   function listVisits({ sites = null, siteId = null, status = "all", from = null, to = null, companyId = null, hostId = null, visitorId = null, corrected = false, q = "", limit = 100, offset = 0 } = {}) {
     const where = [];
@@ -523,8 +533,8 @@ function createVisitors({ db, fields }) {
     if (corrected) where.push("EXISTS (SELECT 1 FROM visit_time_changes c WHERE c.visit_id = x.id)");
     for (const word of String(q || "").trim().split(/\s+/).filter(Boolean).slice(0, 8)) {
       const p = likeWord(word);
-      where.push("(v.first_name LIKE ? ESCAPE '\\' OR v.last_name LIKE ? ESCAPE '\\' OR coalesce(v.organization, '') LIKE ? ESCAPE '\\' OR coalesce(x.company_name, '') LIKE ? ESCAPE '\\' OR coalesce(x.host_name, '') LIKE ? ESCAPE '\\')");
-      params.push(p, p, p, p, p);
+      where.push("(v.first_name LIKE ? ESCAPE '\\' OR v.last_name LIKE ? ESCAPE '\\' OR coalesce(v.organization, '') LIKE ? ESCAPE '\\' OR coalesce(x.company_name, '') LIKE ? ESCAPE '\\' OR coalesce(x.host_name, '') LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM visit_comments m WHERE m.visit_id = x.id AND m.body LIKE ? ESCAPE '\\'))");
+      params.push(p, p, p, p, p, p);
     }
     const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const total = raw.prepare(`SELECT count(*) AS n FROM visits x JOIN visitors v ON v.id = x.visitor_id ${clause}`).get(...params).n;
@@ -619,9 +629,13 @@ function createVisitors({ db, fields }) {
       if (!link) raw.prepare("INSERT INTO visitor_links (visitor_id, company_id, host_id, created_at) VALUES (?, ?, ?, ?)").run(visitorId, company.id, host ? host.id : null, now);
       else if (host && link.host_id !== host.id) raw.prepare("UPDATE visitor_links SET host_id = ? WHERE visitor_id = ? AND company_id = ?").run(host.id, visitorId, company.id);
       raw.prepare("UPDATE visitors SET last_visit_at = ?, updated_at = ? WHERE id = ?").run(now, now, visitorId);
-      // Expected today at this site: the arrival is noted against the event.
-      raw.prepare(`UPDATE event_guests SET visit_id = ? WHERE visitor_id = ? AND visit_id IS NULL
-        AND event_id IN (SELECT id FROM visitor_events WHERE site_id = ? AND date = ?)`).run(id, visitorId, siteId, today(site.time_zone, now));
+      // Expected today at this site: the arrival is noted against the event. So is coming back
+      // to one they left that is still on (its end time not reached, or with no times at all).
+      raw.prepare(`UPDATE event_guests SET visit_id = ? WHERE visitor_id = ?
+        AND event_id IN (SELECT id FROM visitor_events WHERE site_id = ? AND date = ?)
+        AND (visit_id IS NULL OR (visit_id IN (SELECT id FROM visits WHERE checked_out_at IS NOT NULL)
+          AND event_id IN (SELECT id FROM visitor_events WHERE end_time > ? OR (end_time IS NULL AND start_time IS NULL))))`)
+        .run(id, visitorId, siteId, today(site.time_zone, now), clockAt(site.time_zone, now));
     });
     return { visit: getVisit(id), already: false };
   }
@@ -673,14 +687,51 @@ function createVisitors({ db, fields }) {
     return getVisit(visitId);
   }
 
+  /**
+   * A guest who leaves before a later event of that day begins is expected at it again: the
+   * events this visit was noted against that start after `outAt` (the site's time) let go of it,
+   * so they show as expected, with the check-in the desk and the kiosk offer.
+   */
+  function releaseLaterEvents(visit, outAt) {
+    const zone = raw.prepare("SELECT time_zone FROM sites WHERE id = ?").get(visit.siteId)?.time_zone;
+    raw.prepare(`UPDATE event_guests SET visit_id = NULL WHERE visit_id = ?
+      AND event_id IN (SELECT id FROM visitor_events WHERE date = ? AND start_time > ?)`).run(visit.id, today(zone, outAt), clockAt(zone, outAt));
+  }
+
   /** Ends a visit. method: kiosk, staff or auto; `at` defaults to now. */
   function checkOut(visitId, { method = "staff", by = null, at = Date.now(), sites = null } = {}) {
     if (!CHECKOUT_METHODS.includes(method)) throw fail(400, "Unknown check-out method.");
     const visit = getVisit(visitId, { sites });
     if (!visit) throw fail(404, "No such visit.");
     if (visit.checkedOutAt) return { visit, already: true };
-    raw.prepare("UPDATE visits SET checked_out_at = ?, checkout_method = ?, checked_out_by = ? WHERE id = ? AND checked_out_at IS NULL").run(Math.max(at, visit.checkedInAt), method, by, visitId);
+    const outAt = Math.max(at, visit.checkedInAt);
+    db.transaction(() => {
+      raw.prepare("UPDATE visits SET checked_out_at = ?, checkout_method = ?, checked_out_by = ? WHERE id = ? AND checked_out_at IS NULL").run(outAt, method, by, visitId);
+      releaseLaterEvents(visit, outAt);
+    });
     return { visit: getVisit(visitId), already: false };
+  }
+
+  /**
+   * Notes a comment against a visit (open or ended), with who wrote it. Returns { visit, comment }.
+   */
+  function addComment(visitId, { body, by = null, sites = null, now = Date.now() } = {}) {
+    const visit = getVisit(visitId, { sites });
+    if (!visit) throw fail(404, "No such visit.");
+    const words = String(body ?? "").replace(/\r\n?/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    if (!words) throw fail(400, "Write the comment.");
+    if (words.length > MAX_COMMENT) throw fail(400, `Keep a comment to ${MAX_COMMENT} characters.`);
+    const id = Number(raw.prepare("INSERT INTO visit_comments (visit_id, body, created_by, created_at) VALUES (?, ?, ?, ?)").run(visit.id, words, by, now).lastInsertRowid);
+    return { visit: getVisit(visit.id), comment: { id, body: words, by, at: now } };
+  }
+
+  /** Takes a comment off a visit. Returns { visit, comment } (the comment as it was). */
+  function removeComment(visitId, commentId, { sites = null } = {}) {
+    const visit = getVisit(visitId, { sites });
+    const comment = visit?.comments.find((c) => c.id === Number(commentId));
+    if (!comment) throw fail(404, "No such comment.");
+    raw.prepare("DELETE FROM visit_comments WHERE id = ? AND visit_id = ?").run(comment.id, visit.id);
+    return { visit: getVisit(visit.id), comment };
   }
 
   /**
@@ -720,6 +771,8 @@ function createVisitors({ db, fields }) {
       if (nextOut !== null && !visit.checkedOutAt) raw.prepare("UPDATE visits SET checked_out_at = ?, checkout_method = 'staff', checked_out_by = ? WHERE id = ?").run(nextOut, by, visit.id);
       else if (nextOut !== null) raw.prepare("UPDATE visits SET checked_out_at = ? WHERE id = ?").run(nextOut, visit.id);
       for (const c of changes) raw.prepare("INSERT INTO visit_time_changes (visit_id, field, from_at, to_at, reason, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(visit.id, c.field, c.from, c.to, why, by, t);
+      // Given a time they left: a later event of that day expects them again.
+      if (changes.some((c) => c.field === "out")) releaseLaterEvents(visit, nextOut);
       // Their last visit follows.
       raw.prepare("UPDATE visitors SET last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?) WHERE id = ?").run(visit.visitorId, visit.visitorId);
     });
@@ -823,6 +876,8 @@ function createVisitors({ db, fields }) {
     openAtSite,
     checkIn,
     checkOut,
+    addComment,
+    removeComment,
     hereNow,
     retentionPreview,
     applyRetention,
@@ -830,4 +885,4 @@ function createVisitors({ db, fields }) {
   };
 }
 
-module.exports = { createVisitors, hostDisplayName, contactIds, MAX_CONTACTS, CHECKOUT_METHODS, VISITOR_TYPES, ID_TYPES, OTHER_ID, cleanIdOther, idText, STAGES };
+module.exports = { createVisitors, hostDisplayName, contactIds, MAX_CONTACTS, MAX_COMMENT, clockAt, CHECKOUT_METHODS, VISITOR_TYPES, ID_TYPES, OTHER_ID, cleanIdOther, idText, STAGES };

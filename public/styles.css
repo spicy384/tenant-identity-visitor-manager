@@ -209,6 +209,13 @@ label.inline input { width: auto; }
 tr.time-changed > td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
 button.time-changed-mark { border: 0; cursor: pointer; font-family: inherit; line-height: inherit; }
 button.time-changed-mark:hover { filter: brightness(0.95); }
+/* A visit's latest comment in the log: reads as text, opens them all. */
+button.visit-comment { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; width: 100%; max-width: 18rem; min-width: 9rem; min-height: 0; padding: 4px 6px; margin: -4px -6px; background: none; border: 0; border-radius: var(--radius-sm); color: inherit; font: inherit; font-weight: 400; text-align: left; cursor: pointer; }
+button.visit-comment:hover { background: var(--primary-soft); }
+.visit-comment-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment-list li { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.comment-list li p { margin: 0 0 4px; overflow-wrap: anywhere; }
+.badge-return-ask { font-size: 1.05rem; }
 .badge.bad { background: var(--danger-soft); color: var(--danger); }
 .badge.muted { background: var(--surface-3); color: var(--text-muted); }
 td > .badge:first-child, .line-actions .badge, .card-actions .badge { margin-left: 0; }

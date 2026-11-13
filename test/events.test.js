@@ -192,7 +192,8 @@ async function main() {
   const visit = (await desk.get("/api/visits?status=open")).data.visits[0];
   r = await desk.post(`/api/badges/${vBadge.id}/assign`, { kind: "visitor", holderId: graceId, visitId: visit.id });
   check("visitor badge: given with the visit", r.status === 200 && r.data.badge.holder.visitId === visit.id);
-  await desk.post(`/api/visits/${visit.id}/checkout`);
+  check("visitor badge: check-out asks about it first", (await desk.post(`/api/visits/${visit.id}/checkout`)).status === 409);
+  await desk.post(`/api/visits/${visit.id}/checkout`, { badges: [{ id: vBadge.id, returned: false }] });
   check("visitor badge: still out after check-out", Boolean((await desk.get(`/api/badges/${vBadge.id}`)).data.badge.holder));
   check("visitor badge: counted as out with someone who has left", (await desk.get("/api/visits/summary")).data.badgesLeft === 1 && (await desk.get("/api/badges?state=left")).data.badges[0].number === "V-1");
   check("delete: a visitor holding a badge can't be deleted", (await admin.del(`/api/visitors/${graceId}`)).status === 409);
