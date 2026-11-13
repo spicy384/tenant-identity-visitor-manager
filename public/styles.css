@@ -821,6 +821,12 @@ a.button-link:hover { text-decoration: none; }
 .badge-assigned p { margin: 0; }
 .badge-assigned-label { font-weight: 600; }
 .badge-assigned-number { font-size: 2.6rem; font-weight: 800; letter-spacing: 0.04em; line-height: 1.1; }
+/* The badge reserved for a visitor, at the top of their record. */
+.reserved-badge { display: flex; align-items: center; justify-content: space-between; gap: 12px 18px; flex-wrap: wrap; padding: 14px 16px; border: 2px solid var(--primary); border-radius: var(--radius); background: var(--primary-soft); }
+.reserved-badge-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.reserved-badge-label { margin: 0; font-size: 0.95rem; font-weight: 700; }
+.reserved-badge-number { font-size: 2.2rem; font-weight: 800; letter-spacing: 0.04em; line-height: 1.15; color: var(--text); overflow-wrap: anywhere; }
+.reserved-badge-note { margin: 0; font-size: 0.95rem; }
 .badge-number-input { font-size: 1.2rem; max-width: 220px; }
 .free-badges { display: flex; flex-wrap: wrap; gap: 6px; }
 .free-badges .chip { padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text); cursor: pointer; }

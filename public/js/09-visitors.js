@@ -209,7 +209,8 @@ async function mergeVisitor(visitor) {
 
 /**
  * The visitor badge kept for a regular visitor: handed to them at each check-in, back in stock
- * when they leave, still theirs. Those who give badges out reserve and release it.
+ * when they leave, still theirs. Those who give badges out reserve and release it. One that is
+ * reserved is shown large, to go at the top of their record where it can't be missed.
  */
 function reservedBadgeSection(visitor, refresh) {
   if (!canReadBadges() || visitor.reservedBadge === undefined) return null;
@@ -247,13 +248,18 @@ function reservedBadgeSection(visitor, refresh) {
       toast(error.message, "error");
     }
   };
+  if (visitor.reservedBadge) {
+    return h("div", { class: "reserved-badge", role: "group", "aria-label": "Reserved badge" },
+      h("div", { class: "reserved-badge-main" },
+        h("h4", { class: "reserved-badge-label", text: "Reserved badge" }),
+        h("a", { href: `#badge/${visitor.reservedBadge.id}`, class: "reserved-badge-number mono", text: visitor.reservedBadge.label }),
+        h("p", { class: "reserved-badge-note", text: `Kept for ${visitor.firstName}. Hand them this badge at each check-in.` })),
+      may ? h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary small", text: "Change", onclick: reserve }), h("button", { type: "button", class: "link-btn danger-text", text: "Release", onclick: release })) : null);
+  }
   return h("div", { class: "stack" },
     h("h4", { text: "Reserved badge" }),
-    visitor.reservedBadge
-      ? h("p", { class: "row-between" }, h("span", {}, h("a", { href: `#badge/${visitor.reservedBadge.id}`, class: "mono", text: visitor.reservedBadge.label }), h("span", { class: "muted small-text", text: " · handed to them at each check-in" })),
-        may ? h("span", { class: "btn-row" }, h("button", { type: "button", class: "link-btn", text: "Change", onclick: reserve }), h("button", { type: "button", class: "link-btn danger-text", text: "Release", onclick: release })) : null)
-      : h("p", { class: "row-between" }, h("span", { class: "muted", text: "None. A regular visitor can have a visitor badge kept for them." }),
-        may ? h("button", { type: "button", class: "secondary small", text: "Reserve a badge", onclick: reserve }) : null));
+    h("p", { class: "row-between" }, h("span", { class: "muted", text: "None. A regular visitor can have a visitor badge kept for them." }),
+      may ? h("button", { type: "button", class: "secondary small", text: "Reserve a badge", onclick: reserve }) : null));
 }
 
 /** The visitor's notes, shown even when there are none, and changed in place by those who may. */
@@ -301,13 +307,16 @@ async function openVisitor(id, onChange = () => {}) {
     h("h4", { text: `Visits${visitCount > visits.length ? ` (latest ${visits.length} of ${visitCount})` : ` (${visitCount})`}` }),
     visitsTable(visits, { showVisitor: false, onChange: () => dlgRef?.finish("refresh") }));
   let dlgRef = null;
+  // A badge reserved for them goes first, large; with none, the offer to reserve one stays further down.
+  const reservedBlock = reservedBadgeSection(visitor, () => dlgRef?.finish("refresh"));
   const body = h("div", { class: "detail" },
     h("p", {}, visitorBadges({ ...visitor, clearanceStatus: undefined }), visitor.source === "kiosk" && visitor.verified === false ? h("span", { class: "muted small-text", text: " Registered themselves at a kiosk. Check the details, merge them with an existing visitor, or mark them checked." }) : null),
+    visitor.reservedBadge ? reservedBlock : null,
     recordFacts(fields, visitor, ["firstName", "lastName", "companies", "verified", "blocked", "notes", ...CLEARANCE_KEYS]),
     visitorNotesSection(visitor, () => dlgRef?.finish("refresh")),
     clearanceSection("visitor", visitor, () => dlgRef?.finish("refresh")),
     linksBlock,
-    reservedBadgeSection(visitor, () => dlgRef?.finish("refresh")),
+    visitor.reservedBadge ? null : reservedBlock,
     badgeSection("visitor", visitor.id),
     visitsBlock);
   // Their visits not yet ended (one, unless they're at two sites at once).

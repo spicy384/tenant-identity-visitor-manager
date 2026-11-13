@@ -199,7 +199,8 @@ The design and decisions are in [PLAN.md](PLAN.md).
   contact), and **Give badge** at the badge step once their ID is checked. It clears once
   they have a badge, need none, or check out. Pages check every 15 seconds.
 - **Reserved badges**: a regular visitor can have a visitor badge kept for them (their
-  visitor page, Reserved badge). Check-in tells the desk to hand them that badge; it goes
+  visitor page, Reserved badge). Once one is reserved, it is shown first on their page, its
+  number large, so it isn't missed. Check-in tells the desk to hand them that badge; it goes
   back into stock when they leave and stays theirs. Nobody else can be given it. The Expected
   page shows it beside the guest, unless it can't be used at the event's site; Change picks
   another for that event alone.
