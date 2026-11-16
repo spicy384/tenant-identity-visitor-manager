@@ -179,15 +179,22 @@ The design and decisions are in [PLAN.md](PLAN.md).
      first, the search adds more people of that company, each shown with their details and
      **Remove**. In the building, the visit log and its export list all their names, and the
      log is found by any of them. An expected guest starts with all of their event's.
-  2. **Confirm** their details, the point of contact's (job title, phones, email, as the
-     role's field access shows them) and the purpose of the visit.
+  2. **Confirm**: what is on record is shown to read (name, company, visitor type,
+     citizenship, who they're visiting and the point of contact with their phone numbers),
+     not as boxes to fill in. Only what check-in still needs is asked for, in a highlighted
+     box at the top: a missing company or citizenship, the site, a point of contact, the
+     purpose of the visit. For a regular visitor that is usually just the purpose. **Edit**
+     opens everything to change (what was typed so far is kept), with the point of contact's
+     job title, phones and email as the role's field access shows them.
   3. **ID**: which ID they showed (driver's license, passport, CAC, state ID or another
      government ID, with what it was, such as a military ID) and that its name and photo match
      them. Only the type (and what an other government ID was), who checked it and when are
      kept: never the ID's number.
   4. **Badge**: a badge kept for them (picked for the event they're expected at, or reserved
      for a regular visitor) is shown large, with **Badge handed over** and **Can't find it?
-     Issue a different badge**. Otherwise the desk enters the number of the badge they hand
+     Issue a different badge**. With several kept for them, it is the first that is free;
+     the others are offered beside it (**Hand over ... instead**), and one that can't be given
+     says why. Otherwise the desk enters the number of the badge they hand
      over: it must be an active visitor badge, valid at the site, that the visitor may hold.
      The free badges listed are only those at the visitor's own clearance level (the level
      Security validated; uncleared ones while their clearance doesn't count). A lower badge
@@ -200,6 +207,13 @@ The design and decisions are in [PLAN.md](PLAN.md).
   Until the badge is given, **Back** (or the Confirm and ID steps at the top) goes back to
   change the point of contact or purpose, or to check the ID again; the audit log notes an ID
   checked again and what it was before. Once the badge is given the check-in stands.
+
+  **Cancel check-in**, at the bottom left of every step, stops it. Before the ID is confirmed
+  nothing is on record yet, so it just closes. Once their visit has begun (past the ID step,
+  or someone who checked in at a kiosk) and until it is finished, it asks first, with an
+  optional reason, then takes the visit off the record: they aren't shown as in the building,
+  the visit isn't in the log, and an event they were expected at expects them again. The audit
+  log keeps who canceled it and why. A finished check-in can't be canceled; check them out.
 - **Complete check-in**: a visitor who checks themselves in at a kiosk is told to show their ID
   at the desk. A bright banner at the top of every page, and the Complete check-in module on
   Home, show them to staff who give badges out at that site (and the site chosen in the
@@ -207,12 +221,25 @@ The design and decisions are in [PLAN.md](PLAN.md).
   check-in at the ID step (at Confirm first if something is missing, such as the point of
   contact), and **Give badge** at the badge step once their ID is checked. It clears once
   they have a badge, need none, or check out. Pages check every 15 seconds.
-- **Reserved badges**: a regular visitor can have a visitor badge kept for them (their
-  visitor page, Reserved badge). Once one is reserved, it is shown first on their page, its
-  number large, so it isn't missed. Check-in tells the desk to hand them that badge; it goes
-  back into stock when they leave and stays theirs. Nobody else can be given it. The Expected
-  page shows it beside the guest, unless it can't be used at the event's site; Change picks
-  another for that event alone.
+- **Reserved badges**: a regular visitor can have visitor badges kept for them (their visitor
+  page, **Reserve a badge**, by the badge's number). A visitor can have several, and one badge
+  can be kept for several visitors: a badge that opens more doors than the ordinary ones, say,
+  shared by a tenant's regular guests. Each badge kept for them that they don't have is shown
+  at the top of their page, large, with a picture of the badge, so it isn't missed; further
+  down, **Reserved badges** lists them all with where each is now, **Release** and **Reserve
+  another badge**. Check-in tells the desk to hand them the first of theirs that is free; it
+  goes back into stock when they leave and stays theirs. If one is out (with another of the
+  visitors it is kept for, or anyone else), check-in says who has it and offers the next, or
+  asks for another badge. While they're away a reserved badge can be given to anyone (another
+  visitor, a tenant who forgot theirs, or picked for an event's guest) with nothing more
+  asked: it is listed last among the badges on offer, marked **Reserved for** with the names,
+  and the audit log notes whose it is. To those it is kept for it is listed first, whatever
+  its clearance level, as long as their clearance covers it. The Expected page shows the
+  first usable at the event's site beside the guest; Change picks another for that event alone.
+- **The badge a visitor has now** is shown the same way at the top of their page: a picture
+  of the badge, its number large, since when and who gave it, with **Take back** and **Lost**
+  for those who take badges back. The pictures are the badge images set under Settings >
+  Badges and clearances; a kind of badge with no image shows none.
 - **Visit log**: every visit with filters and a CSV export (administrators), with who on the
   staff checked each visitor in and out (or the kiosk they used, and who checked their ID), and
   the visitor badge each visitor had (for those who see badges; a badge given from a visitor's page goes
@@ -616,9 +643,11 @@ record for those who see the directory, with their company; then the site and th
 expected. Each guest shows as expected, arrived but not yet through the desk, here (since
 when) or left. Staff who give badges out can pick the visitor badge to hand each guest
 (Badge column): check-in then shows that badge. Guests are picked from
-visitors on record, or typed in under Someone new: pressing Done (or Enter, to add another)
+visitors on record, or typed in under Someone new: **Add guest** (or Enter)
 looks the name and email up, offers the visitor on record when there is one, and otherwise
-asks before adding them as a new visitor. Guests are linked to the event's company and first point of contact,
+asks before adding them as a new visitor; the boxes then clear for the next guest, so as many
+as are coming can be added one after another, straight after a new event is saved or later
+with Add guest. Done adds anyone still typed in and closes. Guests are linked to the event's company and first point of contact,
 so the kiosk recognizes them. For an event still to come (a later date, or today before its start
 time, or today with no start time), Pick badge also lists badges out now, marked as such, as
 they should be back by then; if one isn't, check-in says so and asks for another. **Check in**, here or on Home's Expected today card, starts the

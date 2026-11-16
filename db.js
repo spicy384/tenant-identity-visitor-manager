@@ -345,6 +345,16 @@ CREATE TABLE IF NOT EXISTS visitor_events (
 );
 CREATE INDEX IF NOT EXISTS visitor_events_day ON visitor_events(site_id, date);
 
+-- The visitor badges kept for a visitor, in the order reserved. A visitor may have several, and
+-- one badge may be kept for several visitors (a badge that opens more doors, say).
+CREATE TABLE IF NOT EXISTS visitor_reserved_badges (
+  visitor_id INTEGER NOT NULL REFERENCES visitors(id) ON DELETE CASCADE,
+  badge_id INTEGER NOT NULL REFERENCES badges(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (visitor_id, badge_id)
+);
+CREATE INDEX IF NOT EXISTS visitor_reserved_badges_badge ON visitor_reserved_badges(badge_id);
+
 CREATE TABLE IF NOT EXISTS event_guests (
   event_id INTEGER NOT NULL REFERENCES visitor_events(id) ON DELETE CASCADE,
   visitor_id INTEGER NOT NULL REFERENCES visitors(id) ON DELETE CASCADE,
@@ -880,6 +890,10 @@ function addColumns(db) {
   db.exec("INSERT OR IGNORE INTO badge_sites (badge_id, site_id) SELECT id, site_id FROM badges WHERE site_id IS NOT NULL; UPDATE badges SET site_id = NULL WHERE site_id IS NOT NULL;");
   rebuildBadges(db);
   db.exec(BADGE_KEY_INDEX);
+  // A visitor first had one reserved badge (visitors.reserved_badge_id); now a list. Moved once.
+  db.exec(`INSERT OR IGNORE INTO visitor_reserved_badges (visitor_id, badge_id, created_at)
+      SELECT v.id, v.reserved_badge_id, v.updated_at FROM visitors v WHERE v.reserved_badge_id IS NOT NULL AND EXISTS (SELECT 1 FROM badges b WHERE b.id = v.reserved_badge_id);
+    UPDATE visitors SET reserved_badge_id = NULL WHERE reserved_badge_id IS NOT NULL;`);
   db.exec("CREATE INDEX IF NOT EXISTS visitor_events_series ON visitor_events(series_id, date)");
   // Events and visits first had one point of contact (host_id); now a list, of which host_id is
   // always the first. One with a host_id and no list yet is from before: its list starts with it.

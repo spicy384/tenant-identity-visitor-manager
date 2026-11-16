@@ -19,6 +19,12 @@ function badgeLevelText(b) {
   return b.clearanceLevelName || (b.cleared ? "Cleared" : "Uncleared");
 }
 
+/** "Reserved for Tom Tech" beside a badge on offer that is kept for other visitors, else null. */
+const reservedTag = (b) => {
+  const who = Array.isArray(b.reservedFor) ? b.reservedFor.map((x) => x.name).join(", ") : b.reservedFor;
+  return who ? h("span", { class: "badge warn", text: `Reserved for ${who}` }) : null;
+};
+
 /** A badge template image from its ref (the server never says which level it is): small, or large. */
 function templateImg(ref, { large = false, alt = "Badge image" } = {}) {
   return ref ? h("img", { class: large ? "badge-template-large" : "badge-thumb", src: `/api/badge-templates/${encodeURIComponent(ref)}/image`, alt, loading: "lazy" }) : null;
@@ -47,8 +53,9 @@ function badgePicker(list, { suggested = null, allowNone = false, label = "Badge
     ordered.map((b, i) => row(String(b.id), [
       templateImg(b.template) || h("span", { class: "badge-thumb empty", title: "No image for this badge yet" }),
       h("span", { class: "mono", text: b.label }),
-      h("span", { class: "muted small-text", text: [showType ? BADGE_TYPE_LABELS[b.type] : null, badgeLevelText(b), multiSite() ? badgeSitesText(b) : null].filter(Boolean).join(" · ") })
-    ], !allowNone && i === 0)));
+      h("span", { class: "muted small-text", text: [showType ? BADGE_TYPE_LABELS[b.type] : null, badgeLevelText(b), multiSite() ? badgeSitesText(b) : null].filter(Boolean).join(" · ") }),
+      reservedTag(b)
+    ].filter(Boolean), !allowNone && i === 0)));
   const value = () => node.querySelector("input:checked")?.value || "";
   const chosen = () => list.find((b) => String(b.id) === value()) || null;
   if (!filterable) return { node, value, chosen, filter: null };
@@ -217,7 +224,8 @@ async function lendBadgeDialog() {
       if (!b) return;
       lend.disabled = true;
       try {
-        const r = await api(`/api/badges/${b.id}/assign`, { method: "POST", body: { kind: "person", holderId: p.id, ...(own.length ? { replacesBadgeId: forWhich ? Number(forWhich.value) : own[0].badgeId } : {}) } });
+        const r = await giveBadge(b.id, { kind: "person", holderId: p.id, ...(own.length ? { replacesBadgeId: forWhich ? Number(forWhich.value) : own[0].badgeId } : {}) });
+        if (!r) return;
         changed = true;
         toast(`Badge ${r.badge.label} assigned to ${personName(p)} until midnight.`);
         // Ready for the next person.
@@ -524,6 +532,7 @@ async function openBadge(id, onChange = () => {}) {
       multiSite() ? [h("dt", { text: "Valid at" }), h("dd", { text: badgeSitesText(badge) })] : null,
       badge.holder ? [h("dt", { text: "Held by" }), h("dd", {}, h("a", { href: badge.holder.kind === "visitor" ? `#visitor/${badge.holder.id}` : `#person/${badge.holder.id}`, text: badge.holder.name }), badge.holder.company ? ` (${badge.holder.company})` : "", h("span", { class: "muted", text: ` since ${fmtDateTime(badge.holder.assignedAt)}${badge.holder.assignedBy ? `, given by ${badge.holder.assignedBy}` : ""}` }),
         badge.holder.temporary ? h("div", { class: badge.holder.overdue ? "bad-text" : "muted", text: `${temporaryText(badge.holder)}${badge.holder.overdue ? " (overdue)" : ""}` }) : null)] : null,
+      badge.reservedFor?.length ? [h("dt", { text: "Reserved for" }), h("dd", {}, badge.reservedFor.flatMap((x, i) => [i ? ", " : null, canReadVisitors() ? h("a", { href: `#visitor/${x.id}`, text: x.name }) : x.name]).filter(Boolean))] : null,
       badge.notes ? [h("dt", { text: "Notes" }), h("dd", { class: "pre", text: badge.notes })] : null,
       // Custom badge fields with a value.
       (state.schema.badge || []).filter((f) => !f.builtIn).map((f) => {
@@ -619,9 +628,11 @@ async function assignBadgeToPerson(p) {
 // --- the badge section on a person's or visitor's dialog -----------------------------------------------
 
 /** Their badges now, a way to give them one they may hold, and the ones they had before. */
-function badgeSection(kind, holderId) {
+function badgeSection(kind, holderId, { onChange = null, showCurrent = true } = {}) {
   if (!canReadBadges()) return null;
   const box = h("div", { class: "stack badge-section" }, h("h4", { text: "Badges" }), h("p", { class: "muted", text: "Loading…" }));
+  // After a badge is given or taken back: the record is drawn again when it shows the badge elsewhere too.
+  const changed = () => (onChange ? onChange() : render());
   async function render() {
     let data;
     try {
@@ -631,13 +642,15 @@ function badgeSection(kind, holderId) {
       return;
     }
     const parts = [h("h4", { text: "Badges" })];
-    if (data.current.length) {
+    if (data.current.length && !showCurrent) {
+      // Shown large at the top of the record.
+    } else if (data.current.length) {
       parts.push(h("ul", { class: "plain-list" }, data.current.map((a) => h("li", { class: "row-between" },
         h("span", {}, h("a", { href: `#badge/${a.badgeId}`, class: "mono", text: a.badgeLabel }), h("span", { class: "muted small-text", text: ` ${BADGE_TYPE_LABELS[a.badgeType]} · since ${fmtDateTime(a.assignedAt)}` }),
           a.temporary ? h("div", { class: `small-text ${a.overdue ? "bad-text" : "muted"}`, text: `${temporaryText(a)}${a.overdue ? " (overdue)" : ""}` }) : null),
         canEditBadges() ? h("span", { class: "btn-row" },
-          h("button", { type: "button", class: "link-btn", text: "Take back", onclick: async () => { if (await takeBackBadge(a.badgeId, a.badgeLabel, a.holderName)) render(); } }),
-          h("button", { type: "button", class: "link-btn danger-text", text: "Lost", onclick: async () => { if (await takeBackBadge(a.badgeId, a.badgeLabel, a.holderName, "lost")) render(); } })) : null))));
+          h("button", { type: "button", class: "link-btn", text: "Take back", onclick: async () => { if (await takeBackBadge(a.badgeId, a.badgeLabel, a.holderName)) changed(); } }),
+          h("button", { type: "button", class: "link-btn danger-text", text: "Lost", onclick: async () => { if (await takeBackBadge(a.badgeId, a.badgeLabel, a.holderName, "lost")) changed(); } })) : null))));
     } else {
       parts.push(h("p", { class: "muted", text: "No badge at the moment." }));
     }
@@ -652,7 +665,7 @@ function badgeSection(kind, holderId) {
             try {
               if (!(await giveBadge(chosen.id, { kind, holderId }))) return;
               toast(`Badge ${chosen.label} given.`);
-              render();
+              changed();
             } catch (error) {
               toast(error.message, "error");
             }
@@ -665,15 +678,16 @@ function badgeSection(kind, holderId) {
     const own = data.current.filter((a) => !a.temporary);
     if (canEditBadges() && kind === "person" && !data.current.some((a) => a.temporary)) {
       if (data.temporary.length) {
-        const tmp = h("select", { "aria-label": "Temporary badge" }, data.temporary.map((b) => h("option", { value: String(b.id), text: `${b.label} · ${BADGE_TYPE_LABELS[b.type]}${b.cleared ? ` · ${badgeLevelText(b)}` : ""}` })));
+        const tmp = h("select", { "aria-label": "Temporary badge" }, data.temporary.map((b) => h("option", { value: String(b.id), text: `${b.label} · ${BADGE_TYPE_LABELS[b.type]}${b.cleared ? ` · ${badgeLevelText(b)}` : ""}${b.reservedFor ? ` · reserved for ${b.reservedFor}` : ""}` })));
         const forWhich = own.length > 1 ? h("select", { "aria-label": "In place of" }, own.map((a) => h("option", { value: String(a.badgeId), text: `in place of ${a.badgeLabel}` }))) : null;
         parts.push(h("div", { class: "temp-row" },
           h("span", { class: "small-text", text: "Forgot their badge today?" }),
           h("div", { class: "btn-row" }, tmp, forWhich, h("button", { type: "button", class: "secondary small", text: "Assign temporary badge", onclick: async () => {
             try {
-              const r = await api(`/api/badges/${tmp.value}/assign`, { method: "POST", body: { kind, holderId, ...(own.length ? { replacesBadgeId: forWhich ? Number(forWhich.value) : own[0].badgeId } : {}) } });
+              const r = await giveBadge(tmp.value, { kind, holderId, ...(own.length ? { replacesBadgeId: forWhich ? Number(forWhich.value) : own[0].badgeId } : {}) });
+              if (!r) return;
               toast(`Badge ${r.badge.label} assigned until midnight.`);
-              render();
+              changed();
             } catch (error) {
               toast(error.message, "error");
             }

@@ -207,59 +207,89 @@ async function mergeVisitor(visitor) {
 
 // --- the visitor dialog ---------------------------------------------------------------------------
 
+/** A badge's image for the top of a record (null when its kind has no image yet). */
+const calloutImage = (ref, label) => (ref ? h("img", { class: "reserved-badge-img", src: `/api/badge-templates/${encodeURIComponent(ref)}/image`, alt: `What badge ${label} looks like`, loading: "lazy" }) : null);
+
 /**
- * The visitor badge kept for a regular visitor: handed to them at each check-in, back in stock
- * when they leave, still theirs. Those who give badges out reserve and release it. One that is
- * reserved is shown large, to go at the top of their record where it can't be missed.
+ * Reserving and releasing the visitor badges kept for a visitor, for those who give badges out.
+ * A visitor may have several, and a badge may be kept for several visitors. Returns
+ * { may, reserve(), release(badge) }; each draws the record again when done.
  */
-function reservedBadgeSection(visitor, refresh) {
-  if (!canReadBadges() || visitor.reservedBadge === undefined) return null;
-  const may = canGiveBadges() && canEditVisitors();
+function reservedBadgeActions(visitor, refresh) {
   const reserve = async () => {
-    const badge = await formDialog({
+    const done = await formDialog({
       title: `Reserve a badge for ${visitorName(visitor)}`,
-      intro: h("p", { class: "muted", text: "Check-in tells the front desk to hand them this badge each time. It goes back into stock when they leave, and stays theirs." }),
+      intro: h("p", { class: "muted full-row", text: "Check-in tells the front desk to hand them this badge. It goes back into stock when they leave, and stays theirs. They can have several kept for them, and one badge can be kept for several visitors (a badge that opens more doors, say): whoever arrives is handed it when it is free." }),
       fields: [
-        { ...facilityCodeField(visitor.reservedBadge?.facilityCode), hint: "Needed when another visitor badge has the same number." },
-        { name: "number", label: "Visitor badge number", required: true, half: true, autofocus: true, value: visitor.reservedBadge?.number || "" }
+        { ...facilityCodeField(), hint: "Needed when another badge has the same number." },
+        { name: "number", label: "Visitor badge number", required: true, half: true, autofocus: true }
       ],
       submitLabel: "Reserve",
-      onSubmit: async (v) => {
-        const typed = v.number.trim().toLowerCase();
-        const code = v.facilityCode.trim();
-        const { badges } = await api(`/api/badges?${new URLSearchParams({ q: v.number.trim(), type: "visitor", limit: "200" })}`);
-        const found = badges.filter((b) => b.number.toLowerCase() === typed && (!code || b.facilityCode === code));
-        if (!found.length) throw new Error(`There's no visitor badge ${code ? `${code}-` : ""}${v.number.trim()}.`);
-        if (found.length > 1) throw new Error(`More than one visitor badge is numbered ${v.number.trim()}: ${found.map((b) => b.label).join(", ")}. Enter its facility code too.`);
-        return (await api(`/api/visitors/${visitor.id}/reserved-badge`, { method: "PUT", body: { badgeId: found[0].id } })).reservedBadge;
-      }
+      onSubmit: (v) => api(`/api/visitors/${visitor.id}/reserved-badges`, { method: "POST", body: { number: v.number.trim(), facilityCode: v.facilityCode.trim() || undefined } })
     });
-    if (badge) {
-      toast(`Badge ${badge.label} reserved for ${visitorName(visitor)}.`);
+    if (done) {
+      toast(`Badge ${done.badge.label} reserved for ${visitorName(visitor)}.`);
       refresh();
     }
   };
-  const release = async () => {
-    if (!(await confirmDialog(`Stop keeping badge ${visitor.reservedBadge.label} for ${visitorName(visitor)}?`, { confirmLabel: "Release" }))) return;
+  const release = async (b) => {
+    const others = b.sharedWith?.length ? ` It stays reserved for ${b.sharedWith.join(", ")}.` : "";
+    if (!(await confirmDialog(`Stop keeping badge ${b.label} for ${visitorName(visitor)}?${others}`, { confirmLabel: "Release" }))) return;
     try {
-      await api(`/api/visitors/${visitor.id}/reserved-badge`, { method: "PUT", body: { badgeId: null } });
+      await api(`/api/visitors/${visitor.id}/reserved-badges/${b.id}`, { method: "DELETE" });
       refresh();
     } catch (error) {
       toast(error.message, "error");
     }
   };
-  if (visitor.reservedBadge) {
-    return h("div", { class: "reserved-badge", role: "group", "aria-label": "Reserved badge" },
-      h("div", { class: "reserved-badge-main" },
-        h("h4", { class: "reserved-badge-label", text: "Reserved badge" }),
-        h("a", { href: `#badge/${visitor.reservedBadge.id}`, class: "reserved-badge-number mono", text: visitor.reservedBadge.label }),
-        h("p", { class: "reserved-badge-note", text: `Kept for ${visitor.firstName}. Hand them this badge at each check-in.` })),
-      may ? h("div", { class: "btn-row" }, h("button", { type: "button", class: "secondary small", text: "Change", onclick: reserve }), h("button", { type: "button", class: "link-btn danger-text", text: "Release", onclick: release })) : null);
-  }
+  return { may: canGiveBadges() && canEditVisitors(), reserve, release };
+}
+
+/**
+ * The top of a visitor's record: the badge (or badges) they have now, then those kept for them
+ * that they don't have, each large with its image, so none is missed. holders: what
+ * /api/badge-holders says of them ({ current, reserved }). Null with neither.
+ */
+function visitorBadgeCallouts(visitor, holders, refresh) {
+  const { may, release } = reservedBadgeActions(visitor, refresh);
+  const kept = new Set(holders.reserved.map((b) => b.id));
+  const several = holders.reserved.length > 1;
+  const box = (assigned, label, image, number, notes, buttons) => h("div", { class: `reserved-badge${assigned ? " assigned-badge" : ""}`, role: "group", "aria-label": label },
+    image, h("div", { class: "reserved-badge-main" }, h("h4", { class: "reserved-badge-label", text: label }), number, notes), buttons);
+  const number = (id, label) => h("a", { href: `#badge/${id}`, class: "reserved-badge-number mono", text: label });
+  const note = (text, cls = "") => h("p", { class: `reserved-badge-note${cls ? ` ${cls}` : ""}`, text });
+  const has = holders.current.map((a) => box(true, "Badge assigned now", calloutImage(a.template, a.badgeLabel), number(a.badgeId, a.badgeLabel),
+    [note(`${visitor.firstName} has it, since ${fmtDateTime(a.assignedAt)}${a.assignedBy ? ` (given by ${a.assignedBy})` : ""}.${kept.has(a.badgeId) ? " It is a badge reserved for them." : ""}`)],
+    canEditBadges() ? h("div", { class: "btn-row" },
+      h("button", { type: "button", class: "secondary small", text: "Take back", onclick: async () => { if (await takeBackBadge(a.badgeId, a.badgeLabel, a.holderName)) refresh(); } }),
+      h("button", { type: "button", class: "link-btn danger-text", text: "Lost", onclick: async () => { if (await takeBackBadge(a.badgeId, a.badgeLabel, a.holderName, "lost")) refresh(); } })) : null));
+  const waiting = holders.reserved.filter((b) => !b.holder?.theirs).map((b) => box(false, "Reserved badge", calloutImage(b.template, b.label), number(b.id, b.label), [
+    note(several ? `Kept for ${visitor.firstName}. Check-in hands them the first of their reserved badges that is free.` : `Kept for ${visitor.firstName}. Hand them this badge at each check-in.`),
+    b.sharedWith.length ? note(`Also kept for ${b.sharedWith.join(", ")}.`) : null,
+    // Given to someone else while they were away: said here, as check-in will ask for another.
+    b.holder ? note(`It is with ${b.holder.name} now.${several ? "" : ` If ${visitor.firstName} arrives before it is back, check-in asks for another badge.`}`, "reserved-badge-out") : null
+  ].filter(Boolean), may ? h("div", { class: "btn-row" }, h("button", { type: "button", class: "link-btn danger-text", text: "Release", onclick: () => release(b) })) : null));
+  const all = [...has, ...waiting];
+  return all.length ? h("div", { class: "badge-callouts" }, all) : null;
+}
+
+/**
+ * The visitor badges kept for a visitor, as a list: where each is now, with Release, and the
+ * button to reserve one (or another). Those who give badges out reserve and release them.
+ */
+function reservedBadgeSection(visitor, holders, refresh) {
+  if (!canReadBadges() || !holders) return null;
+  const { may, reserve, release } = reservedBadgeActions(visitor, refresh);
+  const list = holders.reserved;
+  const where = (b) => [b.holder?.theirs ? "they have it now" : b.holder ? `with ${b.holder.name} now` : "in stock", b.sharedWith.length ? `also kept for ${b.sharedWith.join(", ")}` : null].filter(Boolean).join(" · ");
   return h("div", { class: "stack" },
-    h("h4", { text: "Reserved badge" }),
-    h("p", { class: "row-between" }, h("span", { class: "muted", text: "None. A regular visitor can have a visitor badge kept for them." }),
-      may ? h("button", { type: "button", class: "secondary small", text: "Reserve a badge", onclick: reserve }) : null));
+    h("div", { class: "row-between" }, h("h4", { text: list.length > 1 ? `Reserved badges (${list.length})` : "Reserved badge" }),
+      may ? h("button", { type: "button", class: "secondary small", text: list.length ? "Reserve another badge" : "Reserve a badge", onclick: reserve }) : null),
+    list.length
+      ? h("ul", { class: "plain-list" }, list.map((b) => h("li", { class: "row-between" },
+        h("span", {}, h("a", { href: `#badge/${b.id}`, class: "mono", text: b.label }), h("span", { class: "muted", text: ` · ${where(b)}` })),
+        may ? h("button", { type: "button", class: "link-btn danger-text", text: "Release", onclick: () => release(b) }) : null)))
+      : h("p", { class: "muted", text: "None. A regular visitor can have visitor badges kept for them." }));
 }
 
 /** The visitor's notes, shown even when there are none, and changed in place by those who may. */
@@ -292,6 +322,15 @@ async function openVisitor(id, onChange = () => {}) {
   }
   const { visitor, fields, visits, visitCount } = data;
   const editable = canEditVisitors();
+  // The badges they have now and those kept for them, for those who see badges: shown large at the top.
+  let holders = null;
+  if (canReadBadges()) {
+    try {
+      holders = await api(`/api/badge-holders/visitor/${visitor.id}`);
+    } catch {
+      // The Badges section below says what went wrong.
+    }
+  }
   const linksBlock = h("div", { class: "stack" },
     h("h4", { text: "Companies they visit" }),
     (visitor.companies || []).length
@@ -307,17 +346,18 @@ async function openVisitor(id, onChange = () => {}) {
     h("h4", { text: `Visits${visitCount > visits.length ? ` (latest ${visits.length} of ${visitCount})` : ` (${visitCount})`}` }),
     visitsTable(visits, { showVisitor: false, onChange: () => dlgRef?.finish("refresh") }));
   let dlgRef = null;
-  // A badge reserved for them goes first, large; with none, the offer to reserve one stays further down.
-  const reservedBlock = reservedBadgeSection(visitor, () => dlgRef?.finish("refresh"));
+  // The badge they have now goes first, large, then those reserved for them that they don't
+  // have. Further down, the list of what is kept for them, where one is reserved or released.
+  const redraw = () => dlgRef?.finish("refresh");
   const body = h("div", { class: "detail" },
     h("p", {}, visitorBadges({ ...visitor, clearanceStatus: undefined }), visitor.source === "kiosk" && visitor.verified === false ? h("span", { class: "muted small-text", text: " Registered themselves at a kiosk. Check the details, merge them with an existing visitor, or mark them checked." }) : null),
-    visitor.reservedBadge ? reservedBlock : null,
+    holders ? visitorBadgeCallouts(visitor, holders, redraw) : null,
     recordFacts(fields, visitor, ["firstName", "lastName", "companies", "verified", "blocked", "notes", ...CLEARANCE_KEYS]),
     visitorNotesSection(visitor, () => dlgRef?.finish("refresh")),
     clearanceSection("visitor", visitor, () => dlgRef?.finish("refresh")),
     linksBlock,
-    visitor.reservedBadge ? null : reservedBlock,
-    badgeSection("visitor", visitor.id),
+    reservedBadgeSection(visitor, holders, redraw),
+    badgeSection("visitor", visitor.id, { onChange: redraw, showCurrent: !holders?.current.length }),
     visitsBlock);
   // Their visits not yet ended (one, unless they're at two sites at once).
   const here = visits.filter((v) => !v.checkedOutAt);

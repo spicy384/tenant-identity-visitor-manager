@@ -38,6 +38,8 @@ function cleanIdOther(idType, idOther) {
 /** The time of day at a site ("14:05"), as events keep theirs. */
 const clockAt = (timeZone, ms) => new Intl.DateTimeFormat("en-GB", { timeZone: timeZone || undefined, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(ms);
 
+// The most visitor badges kept for one visitor.
+const MAX_RESERVED = 20;
 // The longest a comment on a visit may be.
 const MAX_COMMENT = 1000;
 
@@ -141,14 +143,25 @@ function createVisitors({ db, fields }) {
     return out;
   }
 
-  const reservedOut = (b) => ({ id: b.id, number: b.number, facilityCode: b.facility_code ?? null, label: badgeLabel(b.facility_code, b.number) });
+  /** A badge kept for visitor `visitorId`: holder is who has it now ({ name, theirs: it is that visitor }), or null in stock. */
+  const reservedOut = (b, visitorId) => ({
+    id: b.id, number: b.number, facilityCode: b.facility_code ?? null, label: badgeLabel(b.facility_code, b.number),
+    holder: b.holder_name ? { name: b.holder_name, theirs: b.holder_kind === "visitor" && b.holder_id === visitorId } : null
+  });
 
   function records(rows, sites) {
     const ids = rows.map((r) => r.id);
     const links = linksFor(ids, sites);
+    // The badges kept for each, in the order reserved, each with whoever has it now, if anyone:
+    // it can be given to someone else while they're away.
     const reserved = new Map();
-    const badgeIds = rows.map((r) => r.reserved_badge_id).filter(Boolean);
-    if (badgeIds.length) for (const b of raw.prepare(`SELECT id, number, facility_code FROM badges WHERE id IN (${inList(badgeIds)})`).all(...badgeIds)) reserved.set(b.id, b);
+    if (ids.length) {
+      for (const b of raw.prepare(`SELECT vr.visitor_id, b.id, b.number, b.facility_code, a.holder_kind, a.holder_id, a.holder_name FROM visitor_reserved_badges vr JOIN badges b ON b.id = vr.badge_id
+        LEFT JOIN badge_assignments a ON a.badge_id = b.id AND a.returned_at IS NULL WHERE vr.visitor_id IN (${inList(ids)}) ORDER BY vr.rowid`).all(...ids)) {
+        if (!reserved.has(b.visitor_id)) reserved.set(b.visitor_id, []);
+        reserved.get(b.visitor_id).push(reservedOut(b, b.visitor_id));
+      }
+    }
     const values = fields.valuesFor("visitor", ids);
     const days = recheckDays(db);
     return rows.map((r) => ({
@@ -158,7 +171,9 @@ function createVisitors({ db, fields }) {
       organization: r.organization,
       visitorType: r.visitor_type || "Guest",
       citizenship: r.citizenship ?? null,
-      reservedBadge: r.reserved_badge_id && reserved.has(r.reserved_badge_id) ? reservedOut(reserved.get(r.reserved_badge_id)) : null,
+      // The visitor badges kept for them; reservedBadge is the first (null with none).
+      reservedBadges: reserved.get(r.id) || [],
+      reservedBadge: reserved.get(r.id)?.[0] ?? null,
       email: r.email,
       phone: r.phone,
       notes: r.notes,
@@ -355,25 +370,33 @@ function createVisitors({ db, fields }) {
   }
 
   /**
-   * Reserves a visitor badge for a regular visitor (null releases it): check-in offers that
-   * badge first. A badge is reserved for one visitor at a time.
+   * Keeps a visitor badge for a visitor: check-in offers it to them first. A visitor may have
+   * several kept for them, and a badge may be kept for several visitors.
    */
-  function setReservedBadge(id, badgeId, { sites = null } = {}) {
+  function reserveBadge(id, badgeId, { sites = null, now = Date.now() } = {}) {
     const existing = get(id, { sites });
     if (!existing) throw fail(404, "No such visitor.");
-    if (badgeId === null) {
-      raw.prepare("UPDATE visitors SET reserved_badge_id = NULL, updated_at = ? WHERE id = ?").run(Date.now(), id);
-      return get(id, { sites });
-    }
     const badge = raw.prepare("SELECT id, number, facility_code, type, status FROM badges WHERE id = ?").get(Number(badgeId));
     if (!badge) throw fail(404, "No such badge.");
     badge.label = badgeLabel(badge.facility_code, badge.number);
     if (badge.type !== "visitor") throw fail(400, `Badge ${badge.label} isn't a visitor badge.`);
     if (badge.status !== "active") throw fail(400, `Badge ${badge.label} is ${badge.status}.`);
-    const other = raw.prepare("SELECT first_name, last_name FROM visitors WHERE reserved_badge_id = ? AND id <> ?").get(badge.id, id);
-    if (other) throw fail(409, `Badge ${badge.label} is reserved for ${other.first_name} ${other.last_name}.`);
-    raw.prepare("UPDATE visitors SET reserved_badge_id = ?, updated_at = ? WHERE id = ?").run(badge.id, Date.now(), id);
+    if (existing.reservedBadges.some((b) => b.id === badge.id)) throw fail(409, `Badge ${badge.label} is reserved for ${existing.firstName} ${existing.lastName} already.`);
+    if (existing.reservedBadges.length >= MAX_RESERVED) throw fail(400, `A visitor has at most ${MAX_RESERVED} badges reserved.`);
+    raw.prepare("INSERT INTO visitor_reserved_badges (visitor_id, badge_id, created_at) VALUES (?, ?, ?)").run(id, badge.id, now);
+    raw.prepare("UPDATE visitors SET updated_at = ? WHERE id = ?").run(now, id);
     return get(id, { sites });
+  }
+
+  /** Stops keeping a badge for a visitor. Returns { visitor, badge } (the badge as it was kept). */
+  function releaseBadge(id, badgeId, { sites = null, now = Date.now() } = {}) {
+    const existing = get(id, { sites });
+    if (!existing) throw fail(404, "No such visitor.");
+    const badge = existing.reservedBadges.find((b) => b.id === Number(badgeId));
+    if (!badge) throw fail(404, "That badge isn't reserved for them.");
+    raw.prepare("DELETE FROM visitor_reserved_badges WHERE visitor_id = ? AND badge_id = ?").run(id, badge.id);
+    raw.prepare("UPDATE visitors SET updated_at = ? WHERE id = ?").run(now, id);
+    return { visitor: get(id, { sites }), badge };
   }
 
   function remove(id) {
@@ -408,11 +431,11 @@ function createVisitors({ db, fields }) {
       raw.prepare(`INSERT OR IGNORE INTO field_values (field_id, record_id, value)
         SELECT v.field_id, ?, v.value FROM field_values v JOIN field_definitions d ON d.id = v.field_id WHERE d.entity = 'visitor' AND d.record_id IS NULL AND v.record_id = ?`).run(intoId, fromId);
       const fill = (a, b) => a ?? b ?? null;
-      const reserved = raw.prepare("SELECT (SELECT reserved_badge_id FROM visitors WHERE id = ?) AS a, (SELECT reserved_badge_id FROM visitors WHERE id = ?) AS b").get(intoId, fromId);
-      raw.prepare("UPDATE visitors SET reserved_badge_id = NULL WHERE id = ?").run(fromId);
+      raw.prepare("INSERT OR IGNORE INTO visitor_reserved_badges (visitor_id, badge_id, created_at) SELECT ?, badge_id, created_at FROM visitor_reserved_badges WHERE visitor_id = ? ORDER BY rowid").run(intoId, fromId);
+      raw.prepare("DELETE FROM visitor_reserved_badges WHERE visitor_id = ?").run(fromId);
       raw.prepare("UPDATE visitors SET added_site_id = coalesce(added_site_id, (SELECT added_site_id FROM visitors WHERE id = ?)) WHERE id = ?").run(fromId, intoId);
-      raw.prepare("UPDATE visitors SET organization = ?, citizenship = ?, reserved_badge_id = ?, email = ?, phone = ?, notes = ?, last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?), blocked = max(blocked, ?), updated_at = ? WHERE id = ?")
-        .run(fill(into.organization, from.organization), fill(into.citizenship, from.citizenship), fill(reserved.a, reserved.b), fill(into.email, from.email), fill(into.phone, from.phone),
+      raw.prepare("UPDATE visitors SET organization = ?, citizenship = ?, email = ?, phone = ?, notes = ?, last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?), blocked = max(blocked, ?), updated_at = ? WHERE id = ?")
+        .run(fill(into.organization, from.organization), fill(into.citizenship, from.citizenship), fill(into.email, from.email), fill(into.phone, from.phone),
           [into.notes, from.notes].filter(Boolean).join("\n\n") || null, intoId, from.blocked ? 1 : 0, Date.now(), intoId);
       // A clearance only the merged-away record has is kept, with when it was validated, when
       // Security merges; anyone else's merge leaves it behind.
@@ -688,6 +711,23 @@ function createVisitors({ db, fields }) {
   }
 
   /**
+   * Cancels a check-in the desk hasn't finished (waiting for their ID to be checked, or for a
+   * badge): the visit is taken off the record, as if they hadn't come, and an event they were
+   * expected at expects them again. A finished check-in can't be cancelled: they are checked
+   * out instead. Returns the visit as it was.
+   */
+  function cancelCheckIn(visitId, { sites = null } = {}) {
+    const visit = getVisit(visitId, { sites });
+    if (!visit || visit.checkedOutAt) throw fail(404, "No such visit in the building.");
+    if (!["id", "badge"].includes(visit.checkinStage)) throw fail(409, `${visit.visitor.firstName} ${visit.visitor.lastName}'s check-in is finished. Check them out instead.`);
+    db.transaction(() => {
+      raw.prepare("DELETE FROM visits WHERE id = ?").run(visit.id);
+      raw.prepare("UPDATE visitors SET last_visit_at = (SELECT max(checked_in_at) FROM visits WHERE visitor_id = ?) WHERE id = ?").run(visit.visitorId, visit.visitorId);
+    });
+    return visit;
+  }
+
+  /**
    * A guest who leaves before a later event of that day begins is expected at it again: the
    * events this visit was noted against that start after `outAt` (the site's time) let go of it,
    * so they show as expected, with the check-in the desk and the kiosk offer.
@@ -804,7 +844,7 @@ function createVisitors({ db, fields }) {
   // last visit, unless something still waits on them: a badge out or kept for them, a clearance
   // request, or an event they are a guest of (from the day given on). The preview and the
   // deleting use the one rule.
-  const LET_GO = `v.verified = 0 AND v.source = 'kiosk' AND v.reserved_badge_id IS NULL
+  const LET_GO = `v.verified = 0 AND v.source = 'kiosk' AND NOT EXISTS (SELECT 1 FROM visitor_reserved_badges r WHERE r.visitor_id = v.id)
     AND NOT EXISTS (SELECT 1 FROM badge_assignments b WHERE b.holder_kind = 'visitor' AND b.holder_id = v.id AND b.returned_at IS NULL)
     AND NOT EXISTS (SELECT 1 FROM clearance_requests q WHERE q.holder_kind = 'visitor' AND q.holder_id = v.id AND q.status = 'open')
     AND NOT EXISTS (SELECT 1 FROM event_guests g JOIN visitor_events e ON e.id = g.event_id WHERE g.visitor_id = v.id AND e.date >= ?)`;
@@ -857,7 +897,7 @@ function createVisitors({ db, fields }) {
   return {
     correctTimes,
     timeChanges,
-    verifyId, setStage, updateVisit, setReservedBadge, companyOfPerson, companyHere, sitesOfContact,
+    verifyId, setStage, updateVisit, cancelCheckIn, reserveBadge, releaseBadge, companyOfPerson, companyHere, sitesOfContact,
     list,
     get,
     findMatch,
@@ -885,4 +925,4 @@ function createVisitors({ db, fields }) {
   };
 }
 
-module.exports = { createVisitors, hostDisplayName, contactIds, MAX_CONTACTS, MAX_COMMENT, clockAt, CHECKOUT_METHODS, VISITOR_TYPES, ID_TYPES, OTHER_ID, cleanIdOther, idText, STAGES };
+module.exports = { createVisitors, hostDisplayName, contactIds, MAX_CONTACTS, MAX_COMMENT, MAX_RESERVED, clockAt, CHECKOUT_METHODS, VISITOR_TYPES, ID_TYPES, OTHER_ID, cleanIdOther, idText, STAGES };

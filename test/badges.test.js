@@ -459,14 +459,21 @@ check("debrief: the badges still held that the new level doesn't cover are named
   const t = Date.now();
   const eventId = Number(old.raw.prepare("INSERT INTO visitor_events (site_id, title, date, company_id, host_id, created_at, updated_at) VALUES (?, 'Before', '2098-01-01', ?, ?, ?, ?)").run(oldSite.id, oldCo.id, oldHost.id, t, t).lastInsertRowid);
   const visitId = Number(old.raw.prepare("INSERT INTO visits (site_id, visitor_id, company_id, company_name, host_id, host_name, checked_in_at) VALUES (?, ?, ?, 'Old Co', ?, 'Otto Old', ?)").run(oldSite.id, oldVisitor.id, oldCo.id, oldHost.id, t).lastInsertRowid);
+  // From before a visitor could have several badges kept: the one on their record.
+  const oldBadge = Number(old.raw.prepare("INSERT INTO badges (number, type, status, created_at, updated_at) VALUES ('OLD-1', 'visitor', 'active', ?, ?)").run(t, t).lastInsertRowid);
+  old.raw.prepare("UPDATE visitors SET reserved_badge_id = ? WHERE id = ?").run(oldBadge, oldVisitor.id);
   old.close();
   const again = openDatabase({ dataDir: dir, key });
   const event = createEvents({ db: again }).get(eventId);
   const visit = createVisitors({ db: again, fields: createFields({ db: again }) }).getVisit(visitId);
   check("contacts: an event from before keeps its host as its one contact", event.hosts.length === 1 && event.hosts[0].name === "Otto Old" && event.hostId === oldHost.id);
   check("contacts: so does a visit from before", visit.hostIds.join() === String(oldHost.id) && visit.hostName === "Otto Old");
+  const againVisitors = createVisitors({ db: again, fields: createFields({ db: again }) });
+  check("reserve: a badge reserved before is the first of the visitor's list", againVisitors.get(oldVisitor.id).reservedBadges.map((b) => b.number).join() === "OLD-1" && againVisitors.get(oldVisitor.id).reservedBadge.number === "OLD-1");
+  againVisitors.releaseBadge(oldVisitor.id, oldBadge);
   again.close();
   const third = openDatabase({ dataDir: dir, key });
+  check("reserve: one released since doesn't come back at the next start", third.raw.prepare("SELECT count(*) AS n FROM visitor_reserved_badges").get().n === 0);
   check("contacts: and starting again adds nothing twice", third.raw.prepare("SELECT count(*) AS n FROM event_contacts").get().n === 1 && third.raw.prepare("SELECT count(*) AS n FROM visit_contacts").get().n === 1);
   third.close();
   fs.rmSync(dir, { recursive: true, force: true });

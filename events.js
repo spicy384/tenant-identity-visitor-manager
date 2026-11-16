@@ -131,7 +131,9 @@ function createEvents({ db, now = Date.now }) {
     const kept = (id, number, code, source) => ({ id, number, facilityCode: code ?? null, label: badgeLabel(code, number), source });
     const rows = raw.prepare(`SELECT g.event_id, g.visitor_id, g.visit_id, g.badge_id, b.number AS badge_number, b.facility_code AS badge_code, rb.id AS reserved_id, rb.number AS reserved_number, rb.facility_code AS reserved_code, v.first_name, v.last_name, v.organization, v.blocked, x.checked_in_at, x.checked_out_at, x.checkin_stage, e.date, e.start_time, e.end_time, s.time_zone
       FROM event_guests g JOIN visitor_events e ON e.id = g.event_id JOIN sites s ON s.id = e.site_id JOIN visitors v ON v.id = g.visitor_id LEFT JOIN visits x ON x.id = g.visit_id LEFT JOIN badges b ON b.id = g.badge_id
-      LEFT JOIN badges rb ON rb.id = v.reserved_badge_id AND rb.status = 'active' AND (NOT EXISTS (SELECT 1 FROM badge_sites bs WHERE bs.badge_id = rb.id) OR EXISTS (SELECT 1 FROM badge_sites bs WHERE bs.badge_id = rb.id AND bs.site_id = e.site_id))
+      LEFT JOIN badges rb ON rb.id = (SELECT k.id FROM visitor_reserved_badges vr JOIN badges k ON k.id = vr.badge_id WHERE vr.visitor_id = g.visitor_id AND k.status = 'active'
+          AND (NOT EXISTS (SELECT 1 FROM badge_sites bs WHERE bs.badge_id = k.id) OR EXISTS (SELECT 1 FROM badge_sites bs WHERE bs.badge_id = k.id AND bs.site_id = e.site_id))
+        ORDER BY vr.rowid LIMIT 1)
       WHERE g.event_id IN (${inList(eventIds)}) ORDER BY v.last_name COLLATE NOCASE, v.first_name COLLATE NOCASE`).all(...eventIds);
     // An event still on today: its end time not reached, or with no times at all (the whole day).
     const stillOn = (r) => r.date === today(r.time_zone, now()) && (r.end_time ? r.end_time > clockAt(r.time_zone, now()) : !r.start_time);
@@ -151,7 +153,7 @@ function createEvents({ db, now = Date.now }) {
         // Arrived, but the desk hasn't finished checking them in (their ID, or a badge).
         checkinStage: r.visit_id && !r.checked_out_at && ["id", "badge"].includes(r.checkin_stage) ? r.checkin_stage : null,
         // The visitor badge kept for them, as check-in will offer it: the one picked for this event,
-        // else (until they arrive) the one reserved on their record, if it can be used at this site.
+        // else (until they arrive) the first reserved on their record that can be used at this site.
         badge: r.badge_id ? kept(r.badge_id, r.badge_number, r.badge_code, "event")
           : !r.visit_id && r.reserved_id ? kept(r.reserved_id, r.reserved_number, r.reserved_code, "reserved") : null,
         arrivedAt: r.checked_in_at ?? null,
@@ -378,8 +380,8 @@ function createEvents({ db, now = Date.now }) {
 
   /**
    * Picks the visitor badge to hand an expected guest when they arrive (null clears it): an
-   * active visitor badge valid at the event's site, not reserved for someone else, and not
-   * picked for another guest that day at that site.
+   * active visitor badge valid at the event's site, and not picked for another guest that day
+   * at that site. One reserved for another visitor can be picked (the route asks first).
    */
   function setGuestBadge(eventId, visitorId, badgeId, { sites = null } = {}) {
     const event = get(eventId, { sites });
@@ -393,8 +395,6 @@ function createEvents({ db, now = Date.now }) {
       if (badge.status !== "active") throw fail(400, `Badge ${badge.number} is ${badge.status}.`);
       const sitesOf = raw.prepare("SELECT site_id FROM badge_sites WHERE badge_id = ?").all(badge.id).map((r) => r.site_id);
       if (sitesOf.length && !sitesOf.includes(event.siteId)) throw fail(400, `Badge ${badge.number} isn't valid at ${event.siteName}.`);
-      const reserved = raw.prepare("SELECT id, first_name, last_name FROM visitors WHERE reserved_badge_id = ?").get(badge.id);
-      if (reserved && reserved.id !== Number(visitorId)) throw fail(409, `Badge ${badge.number} is reserved for ${reserved.first_name} ${reserved.last_name}.`);
       const taken = raw.prepare(`SELECT v.first_name, v.last_name FROM event_guests g JOIN visitor_events e ON e.id = g.event_id JOIN visitors v ON v.id = g.visitor_id
         WHERE g.badge_id = ? AND e.site_id = ? AND e.date = ? AND NOT (g.event_id = ? AND g.visitor_id = ?)`).get(badge.id, event.siteId, event.date, event.id, Number(visitorId));
       if (taken) throw fail(409, `Badge ${badge.number} is picked for ${taken.first_name} ${taken.last_name} that day.`);

@@ -159,24 +159,56 @@ async function main() {
   check("id: once the badge is given, the check-in stands", (await desk.post(`/api/visits/${annVisit.id}/verify-id`, { idType: "CAC" })).status === 409);
   check("badge: a badge that's out is refused", (await desk.post(`/api/visits/${techVisit.id}/badge`, { badgeId: v1.id })).status === 409);
 
-  // --- a badge reserved for a regular -----------------------------------------------------------
-  check("reserve: only a visitor badge", (await desk.put(`/api/visitors/${tech.id}/reserved-badge`, { badgeId: tenantBadge.id })).status === 400);
-  check("reserve: not by a viewer", (await viewer.put(`/api/visitors/${tech.id}/reserved-badge`, { badgeId: v3.id })).status === 403);
-  r = await desk.put(`/api/visitors/${tech.id}/reserved-badge`, { badgeId: v3.id });
-  check("reserve: V-3 is kept for Tom", r.status === 200 && r.data.reservedBadge.number === "V-3" && (await desk.get(`/api/visitors/${tech.id}`)).data.visitor.reservedBadge.number === "V-3");
-  check("reserve: for one visitor at a time", (await desk.put(`/api/visitors/${ann.id}/reserved-badge`, { badgeId: v3.id })).status === 409);
-  check("reserve: nobody else is offered it, or can be given it", !(await desk.get(`/api/badge-holders/visitor/${bare.id}`)).data.available.some((b) => b.number === "V-3")
-    && (await desk.post(`/api/badges/${v3.id}/assign`, { kind: "visitor", holderId: bare.id })).status === 409);
+  // --- badges reserved for a regular -----------------------------------------------------------
+  const reserve = (visitorId, badgeId, c = desk) => c.post(`/api/visitors/${visitorId}/reserved-badges`, { badgeId });
+  const release = (visitorId, badgeId, c = desk) => c.del(`/api/visitors/${visitorId}/reserved-badges/${badgeId}`);
+  const recordOf = async (visitorId) => (await desk.get(`/api/visitors/${visitorId}`)).data.visitor;
+  check("reserve: only a visitor badge", (await reserve(tech.id, tenantBadge.id)).status === 400);
+  check("reserve: not by a viewer", (await reserve(tech.id, v3.id, viewer)).status === 403 && (await release(tech.id, v3.id, viewer)).status === 403);
+  r = await reserve(tech.id, v3.id);
+  check("reserve: V-3 is kept for Tom", r.status === 200 && r.data.reservedBadges.map((b) => b.number).join() === "V-3" && (await recordOf(tech.id)).reservedBadge.number === "V-3" && (await recordOf(tech.id)).reservedBadges.length === 1, JSON.stringify(r.data));
+  check("reserve: not twice for the same visitor", (await reserve(tech.id, v3.id)).status === 409);
+  // Kept for Tom, it can still go to someone else while he is away: offered last, saying whose it is, and nothing more is asked.
+  r = await desk.get(`/api/badge-holders/visitor/${bare.id}`);
+  check("reserve: others are offered it last, told who it is kept for", r.data.available.at(-1)?.number === "V-3" && r.data.available.at(-1).reservedFor === "Tom Tech" && r.data.available.filter((b) => b.reservedFor).length === 1, JSON.stringify(r.data.available.map((b) => [b.number, b.reservedFor])));
+  r = await desk.get(`/api/badge-holders/visitor/${tech.id}`);
+  check("reserve: Tom is offered it first, as his own", r.data.available[0]?.number === "V-3" && r.data.available[0].reservedFor === null && r.data.reserved.map((b) => b.number).join() === "V-3" && r.data.reserved[0].holder === null && r.data.reserved[0].sharedWith.length === 0, JSON.stringify(r.data.reserved));
+  r = await desk.post(`/api/badges/${v3.id}/assign`, { kind: "visitor", holderId: bare.id });
+  check("reserve: given to someone else without a question", r.status === 200 && r.data.badge.holder.name === "Ben Bare" && r.data.badge.reservedFor.map((x) => x.name).join() === "Tom Tech", JSON.stringify(r.data).slice(0, 300));
+  r = (await recordOf(tech.id)).reservedBadge;
+  check("reserve: Tom's record says who has his badge", r.number === "V-3" && r.holder?.name === "Ben Bare" && r.holder.theirs === false, JSON.stringify(r));
+  r = await desk.get(`/api/visits/${techVisit.id}/badge-plan`);
+  check("plan: Tom's badge is out, so check-in asks for another", r.data.assigned?.number === "V-3" && r.data.assigned.problem === "It's with Ben Bare." && r.data.kept.length === 1, JSON.stringify(r.data.assigned));
+  check("reserve: the audit log says it was someone's reserved badge", (await admin.get("/api/audit?action=badge.assign")).data.entries.some((e) => e.target === "V-3" && /to Ben Bare.*; reserved for Tom Tech/.test(e.detail)));
+  await desk.post(`/api/badges/${v3.id}/return`);
+  check("reserve: back in stock, nobody has it", (await recordOf(tech.id)).reservedBadge.holder === null);
   r = await desk.get(`/api/visits/${techVisit.id}/badge-plan`);
   check("plan: Tom is to be handed his reserved badge", r.data.assigned && r.data.assigned.number === "V-3" && r.data.assigned.source === "reserved" && r.data.assigned.problem === null, JSON.stringify(r.data));
   check("plan: his badge is the one on offer to him too", r.data.available.some((b) => b.number === "V-3"));
   r = await desk.post(`/api/visits/${techVisit.id}/badge`, { badgeId: v3.id });
-  check("reserve: handed over, and still his", r.status === 200 && (await desk.get(`/api/visitors/${tech.id}`)).data.visitor.reservedBadge.number === "V-3");
+  check("reserve: handed over, and still his", r.status === 200 && (await recordOf(tech.id)).reservedBadge.number === "V-3" && (await recordOf(tech.id)).reservedBadge.holder.theirs === true);
+  r = await desk.get(`/api/badge-holders/visitor/${tech.id}`);
+  check("holders: the badge he has, and the ones kept for him, each with its image (none set here)", r.data.current.length === 1 && r.data.current[0].template === null && r.data.reserved[0].template === null && r.data.reserved[0].holder.theirs === true);
   await desk.post(`/api/visits/${techVisit.id}/checkout`, { badges: [{ id: v3.id, returned: true }] });
-  check("reserve: back in stock after the visit, still kept for him", !(await desk.get(`/api/badges/${v3.id}`)).data.badge.holder && (await desk.get(`/api/visitors/${tech.id}`)).data.visitor.reservedBadge.number === "V-3");
-  r = await desk.put(`/api/visitors/${tech.id}/reserved-badge`, { badgeId: null });
-  check("reserve: released", r.status === 200 && r.data.reservedBadge === null);
-  check("reserve: in the audit log", (await admin.get("/api/audit?action=visitor.reserved_badge")).data.entries.length === 2);
+  check("reserve: back in stock after the visit, still kept for him", !(await desk.get(`/api/badges/${v3.id}`)).data.badge.holder && (await recordOf(tech.id)).reservedBadge.number === "V-3");
+  // The same badge kept for a second visitor, and a second badge kept for Tom.
+  r = await reserve(ann.id, v3.id);
+  check("reserve: the same badge for a second visitor", r.status === 200 && (await desk.get(`/api/badges/${v3.id}`)).data.badge.reservedFor.map((x) => x.name).join() === "Ann Arrival,Tom Tech", JSON.stringify(r.data));
+  check("reserve: others are told both names", (await desk.get(`/api/badge-holders/visitor/${bare.id}`)).data.available.at(-1).reservedFor === "Ann Arrival and Tom Tech");
+  r = await desk.post(`/api/visitors/${tech.id}/reserved-badges`, { number: "V-2" });
+  check("reserve: a second badge for Tom, by its number as typed", r.status === 200 && r.data.reservedBadges.map((b) => b.number).join() === "V-3,V-2" && r.data.badge.label === "V-2", JSON.stringify(r.data));
+  check("reserve: a number that isn't a badge", (await desk.post(`/api/visitors/${tech.id}/reserved-badges`, { number: "V-404" })).status === 404 && (await desk.post(`/api/visitors/${tech.id}/reserved-badges`, {})).status === 400);
+  r = await desk.get(`/api/badge-holders/visitor/${tech.id}`);
+  check("holders: both kept for him, in the order reserved, the shared one saying with whom", r.data.reserved.map((b) => b.number).join() === "V-3,V-2" && r.data.reserved[0].sharedWith.join() === "Ann Arrival" && r.data.reserved[1].sharedWith.length === 0
+    && r.data.available.slice(0, 2).map((b) => b.number).sort().join() === "V-2,V-3", JSON.stringify(r.data.reserved));
+  r = await release(tech.id, v3.id);
+  check("reserve: one released, the other stays", r.status === 200 && r.data.reservedBadges.map((b) => b.number).join() === "V-2" && (await desk.get(`/api/badges/${v3.id}`)).data.badge.reservedFor.map((x) => x.name).join() === "Ann Arrival");
+  check("reserve: one that isn't theirs can't be released", (await release(tech.id, v3.id)).status === 404);
+  await release(tech.id, v2.id);
+  await release(ann.id, v3.id);
+  check("reserve: all released", (await recordOf(tech.id)).reservedBadge === null && (await recordOf(tech.id)).reservedBadges.length === 0 && (await desk.get(`/api/badges/${v3.id}`)).data.badge.reservedFor.length === 0);
+  r = (await admin.get("/api/audit?action=visitor.reserved_badge")).data.entries;
+  check("reserve: each in the audit log, a shared one saying with whom", r.length === 6 && r.some((e) => e.target === "Ann Arrival" && e.detail === "badge V-3; also kept for Tom Tech") && r.filter((e) => /^released /.test(e.detail)).length === 3, JSON.stringify(r.map((e) => e.detail)));
 
   // --- a badge picked for an expected guest --------------------------------------------------------
   const day = new Date().toISOString().slice(0, 10);
@@ -328,7 +360,11 @@ async function main() {
   const keptEvent = (await desk.post("/api/events", { siteId: site.id, title: "Standing meeting", date: day, companyId: acme.id, hostId: host.id })).data.event;
   const regular = (await desk.post(`/api/events/${keptEvent.id}/guests`, { visitor: { firstName: "Reggie", lastName: "Regular", organization: "Guest Co", citizenship: "US" } })).data.event.guests[0];
   const guestNow = async (c = desk) => (await c.get(`/api/events/${keptEvent.id}`)).data.event.guests[0];
-  const reserveFor = (badgeId) => desk.put(`/api/visitors/${regular.visitorId}/reserved-badge`, { badgeId });
+  // Keeps this badge alone for Reggie: what was kept before is released first.
+  const reserveFor = async (badgeId) => {
+    for (const b of (await recordOf(regular.visitorId)).reservedBadges) await release(regular.visitorId, b.id);
+    return reserve(regular.visitorId, badgeId);
+  };
   const pickKept = (badgeId) => desk.put(`/api/events/${keptEvent.id}/guests/${regular.visitorId}/badge`, { badgeId });
   check("kept: nothing kept, nothing shown", (await guestNow()).badge === null);
   await reserveFor(keptA.id);
@@ -343,7 +379,8 @@ async function main() {
   check("kept: and the audit log says no badge is picked", (await admin.get("/api/audit?action=event.guest_badge")).data.entries[0].detail.endsWith("no badge picked"));
   await reserveFor(vRiver.id);
   check("kept: one that can't be used at the event's site isn't shown, as check-in won't hand it over", (await guestNow()).badge === null);
-  await reserveFor(keptA.id);
+  await reserve(regular.visitorId, keptA.id);
+  check("kept: with several kept for them, the first that can be used there shows", (await guestNow()).badge?.number === "KEPT-A" && (await recordOf(regular.visitorId)).reservedBadges.map((b) => b.number).join() === "VR-9,KEPT-A");
   await desk.post("/api/checkins", { visitorId: regular.visitorId, siteId: site.id, hostId: host.id, purpose: "Standing meeting", idType: "Passport" });
   r = await guestNow();
   check("kept: once they've arrived, the reservation says nothing about this visit", r.status === "here" && r.badge === null, JSON.stringify(r));
@@ -377,7 +414,11 @@ async function main() {
   check("options: a later date lists a badge out now, marked so", opts.later === true && opts.available.find((b) => b.number === "OUT-1")?.outNow === true, names.join());
   check("options: and one free now isn't marked out", opts.available.find((b) => b.number === "KEPT-B")?.outNow === false, names.join());
   check("options: nor one expiring before that date", !names.includes("SOON-1"), names.join());
-  check("options: nor a lost one, one valid elsewhere, or one reserved for someone else", !names.includes("LOST-1") && !names.includes("VR-9") && !names.includes("KEPT-A"), names.join());
+  check("options: nor a lost one, or one valid elsewhere", !names.includes("LOST-1") && !names.includes("VR-9"), names.join());
+  check("options: one reserved for someone else comes last, saying whose", names.at(-1) === "KEPT-A" && opts.available.at(-1).reservedFor === "Reggie Regular" && opts.available.filter((b) => b.reservedFor).length === 1, JSON.stringify(opts.available.map((b) => [b.number, b.reservedFor])));
+  r = await desk.put(`/api/events/${later5.id}/guests/${fran}/badge`, { badgeId: keptA.id });
+  check("options: it can be picked, without a question", r.status === 200 && r.data.event.guests[0].badge.number === "KEPT-A" && r.data.event.guests[0].badge.source === "event", JSON.stringify(r.data).slice(0, 200));
+  check("options: the audit log says whose it is", (await admin.get("/api/audit?action=event.guest_badge")).data.entries[0].detail === "Fran Option: badge KEPT-A; reserved for Reggie Regular");
   check("options: not for a viewer", (await viewer.get(`/api/events/${later5.id}/guests/${fran}/badge-options`)).status === 403);
   check("options: only for a guest of that event", (await desk.get(`/api/events/${later5.id}/guests/${olive.id}/badge-options`)).status === 404);
   r = await desk.put(`/api/events/${later5.id}/guests/${fran}/badge`, { badgeId: outBadge.id });
@@ -467,11 +508,12 @@ async function main() {
   const pickFor = (visitor, badge) => desk.put(`/api/events/${clearedEvent.id}/guests/${visitor.id}/badge`, { badgeId: badge.id });
   r = await pickFor(cleo, ofFsp);
   check("clearance: a higher badge can't be picked ahead for a guest, nor its level named to the desk", r.status === 409 && /doesn't cover badge CL-FSP/.test(r.data.error) && !/TS\/\/SCI/.test(r.data.error), JSON.stringify(r.data));
-  r = await desk.put(`/api/visitors/${cleo.id}/reserved-badge`, { badgeId: ofSci.id });
+  r = await reserve(cleo.id, ofSci.id);
   check("clearance: nor reserved", r.status === 409 && /doesn't cover badge CL-SCI/.test(r.data.error), JSON.stringify(r.data));
   check("clearance: their own level can be picked", (await pickFor(cleo, ofTs)).status === 200);
-  check("clearance: and a lower one reserved", (await desk.put(`/api/visitors/${cleo.id}/reserved-badge`, { badgeId: ofSecret.id })).status === 200);
-  await desk.put(`/api/visitors/${cleo.id}/reserved-badge`, { badgeId: null });
+  check("clearance: and a lower one reserved", (await reserve(cleo.id, ofSecret.id)).status === 200);
+  check("clearance: a lower one kept for them is on offer to them, first, though not at their own level", (await desk.get(`/api/badge-holders/visitor/${cleo.id}`)).data.available[0]?.number === "CL-S");
+  await release(cleo.id, ofSecret.id);
   const nora = await guest("Nora");
   await desk.post(`/api/events/${clearedEvent.id}/guests`, { visitorId: nora.id });
   r = await pickFor(nora, ofSecret);
@@ -566,13 +608,79 @@ async function main() {
   await desk.post(`/api/badges/${outA.id}/return`);
 
   // A corrected time that checks them out says which badges they still have.
+  // (A couple of seconds ahead, within the minute's grace: this clock and the server's can differ by a few milliseconds.)
   quinnVisit = await arrive();
   await desk.post(`/api/visits/${quinnVisit.id}/badge`, { badgeId: outA.id });
-  r = await desk.put(`/api/visits/${quinnVisit.id}/times`, { checkedOutAt: Date.now(), reason: "Left without checking out" });
+  r = await desk.put(`/api/visits/${quinnVisit.id}/times`, { checkedOutAt: Date.now() + 2000, reason: "Left without checking out" });
   check("times: a time that checks them out names the badge they still have", r.status === 200 && r.data.visit.checkedOutAt && r.data.badgesOut.length === 1 && r.data.badgesOut[0].label === "V-OUT-A", JSON.stringify(r.data).slice(0, 300));
-  r = await desk.put(`/api/visits/${quinnVisit.id}/times`, { checkedOutAt: Date.now(), reason: "A minute later than first entered" });
+  r = await desk.put(`/api/visits/${quinnVisit.id}/times`, { checkedOutAt: Date.now() + 9000, reason: "A little later than first entered" });
   check("times: changing a time they had left at asks nothing", r.status === 200 && r.data.badgesOut.length === 0);
   await desk.post(`/api/badges/${outA.id}/return`);
+
+  // --- badges kept for several visitors, and given to someone else while they're away -----------------
+  const rsv = (await security.post("/api/badges", { number: "RSV-1", type: "visitor" })).data.badge;
+  const rsv2 = (await security.post("/api/badges", { number: "RSV-2", type: "visitor" })).data.badge;
+  const rhea = (await desk.post("/api/visitors", { firstName: "Rhea", lastName: "Regular", organization: "Weekly Co", citizenship: "US" })).data.visitor;
+  const rory = (await desk.post("/api/visitors", { firstName: "Rory", lastName: "Regular", organization: "Weekly Co", citizenship: "US" })).data.visitor;
+  check("shared: RSV-1 kept for Rhea and for Rory, RSV-2 for Rhea too", (await reserve(rhea.id, rsv.id)).status === 200 && (await reserve(rory.id, rsv.id)).status === 200 && (await reserve(rhea.id, rsv2.id)).status === 200
+    && (await recordOf(rhea.id)).reservedBadges.map((b) => b.number).join() === "RSV-1,RSV-2" && (await recordOf(rory.id)).reservedBadges.map((b) => b.number).join() === "RSV-1");
+  const planOf = async (visit) => (await desk.get(`/api/visits/${visit.id}/badge-plan`)).data;
+  const checkInOf = async (visitor) => (await desk.post("/api/checkins", { visitorId: visitor.id, siteId: site.id, hostId: host.id, purpose: "Weekly", idType: "Passport" })).data.visit;
+  quinnVisit = await arrive();
+  r = await planOf(quinnVisit);
+  check("shared: on offer to someone else, last, saying whose they are", r.available.slice(-2).map((b) => `${b.number}:${b.reservedFor}`).join() === "RSV-1:Rhea Regular and Rory Regular,RSV-2:Rhea Regular" && r.kept.length === 0 && r.assigned === null, JSON.stringify(r.available.slice(-2)));
+  r = await desk.post(`/api/visits/${quinnVisit.id}/badge`, { number: "RSV-1" });
+  check("shared: typed in at check-in for someone else, given without a question", r.status === 200 && r.data.code === undefined && r.data.badge.holder.name === "Quinn Quits" && (await desk.get(`/api/visits/${quinnVisit.id}`)).data.visit.checkinStage === "done", JSON.stringify(r.data).slice(0, 300));
+  check("shared: still kept for Rhea, whose record says who has it", (await recordOf(rhea.id)).reservedBadges[0].holder.name === "Quinn Quits" && (await recordOf(rhea.id)).reservedBadges[1].holder === null);
+  const rheaVisit = await checkInOf(rhea);
+  r = await planOf(rheaVisit);
+  check("shared: Rhea arrives while one is out, and is handed the other kept for her", r.assigned.number === "RSV-2" && r.assigned.problem === null && r.kept.map((k) => `${k.number}:${k.problem}`).join() === "RSV-1:It's with Quinn Quits.,RSV-2:null", JSON.stringify(r.kept));
+  let roryVisit = await checkInOf(rory);
+  r = await planOf(roryVisit);
+  check("shared: Rory arrives while his only one is out, and check-in says so", r.assigned.number === "RSV-1" && r.assigned.problem === "It's with Quinn Quits." && r.kept.length === 1);
+  await leave({ badges: [{ id: rsv.id, returned: true }] });
+  check("shared: back, it is the first to hand either of them", (await planOf(rheaVisit)).assigned.number === "RSV-1" && (await planOf(roryVisit)).assigned.problem === null);
+  check("shared: Rhea is handed it", (await desk.post(`/api/visits/${rheaVisit.id}/badge`, { badgeId: rsv.id })).status === 200);
+  check("shared: so Rory, for whom it is kept too, gets another", (await planOf(roryVisit)).assigned.problem === "It's with Rhea Regular.");
+  r = (await desk.get(`/api/badge-holders/visitor/${rhea.id}`)).data;
+  check("shared: Rhea's badges say which she has, and with whom one is shared", r.current[0].badgeLabel === "RSV-1" && r.reserved[0].holder.theirs === true && r.reserved[0].sharedWith.join() === "Rory Regular" && r.reserved[1].sharedWith.length === 0);
+  check("shared: the audit log says whose it was when it went to someone else", (await admin.get("/api/audit?action=badge.assign")).data.entries.some((e) => e.target === "RSV-1" && /to Quinn Quits.*; reserved for Rhea Regular and Rory Regular/.test(e.detail))
+    && !(await admin.get("/api/audit?action=badge.assign")).data.entries.some((e) => e.target === "RSV-1" && /to Rhea Regular.*reserved for/.test(e.detail)));
+  await desk.post(`/api/visits/${rheaVisit.id}/checkout`, { badges: [{ id: rsv.id, returned: true }] });
+
+  // --- cancelling a check-in that isn't finished -------------------------------------------------------
+  const cancel = (visit, body, c = desk) => c.post(`/api/visits/${visit.id}/cancel-checkin`, body);
+  check("cancel: not by a viewer", (await cancel(roryVisit, {}, viewer)).status === 403);
+  r = await cancel(roryVisit, { reason: "  Wrong   person  " });
+  check("cancel: a check-in waiting for its badge is taken off the record", r.status === 200 && (await desk.get(`/api/visits/${roryVisit.id}`)).status === 404 && (await desk.get(`/api/visits?visitorId=${rory.id}`)).data.total === 0 && !(await recordOf(rory.id)).lastVisitAt);
+  check("cancel: nobody is left waiting at the desk", !(await desk.get("/api/visits/badge-needed")).data.visits.some((v) => v.visitorId === rory.id));
+  check("cancel: the audit log keeps who was turned away, and why", (await admin.get("/api/audit?action=visit.checkin_canceled")).data.entries.some((e) => e.target === "Rory Regular" && /Acme Corp, contact Hana Host; started by desk, no badge given\. Reason: Wrong person$/.test(e.detail)), JSON.stringify((await admin.get("/api/audit?action=visit.checkin_canceled")).data.entries.map((e) => e.detail)));
+  check("cancel: not twice", (await cancel(roryVisit)).status === 404);
+  // An expected guest whose check-in is cancelled is expected again.
+  const cancelEvent = (await desk.post("/api/events", { siteId: site.id, title: "Cancelled arrival", date: day, companyId: acme.id, hostId: host.id })).data.event;
+  await desk.post(`/api/events/${cancelEvent.id}/guests`, { visitorId: rory.id });
+  const roryAt = async () => (await desk.get(`/api/events/${cancelEvent.id}`)).data.event.guests[0];
+  roryVisit = await checkInOf(rory);
+  check("cancel: arrived for an event, waiting for a badge", (await roryAt()).status === "here" && (await roryAt()).checkinStage === "badge");
+  await cancel(roryVisit);
+  check("cancel: expected again once the check-in is cancelled", (await roryAt()).status === "expected" && (await roryAt()).visitId === null);
+  await desk.del(`/api/events/${cancelEvent.id}`);
+  // A finished check-in is a visit: they are checked out, not cancelled.
+  quinnVisit = await arrive();
+  await desk.post(`/api/visits/${quinnVisit.id}/badge-not-needed`);
+  r = await cancel(quinnVisit);
+  check("cancel: not once the check-in is finished", r.status === 409 && /Check them out instead/.test(r.data.error) && (await desk.get(`/api/visits/${quinnVisit.id}`)).status === 200);
+  // From the visit log, for someone still here: a badge kept for others, without a question.
+  r = await desk.post(`/api/visits/${quinnVisit.id}/badge-record`, { number: "RSV-1" });
+  check("shared: entered from the visit log for someone else", r.status === 200 && r.data.recorded === false && r.data.badge.holder.name === "Quinn Quits");
+  await leave({ badges: [{ id: rsv.id, returned: true }] });
+  // Lent to a tenant who forgot theirs.
+  r = await desk.post(`/api/badges/${rsv.id}/assign`, { kind: "person", holderId: host.id });
+  check("shared: lent to a tenant for the day", r.status === 200 && r.data.badge.holder.temporary === true);
+  await desk.post(`/api/badges/${rsv.id}/return`);
+  await release(rhea.id, rsv.id);
+  await release(rhea.id, rsv2.id);
+  await release(rory.id, rsv.id);
 
   // --- comments on a visit ---------------------------------------------------------------------------
   const noted = (await desk.get(`/api/visits?visitorId=${quinn.id}`)).data.visits[0];

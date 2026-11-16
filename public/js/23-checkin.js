@@ -220,7 +220,7 @@ function checkInWizard(start = {}) {
       const dir = shownAt < 0 ? 0 : Math.sign(at - shownAt);
       shownAt = at;
       // Confirm and ID, once passed, can be gone back to until the badge is given.
-      const back = { details: () => detailsStep(), id: () => idStep() };
+      const back = { details: () => detailsStep({ editing: true }), id: () => idStep() };
       stepper.replaceChildren(...CHECKIN_STEPS.map((s, i) => {
         const label = i < at && back[s.key] && w.visitor && w.visit?.checkinStage !== "done"
           ? h("button", { type: "button", class: "wizard-step-link", title: `Back to ${s.label}`, onclick: back[s.key] }, s.label)
@@ -235,6 +235,30 @@ function checkInWizard(start = {}) {
       const first = body.querySelector("input:not([type=radio]):not([type=checkbox]):not([hidden]), select");
       if (first) setTimeout(() => first.focus(), 50);
     }
+    /**
+     * Cancel check-in, on every step. Before anything is on record it just closes. Once their
+     * visit has begun (a kiosk arrival, or past the ID step) and until it is finished, the visit
+     * is taken off the record, once the desk says so.
+     */
+    const cancelBtn = () => {
+      const b = btn("Cancel check-in", "link-btn danger-text cancel-checkin", async () => {
+        if (!w.visit || !["id", "badge"].includes(w.visit.checkinStage)) return finish();
+        const reason = h("input", { type: "text", maxlength: "300", placeholder: "Wrong person, no ID with them, changed their mind…", "aria-label": "Reason (optional)" });
+        const ok = await openDialog({
+          title: `Cancel ${name()}'s check-in?`,
+          body: h("div", { class: "stack" },
+            h("p", { text: `${w.visit.kioskId ? `${w.visitor.firstName} checked in at ${w.visit.kioskName || "a kiosk"}. ` : ""}They won't be shown as in the building, and this visit is taken off the visit log. The audit log keeps that it was canceled, and by whom.` }),
+            h("label", {}, h("span", { text: "Reason (optional)" }), reason)),
+          actions: [{ label: "Cancel the check-in", kind: "danger", value: true }, { label: "Keep checking in", kind: "primary", value: false }]
+        });
+        if (!ok) return null;
+        await api(`/api/visits/${w.visit.id}/cancel-checkin`, { method: "POST", body: { reason: reason.value } });
+        w.changed = true;
+        toast(`${name()}'s check-in canceled.`);
+        return finish();
+      });
+      return b;
+    };
     const name = () => visitorName(w.visitor);
     const siteName = () => usable.find((s) => String(s.id) === String(w.siteId))?.name || "";
 
@@ -261,7 +285,7 @@ function checkInWizard(start = {}) {
       search.addEventListener("input", run);
       page("find", "Who is checking in?", h("div", { class: "stack" },
         h("p", { class: "muted", text: "Find them in the visitor list. If they aren't on it, add them." }), search, results),
-      [btn("Cancel", "secondary", finish), btn("Add a new visitor", "primary", () => newStep(search.value.trim()))]);
+      [cancelBtn(), btn("Add a new visitor", "primary", () => newStep(search.value.trim()))]);
     }
 
     async function pick(id) {
@@ -300,7 +324,7 @@ function checkInWizard(start = {}) {
         h("h4", { class: "form-heading", text: "Who they're visiting" }),
         site ? h("label", { class: "half" }, h("span", { text: "Site" }), site) : null,
         contact.node),
-      [btn("Back", "secondary", findStep), btn("Add and continue", "primary", async () => {
+      [cancelBtn(), btn("Back", "secondary", findStep), btn("Add and continue", "primary", async () => {
         if (!first.value.trim() || !last.value.trim()) throw new Error("Enter their first and last name.");
         if (f.org && !f.org.value.trim()) throw new Error("Enter their company.");
         const problem = f.citizen?.check();
@@ -329,61 +353,121 @@ function checkInWizard(start = {}) {
     }
 
     // --- 2. confirm who they are and who they visit ----------------------------------------------
+    //
+    // What is on record is shown to read, not as boxes to fill in: only what check-in still needs
+    // (their company, their citizenship, the site, a point of contact, the purpose) is asked for,
+    // at the top. Edit opens all of it to change.
 
-    function detailsStep() {
+    function detailsStep({ editing = false } = {}) {
       const v = w.visitor;
-      const f = visitorFields(v);
-      const site = siteChooser();
       // Who they usually visit here, when nothing says otherwise.
       if (!w.hostId && !w.event && !w.visit) {
         const usual = (v.companies || []).find((c) => c.hostId);
         if (usual) Object.assign(w, { companyId: usual.companyId, companyName: usual.companyName, hostId: usual.hostId, hostIds: [usual.hostId], hostName: usual.hostName });
       }
-      const contact = contactPicker({ siteId: w.siteId, hostIds: w.hostIds, initial: { companyId: w.companyId, companyName: w.companyName, hostName: w.hostName }, onSite: (id) => { w.siteId = id; if (site) site.value = id; } });
-      if (site) site.addEventListener("change", () => { w.siteId = site.value; contact.setSite(site.value); });
-      const purpose = h("input", { type: "text", value: w.purpose, maxlength: "200", placeholder: "Meeting, interview, repair…", "aria-label": "Purpose of the visit" });
+      // What was typed here before Edit was pressed stays typed.
+      const f = visitorFields({ ...v, ...(w.draft || {}) });
+      const known = { org: Boolean(v.organization), citizen: Boolean(v.citizenship), site: Boolean(w.siteId), contact: w.hostIds.length > 0, purpose: Boolean(w.purpose) };
+      // Asked for: everything when editing, else only what is missing.
+      const ask = (key) => editing || !known[key];
+      const org = ask("org") ? f.org : null;
+      const type = editing ? f.type : null;
+      const citizen = ask("citizen") ? f.citizen : null;
+      const site = ask("site") ? siteChooser() : null;
+      const contact = ask("contact") ? contactPicker({ siteId: w.siteId, hostIds: w.hostIds, initial: { companyId: w.companyId, companyName: w.companyName, hostName: w.hostName }, onSite: (id) => { w.siteId = id; if (site) site.value = id; } }) : null;
+      if (site) site.addEventListener("change", () => { w.siteId = site.value; contact?.setSite(site.value); });
+      const purpose = ask("purpose") ? h("input", { type: "text", value: w.purpose, maxlength: "200", placeholder: "Meeting, interview, repair…", "aria-label": "Purpose of the visit" }) : null;
       const override = h("input", { type: "checkbox" });
       override.checked = w.overrideBlock;
       const fact = (label, value) => (value ? [h("dt", { text: label }), h("dd", { text: value })] : null);
-      page("details", `Confirm ${name()}'s details`, h("div", { class: "form-grid stack" },
+      // Missing, and not this account's to fill in.
+      const stuck = [!known.org && !f.org ? `${name()}'s company isn't on record, and this account can't fill it in.` : null,
+        !known.citizen && !f.citizen ? `${name()}'s citizenship isn't on record, and this account can't fill it in.` : null].filter(Boolean);
+
+      /** Keeps what is typed, for the step drawn again (Edit). */
+      const stash = () => {
+        w.draft = { ...(f.org ? { organization: f.org.value.trim() } : {}), ...(f.type ? { visitorType: f.type.value } : {}), ...(f.citizen ? { citizenship: f.citizen.value() } : {}) };
+        if (purpose) w.purpose = purpose.value.trim();
+        if (contact) Object.assign(w, contact.value());
+        w.overrideBlock = override.checked;
+      };
+
+      const alerts = [
         v.blocked ? h("div", { class: "full-row message error" }, h("strong", { text: `${name()} is blocked.` }), " Only let them in if a manager has agreed. ",
           !w.visit ? h("label", { class: "check-row" }, override, h("span", { text: "A manager has agreed to let them in" })) : null) : null,
-        w.visit ? h("p", { class: "full-row muted", text: `Checked in at ${w.visit.kioskName || "the kiosk"} ${agoText(w.visit.checkedInAt)}.` }) : null,
-        h("dl", { class: "full-row facts inline-facts" }, fact("Name", name()),
-          !f.org ? fact("Company", v.organization) : null, !f.type ? fact("Visitor type", v.visitorType) : null, !f.citizen ? fact("Citizenship", citizenshipText(v.citizenship)) : null),
-        f.org ? h("label", { class: "half" }, h("span", { text: "Company *" }), f.org) : null,
-        f.type ? h("label", { class: "half" }, h("span", { text: "Visitor type" }), f.type) : null,
-        f.citizen ? f.citizen.node : null,
-        h("h4", { class: "form-heading", text: "Their visit" }),
-        site ? h("label", { class: "half" }, h("span", { text: "Site" }), site) : null,
-        contact.node,
-        h("label", { class: "full-row" }, h("span", { text: "Purpose of the visit *" }), purpose)),
-      [w.visit ? btn("Close", "secondary", finish) : btn("Back", "secondary", findStep), btn("Confirm", "primary", async () => {
-        const changes = {};
-        if (f.org) {
-          if (!f.org.value.trim()) throw new Error("Enter their company.");
-          if (f.org.value.trim() !== (v.organization || "")) changes.organization = f.org.value.trim();
-        } else if (!v.organization) throw new Error(`${name()}'s company isn't on record, and this account can't fill it in.`);
-        if (f.type && f.type.value !== v.visitorType) changes.visitorType = f.type.value;
-        if (f.citizen) {
-          const problem = f.citizen.check();
-          if (problem) throw new Error(problem);
-          if (f.citizen.value() !== (v.citizenship || null)) changes.citizenship = f.citizen.value();
-        } else if (!v.citizenship) throw new Error(`${name()}'s citizenship isn't on record, and this account can't fill it in.`);
-        if (!w.siteId) throw new Error("Choose the site.");
-        const c = contact.value();
-        if (!c.hostId) throw new Error("Choose their point of contact.");
-        if (!purpose.value.trim()) throw new Error("Enter the purpose of the visit.");
-        if (v.blocked && !w.visit && !override.checked) throw new Error(`${name()} is blocked. Tick the box once a manager has agreed.`);
-        if (Object.keys(changes).length) {
-          w.visitor = (await api(`/api/visitors/${v.id}`, { method: "PUT", body: changes })).visitor;
-          w.changed = true;
+        w.visit ? h("p", { class: "full-row muted", text: `Checked in at ${w.visit.kioskName || "the kiosk"} ${agoText(w.visit.checkedInAt)}.` }) : null
+      ];
+      const orgBox = org ? h("label", { class: "half" }, h("span", { text: "Company *" }), org) : null;
+      const siteBox = site ? h("label", { class: "half" }, h("span", { text: "Site *" }), site) : null;
+      const purposeBox = purpose ? h("label", { class: "full-row" }, h("span", { text: "Purpose of the visit *" }), purpose) : null;
+
+      let content;
+      if (editing) {
+        content = h("div", { class: "form-grid stack" }, alerts,
+          h("dl", { class: "full-row facts inline-facts" }, fact("Name", name()),
+            !f.org ? fact("Company", v.organization) : null, !f.type ? fact("Visitor type", v.visitorType) : null, !f.citizen ? fact("Citizenship", citizenshipText(v.citizenship)) : null),
+          orgBox,
+          type ? h("label", { class: "half" }, h("span", { text: "Visitor type" }), type) : null,
+          citizen ? citizen.node : null,
+          h("h4", { class: "form-heading", text: "Their visit" }),
+          siteBox, contact.node, purposeBox);
+      } else {
+        // Their points of contact, to read: names at once, then how to reach each (to say who has arrived).
+        const poc = h("dd", { text: w.hostName || "" });
+        if (known.contact) {
+          Promise.all(w.hostIds.map((id) => api(`/api/contacts/${id}`).then((r) => r.person).catch(() => null))).then((people) => {
+            const found = people.filter(Boolean);
+            if (!found.length) return;
+            const phone = (n) => h("a", { href: `tel:${String(n).replace(/[^\d+]/g, "")}`, text: n });
+            poc.replaceChildren(...found.map((p) => h("div", {}, h("span", { text: personName(p) }), [p.workPhone, p.mobile].filter(Boolean).flatMap((n) => [h("span", { class: "muted", text: " · " }), phone(n)]))));
+          });
         }
-        Object.assign(w, c);
-        w.purpose = purpose.value.trim();
-        w.overrideBlock = override.checked;
-        idStep();
-      })]);
+        const needed = [orgBox, citizen ? citizen.node : null, siteBox, contact ? contact.node : null, purposeBox].filter(Boolean);
+        content = h("div", { class: "form-grid stack" }, alerts,
+          needed.length || stuck.length ? h("div", { class: "full-row checkin-needed", role: "group", "aria-label": "Needed to check them in" },
+            h("h4", { class: "checkin-needed-title", text: needed.length + stuck.length === 1 ? "One thing is needed to check them in" : "Needed to check them in" }),
+            stuck.map((text) => h("p", { class: "message error", text })),
+            needed.length ? h("div", { class: "form-grid stack" }, needed) : null) : null,
+          h("div", { class: "full-row checkin-summary" },
+            h("div", { class: "row-between" }, h("h4", { text: needed.length || stuck.length ? "On record" : "Check these are right" }),
+              h("button", { type: "button", class: "secondary small", text: "Edit", onclick: () => { stash(); detailsStep({ editing: true }); } })),
+            h("dl", { class: "facts checkin-facts" }, fact("Name", name()),
+              known.org ? fact("Company", v.organization) : null, fact("Visitor type", v.visitorType), known.citizen ? fact("Citizenship", citizenshipText(v.citizenship)) : null,
+              known.contact ? fact("Visiting", w.companyName) : null,
+              known.contact ? [h("dt", { text: w.hostIds.length > 1 ? "Points of contact" : "Point of contact" }), poc] : null,
+              known.purpose ? fact("Purpose", w.purpose) : null,
+              multiSite() && known.site ? fact("Site", siteName()) : null)));
+      }
+
+      page("details", `Confirm ${name()}'s details`, content,
+        [cancelBtn(), w.visit ? btn("Close", "secondary", finish) : btn("Back", "secondary", () => { w.draft = null; findStep(); }), btn("Confirm", "primary", async () => {
+          const changes = {};
+          if (f.org) {
+            if (!f.org.value.trim()) throw new Error("Enter their company.");
+            if (f.org.value.trim() !== (v.organization || "")) changes.organization = f.org.value.trim();
+          } else if (!v.organization) throw new Error(`${name()}'s company isn't on record, and this account can't fill it in.`);
+          if (f.type && f.type.value !== v.visitorType) changes.visitorType = f.type.value;
+          if (f.citizen) {
+            const problem = f.citizen.check();
+            if (problem) throw new Error(problem);
+            if (f.citizen.value() !== (v.citizenship || null)) changes.citizenship = f.citizen.value();
+          } else if (!v.citizenship) throw new Error(`${name()}'s citizenship isn't on record, and this account can't fill it in.`);
+          if (!w.siteId) throw new Error("Choose the site.");
+          const c = contact ? contact.value() : { companyId: w.companyId, companyName: w.companyName, hostId: w.hostId, hostIds: w.hostIds, hostName: w.hostName };
+          if (!c.hostId) throw new Error("Choose their point of contact.");
+          const why = purpose ? purpose.value.trim() : w.purpose;
+          if (!why) throw new Error("Enter the purpose of the visit.");
+          if (v.blocked && !w.visit && !override.checked) throw new Error(`${name()} is blocked. Tick the box once a manager has agreed.`);
+          if (Object.keys(changes).length) {
+            w.visitor = (await api(`/api/visitors/${v.id}`, { method: "PUT", body: changes })).visitor;
+            w.changed = true;
+          }
+          Object.assign(w, c);
+          w.purpose = why;
+          w.overrideBlock = override.checked;
+          w.draft = null;
+          idStep();
+        })]);
     }
 
     // --- 3. check their ID ---------------------------------------------------------------------
@@ -415,11 +499,11 @@ function checkInWizard(start = {}) {
             fact("Company", v.organization), fact("Visitor type", v.visitorType), fact("Citizenship", citizenshipText(v.citizenship)),
             fact("Visiting", w.companyName), fact(w.hostIds.length > 1 ? "Points of contact" : "Point of contact", w.hostName),
             fact("Purpose", w.purpose), multiSite() ? fact("Site", siteName()) : null),
-          h("button", { type: "button", class: "link-btn small-text", text: "Change these details", onclick: detailsStep })),
+          h("button", { type: "button", class: "link-btn small-text", text: "Change these details", onclick: () => detailsStep({ editing: true }) })),
         h("fieldset", { class: "id-types" }, h("legend", { text: "Which ID did they show?" }), types),
         otherBox,
         h("label", { class: "check-row id-match" }, match, h("span", { text: `The name and photo on the ID match ${name()}` }))),
-      [btn("Back", "secondary", detailsStep), btn("ID confirmed", "primary", async () => {
+      [cancelBtn(), btn("Back", "secondary", () => detailsStep({ editing: true })), btn("ID confirmed", "primary", async () => {
         const idType = body.querySelector(`input[name=${idName}]:checked`)?.value;
         if (!idType) throw new Error("Choose the ID they showed.");
         const idOther = idType === otherId ? otherText.value.trim() : null;
@@ -465,6 +549,7 @@ function checkInWizard(start = {}) {
       };
       const content = h("div", { class: "stack" });
       const a = plan.assigned;
+      const kept = plan.kept || (a ? [a] : []);
       const why = { event: `Picked for ${a?.eventTitle || "the event they're expected at"}.`, reserved: "Reserved for them." };
 
       // The number typed in, checked against the badges: a visitor badge, valid here, they may hold.
@@ -477,7 +562,7 @@ function checkInWizard(start = {}) {
       });
       for (const input of [code, number]) input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); issue.click(); } });
       const kinds = [...new Set(plan.available.map((b) => badgeLevelText(b)).filter(Boolean))];
-      const free = h("div", { class: "free-badges", hidden: true }, plan.available.map((b) => h("button", { type: "button", class: "chip mono", text: b.label, onclick: () => { code.value = b.facilityCode || ""; number.value = b.number; number.focus(); } })));
+      const free = h("div", { class: "free-badges", hidden: true }, plan.available.map((b) => h("button", { type: "button", class: "chip mono", text: b.reservedFor ? `${b.label} (reserved)` : b.label, title: b.reservedFor ? `Reserved for ${b.reservedFor}` : null, onclick: () => { code.value = b.facilityCode || ""; number.value = b.number; number.focus(); } })));
       const entry = h("div", { class: "stack badge-entry" },
         h("div", { class: "badge-give" }, suggestedBadge(plan.suggested),
           h("div", { class: "stack" },
@@ -500,11 +585,17 @@ function checkInWizard(start = {}) {
             h("p", { class: "badge-assigned-number mono", text: a.label }),
             h("p", { class: "muted small-text", text: why[a.source] || "" }),
             h("div", { class: "btn-row" }, handed))));
+        // Others kept for them: one that is free can be handed over instead; one that isn't says why.
+        const alsoFree = kept.filter((k) => k.id !== a.id && !k.problem);
+        const alsoOut = kept.filter((k) => k.id !== a.id && k.problem);
+        if (alsoFree.length) content.append(h("div", { class: "btn-row small-text" }, h("span", { class: "muted", text: "Also kept for them:" }), alsoFree.map((k) => btn(`Hand over ${k.label} instead`, "secondary small", () => give({ badgeId: k.id })))));
+        if (alsoOut.length) content.append(h("p", { class: "muted small-text", text: alsoOut.map((k) => `Badge ${k.label} is kept for them too, but can't be given: ${k.problem}`).join(" ") }));
         const other = h("button", { type: "button", class: "link-btn", text: "Can't find it? Issue a different badge", onclick: () => { entry.hidden = false; other.hidden = true; number.focus(); } });
         entry.hidden = true;
         content.append(other, entry);
       } else {
-        if (a?.problem) content.append(h("p", { class: "message warn", text: `Badge ${a.label} was kept for them (${why[a.source].replace(/\.$/, "").toLowerCase()}), but it can't be given: ${a.problem} Issue another.` }));
+        // None kept for them can be given: each says why, and the desk issues another.
+        for (const k of kept.filter((x) => x.problem)) content.append(h("p", { class: "message warn", text: `Badge ${k.label} was kept for them (${why[k.source].replace(/\.$/, "").toLowerCase()}), but it can't be given: ${k.problem} Issue another.` }));
         if (plan.holding.length) {
           const held = plan.holding[0];
           content.append(h("div", { class: "badge-assigned compact" },
@@ -525,6 +616,7 @@ function checkInWizard(start = {}) {
         }
       }
       page("badge", `${name()}'s visitor badge`, content, [
+        cancelBtn(),
         btn("Back", "secondary", idStep),
         btn("Close", "secondary", finish),
         btn("No badge needed", "secondary", async () => {
@@ -544,7 +636,7 @@ function checkInWizard(start = {}) {
         h("div", { class: "tick", "aria-hidden": "true" }, "✓"),
         h("p", { text })),
       [btn("Check in someone else", "secondary", () => {
-        Object.assign(w, { visitor: null, visit: null, event: null, companyId: null, companyName: null, hostId: null, hostIds: [], hostName: null, purpose: "", overrideBlock: false });
+        Object.assign(w, { visitor: null, visit: null, event: null, companyId: null, companyName: null, hostId: null, hostIds: [], hostName: null, purpose: "", overrideBlock: false, draft: null });
         findStep();
       }), btn("Close", "primary", finish)]);
       stepper.querySelectorAll("li").forEach((li) => { li.className = "done"; });

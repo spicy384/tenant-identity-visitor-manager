@@ -47,8 +47,8 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
   const fullName = (v) => `${v.firstName} ${v.lastName}`;
 
   function visitorOut(ctx, record, list) {
-    // The badge kept for them, to those who see badges.
-    const reserved = access.canReadBadges(ctx) ? { reservedBadge: record.reservedBadge } : {};
+    // The badges kept for them (reservedBadge: the first), to those who see badges.
+    const reserved = access.canReadBadges(ctx) ? { reservedBadges: record.reservedBadges, reservedBadge: record.reservedBadge } : {};
     return { ...access.project(ctx, "visitor", record, list), source: record.source, createdAt: record.createdAt, ...reserved };
   }
 
@@ -372,6 +372,18 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
     const visit = visitors.verifyId(before.id, { idType: body.idType, idOther, by: staffName(req) });
     auditFrom(req, "visit.id_checked", fullName(visitor), `${visit.siteName}: ${idText(body.idType, idOther)}${before.checkinStage === "badge" ? `; checked again (was ${idText(before.idType, before.idOther)})` : ""}`);
     res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0] });
+  });
+
+  /**
+   * Cancels a check-in the desk hasn't finished (the visitor is waiting for their ID to be
+   * checked, or for a badge): { reason (optional) }. The visit comes off the record; the audit
+   * log keeps who cancelled it, and why.
+   */
+  router.post("/api/visits/:id/cancel-checkin", editVisitors, (req, res) => {
+    const visit = visitors.cancelCheckIn(positiveInt(req.params.id), { sites: req.ctx.sites });
+    const reason = String(req.body?.reason ?? "").trim().replace(/\s+/g, " ").slice(0, 300);
+    auditFrom(req, "visit.checkin_canceled", fullName(visit.visitor), `${visit.siteName}: ${visit.companyName}${visit.hostName ? `, contact ${visit.hostName}` : ""}; ${visit.kioskId ? `checked in at ${visit.kioskName || "a kiosk"}` : `started by ${visit.checkedInBy || "staff"}`}, ${visit.checkinStage === "id" ? "ID not checked" : "no badge given"}${reason ? `. Reason: ${reason}` : ""}`);
+    res.json({ ok: true });
   });
 
   /**

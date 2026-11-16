@@ -206,7 +206,7 @@ function guestBadgeCell(e, g) {
       const exact = (b) => b.label.toLowerCase() === q || b.number.toLowerCase() === q;
       const badges = q ? free.filter((b) => b.label.toLowerCase().includes(q)).sort((a, b) => exact(b) - exact(a)) : free;
       results.replaceChildren(...badges.slice(0, LIST_MAX).map((b) => h("button", { type: "button", class: `pick-row${b.id === g.badge?.id ? " is-active" : ""}`, onclick: () => choose(b) },
-        h("strong", { class: "mono", text: b.label }), " ", h("span", { class: "muted small-text", text: badgeLevelText(b) }), b.outNow ? h("span", { class: "badge warn", text: "Out now" }) : null)));
+        h("strong", { class: "mono", text: b.label }), " ", h("span", { class: "muted small-text", text: badgeLevelText(b) }), b.outNow ? h("span", { class: "badge warn", text: "Out now" }) : null, reservedTag(b))));
       if (badges.length > LIST_MAX) results.append(h("p", { class: "muted small-text", text: `The first ${LIST_MAX} of ${badges.length}. Filter by number to find the rest.` }));
       if (q && !badges.length) results.append(h("p", { class: "muted small-text", text: `No ${later ? "" : "free "}visitor badge here with that number at ${g.firstName}'s clearance level${later ? ` on ${eventDay(e.date)}` : ""}.` }));
     };
@@ -589,8 +589,32 @@ async function addGuestDialog(event, scope = "one") {
     if (ok) for (const i of typed) i.value = "";
     return ok;
   }
-  // Enter in Someone new adds them and stays, for another; Done adds them and closes.
-  for (const i of typed) i.addEventListener("keydown", async (e) => { if (e.key === "Enter") { e.preventDefault(); if (await addTyped()) first.focus(); } });
+  // Add guest (or Enter) adds the one typed and stays, ready for the next; Done adds anyone
+  // still typed in and closes.
+  const addNew = h("button", { type: "button", class: "primary", text: "Add guest" });
+  const addAndStay = async () => {
+    if (!typed.some((i) => i.value.trim())) {
+      say("Enter their first and last name.", "error");
+      first.focus();
+      return;
+    }
+    addNew.disabled = true;
+    let ok = false;
+    try {
+      ok = await addTyped();
+    } catch (error) {
+      say(error.message, "error");
+    } finally {
+      addNew.disabled = false;
+    }
+    // Ready for the next name, once the question asked on the way (a dialog over this one) has gone.
+    if (ok) {
+      first.focus();
+      setTimeout(() => { if (!typed.some((i) => i.value) && document.activeElement !== search) first.focus(); }, 260);
+    }
+  };
+  addNew.addEventListener("click", addAndStay);
+  for (const i of typed) i.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addAndStay(); } });
   let dlg = null;
   await openDialog({
     title: `Guests for ${event.title}${event.seriesId ? scope === "following" ? `, ${eventDay(event.date)} and later dates` :`, ${eventDay(event.date)} only` : ""}`,
@@ -601,8 +625,9 @@ async function addGuestDialog(event, scope = "one") {
       h("h4", { text: "Add someone on record" }), search, results,
       h("h4", { text: "Someone new" }),
       h("div", { class: "form-grid" }, first, last, org, email),
-      h("p", { class: "muted small-text", text: "Type their name and press Done (or Enter, to add another after). If they're on record already you can add that visitor; otherwise you're asked before they're added as a new visitor, linked to the event's company and point of contact, so the kiosk recognizes them on the day." })),
-    actions: [{ label: "Done", kind: "primary", close: false, onClick: async () => { if (await addTyped()) dlg.finish(true); } }],
+      h("div", { class: "btn-row" }, addNew, h("span", { class: "muted small-text", text: "Adds them and clears the boxes for the next guest." })),
+      h("p", { class: "muted small-text", text: "Add as many as are coming, one at a time, then press Done. If someone is on record already you can add that visitor; otherwise you're asked before they're added as a new visitor, linked to the event's company and point of contact, so the kiosk recognizes them on the day." })),
+    actions: [{ label: "Done", kind: "secondary", close: false, onClick: async () => { if (await addTyped()) dlg.finish(true); } }],
     onOpen: (d) => { dlg = d; setTimeout(() => search.focus(), 50); }
   });
   if (added) refreshCounts();

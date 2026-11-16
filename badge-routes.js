@@ -285,6 +285,23 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     res.json({ ok: true, deleted: done });
   });
 
+  /** "Tom Tech", "Tom Tech and Rhea Regular", "Tom Tech, Rhea Regular and 2 others". */
+  const namesText = (list) => {
+    const names = list.map((x) => x.name);
+    if (names.length <= 2) return names.join(" and ");
+    return names.length === 3 ? `${names[0]}, ${names[1]} and ${names[2]}` : `${names[0]}, ${names[1]} and ${names.length - 2} others`;
+  };
+
+  /**
+   * Whose a badge on offer is, when it is kept for visitors and whoever it is offered to isn't
+   * one of them (their names), else null. It can be given all the same: lists say so, and the
+   * audit log notes it.
+   */
+  const keptForOther = (b, kind, id) => (b.reservedFor.length && !(kind === "visitor" && b.reservedFor.some((x) => x.id === id)) ? namesText(b.reservedFor) : null);
+
+  /** For the audit log, when a badge kept for a visitor went to someone else: "; reserved for Tom Tech". */
+  const reservedNote = (badge, kind, holderId) => (keptForOther(badge, kind, holderId) ? `; reserved for ${keptForOther(badge, kind, holderId)}` : "");
+
   router.post("/api/badges/:id/assign", editBadges, (req, res) => {
     const body = req.body || {};
     const holderId = positiveInt(body.holderId);
@@ -306,8 +323,8 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
       if (extra) paid = allotments.recordPaid(extra.companyId, { badgeLabel: badge.label, holderName: badge.holder.name }, { by: staffName(req) });
     });
     if (paid) auditFrom(req, "badge.extra", extra.companyName, `badge ${badge.label} for ${badge.holder.name}; now ${paid.allotment.allowed} allowed${paid.charge ? `, charged $${paid.charge.amount.toFixed(2)}` : ""}`);
-    auditFrom(req, "badge.assign", badge.label, `to ${badge.holder.name}${badge.holder.company ? ` (${badge.holder.company})` : ""}${badge.holder.temporary ? `; lent for the day${badge.holder.replacesNumber ? `, in place of ${badge.holder.replacesNumber}` : ""}, due back ${new Date(badge.holder.dueAt).toISOString()}` : ""}`);
-    res.json({ ok: true, badge: badgeOut(req, badge) });
+    auditFrom(req, "badge.assign", badge.label, `to ${badge.holder.name}${badge.holder.company ? ` (${badge.holder.company})` : ""}${reservedNote(badge, body.kind, holderId)}${badge.holder.temporary ? `; lent for the day${badge.holder.replacesNumber ? `, in place of ${badge.holder.replacesNumber}` : ""}, due back ${new Date(badge.holder.dueAt).toISOString()}` : ""}`);
+    return res.json({ ok: true, badge: badgeOut(req, badge) });
   });
 
   router.post("/api/badges/:id/return", editBadges, (req, res) => {
@@ -354,7 +371,7 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const held = badges.forHolder(kind, id);
     const short = (b) => {
       const out = badgeOut(req, b);
-      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, type: out.type, cleared: out.cleared, clearanceLevelName: out.clearanceLevelName, template: out.template, sites: out.sites };
+      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, type: out.type, cleared: out.cleared, clearanceLevelName: out.clearanceLevelName, template: out.template, sites: out.sites, reservedFor: keptForOther(b, kind, id) };
     };
     const canGive = access.canEditBadges(req.ctx);
     // ?site= offers only badges valid at that site (where they are checking in).
@@ -362,8 +379,16 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const validThere = (b) => !atSite || !b.sites.length || b.sites.some((s) => s.id === atSite);
     const available = canGive ? badges.availableFor(kind, id, { sites: req.ctx.sites }).filter(validThere) : [];
     const best = suggestedFor(kind, id, available);
+    const imageOf = (badgeId) => { const b = badges.get(badgeId); return b ? templates.refFor(b.type, b.clearanceLevelId) : null; };
+    // The visitor badges kept for a visitor, in the order reserved: each with its image, who has
+    // it now, and the other visitors it is kept for.
+    const reserved = kind === "visitor" ? (visitors.get(id)?.reservedBadges || []).map((r) => {
+      const b = badges.get(r.id);
+      return { ...r, template: b ? templates.refFor(b.type, b.clearanceLevelId) : null, sharedWith: b ? b.reservedFor.filter((x) => x.id !== id).map((x) => x.name) : [] };
+    }) : [];
     res.json({
-      current: held.filter((a) => !a.returnedAt),
+      current: held.filter((a) => !a.returnedAt).map((a) => ({ ...a, template: imageOf(a.badgeId) })),
+      reserved,
       past: held.filter((a) => a.returnedAt),
       available: available.map(short),
       // Badges they could borrow for the day (a person): the temporary stock of their kind, then visitor badges.
@@ -407,36 +432,44 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
   const validAtSite = (b, siteId) => !b.sites.length || b.sites.some((s) => s.id === siteId);
 
   /**
-   * What to hand a visitor at check-in: the badge kept for them (picked for the event they are
-   * expected at, else reserved on their record) and why it can't be given, if so; any badge
-   * they hold already; and the visitor badges valid at the site they may be given instead.
+   * What to hand a visitor at check-in: the badges kept for them (picked for the event they are
+   * expected at, then those reserved on their record), each with why it can't be given, if so,
+   * and the one of them to hand over; any badge they hold already; and the visitor badges valid
+   * at the site they may be given instead.
    */
   router.get("/api/visits/:id/badge-plan", giveVisitorBadges, (req, res) => {
     const visit = visitForBadge(req);
     const visitor = visitors.get(visit.visitor.id);
     const short = (b) => {
       const out = badgeOut(req, b);
-      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, type: out.type, cleared: out.cleared, clearanceLevelName: out.clearanceLevelName, template: out.template, sites: out.sites };
+      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, type: out.type, cleared: out.cleared, clearanceLevelName: out.clearanceLevelName, template: out.template, sites: out.sites, reservedFor: keptForOther(b, "visitor", visitor.id) };
     };
+    // Kept for them: the badge picked for the event they're expected at, then those reserved on
+    // their record, in order. Each says why it can't be handed over, if so.
     const picked = events.badgeForVisit(visit.id);
-    const keptFor = picked ? { id: picked.id, source: "event", eventTitle: picked.eventTitle } : visitor.reservedBadge ? { id: visitor.reservedBadge.id, source: "reserved" } : null;
-    let assigned = null;
-    const b = keptFor ? badges.get(keptFor.id) : null;
-    if (b) {
+    const h = badges.holder("visitor", visitor.id);
+    const kept = [...(picked ? [{ id: picked.id, source: "event", eventTitle: picked.eventTitle }] : []),
+      ...visitor.reservedBadges.filter((r) => r.id !== picked?.id).map((r) => ({ id: r.id, source: "reserved" }))].map((k) => {
+      const b = badges.get(k.id);
+      if (!b) return null;
       const heldByThem = Boolean(b.holder && b.holder.kind === "visitor" && b.holder.id === visitor.id);
-      // Why it can't be handed over, so the desk gives another.
       const why = heldByThem ? null
         : b.holder ? `It's with ${b.holder.name}.`
           : !validAtSite(b, visit.siteId) ? `It isn't valid at ${visit.siteName}.`
-            : badges.refusal(b, badges.holder("visitor", visitor.id), { levelNames: seesLevels(req) });
-      assigned = { ...short(b), source: keptFor.source, eventTitle: keptFor.eventTitle || null, heldByThem, problem: why || null };
-    }
+            : badges.refusal(b, h, { levelNames: seesLevels(req) });
+      return { ...short(b), source: k.source, eventTitle: k.eventTitle || null, heldByThem, problem: why || null };
+    }).filter(Boolean);
+    // The one to hand over: one they have already, else the first that can be given; with none
+    // that can, the first, with why not (the desk then issues another).
+    const assigned = kept.find((k) => k.heldByThem) || kept.find((k) => !k.problem) || kept[0] || null;
     const holding = badges.forHolder("visitor", visitor.id).filter((a) => !a.returnedAt).map((a) => ({ id: a.badgeId, number: a.badgeNumber, label: a.badgeLabel }));
     const available = badges.availableFor("visitor", visitor.id, { sites: req.ctx.sites }).filter((x) => validAtSite(x, visit.siteId));
     const best = suggestedFor("visitor", visitor.id, available);
     res.json({
       visit: { id: visit.id, siteId: visit.siteId, siteName: visit.siteName, stage: visit.checkinStage },
       assigned,
+      // Every badge kept for them, the one to hand over among them.
+      kept,
       holding,
       available: available.map(short),
       suggested: best.ref,
@@ -480,7 +513,7 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
       return res.json({ ok: true, badge: badgeOut(req, badge), already: true });
     }
     const given = badges.assign(badge.id, { kind: "visitor", holderId: visit.visitor.id, visitId: visit.id }, { by: staffName(req), sites: req.ctx.sites, levelNames: seesLevels(req) });
-    auditFrom(req, "badge.assign", given.label, `to ${given.holder.name}${given.holder.company ? ` (${given.holder.company})` : ""}; at check-in`);
+    auditFrom(req, "badge.assign", given.label, `to ${given.holder.name}${given.holder.company ? ` (${given.holder.company})` : ""}; at check-in${reservedNote(given, "visitor", visit.visitor.id)}`);
     return res.json({ ok: true, badge: badgeOut(req, given), already: false });
   });
 
@@ -499,12 +532,12 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const name = `${visit.visitor.firstName} ${visit.visitor.lastName}`;
     if (!visit.checkedOutAt) {
       const given = badges.assign(badge.id, { kind: "visitor", holderId: visit.visitor.id, visitId: visit.id }, { by: staffName(req), sites: req.ctx.sites, levelNames: seesLevels(req) });
-      auditFrom(req, "badge.assign", given.label, `to ${given.holder.name}${given.holder.company ? ` (${given.holder.company})` : ""}; entered from the visit log`);
+      auditFrom(req, "badge.assign", given.label, `to ${given.holder.name}${given.holder.company ? ` (${given.holder.company})` : ""}; entered from the visit log${reservedNote(given, "visitor", visit.visitor.id)}`);
       return res.json({ ok: true, badge: badgeOut(req, given), recorded: false });
     }
     badges.recordForVisit(badge.id, visit.id, { by: staffName(req), sites: req.ctx.sites });
     auditFrom(req, "visit.badge_recorded", name, `badge ${badge.label}, recorded after the visit (${visit.siteName}, arrived ${new Date(visit.checkedInAt).toISOString()})`);
-    res.json({ ok: true, badge: badgeOut(req, badges.get(badge.id)), recorded: true });
+    return res.json({ ok: true, badge: badgeOut(req, badges.get(badge.id)), recorded: true });
   });
 
   /** A visitor badge kept for a visitor ahead of time must be one their clearance covers now. */
@@ -515,18 +548,28 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     if (why) throw fail(409, why);
   }
 
-  /** Reserves a visitor badge for a regular visitor ({ badgeId }, or null to release it). */
-  router.put("/api/visitors/:id/reserved-badge", giveVisitorBadges, editVisitors, (req, res) => {
+  /**
+   * Keeps a visitor badge for a visitor: { badgeId }, or { number, facilityCode } as typed. They
+   * may have several, and the badge may be kept for other visitors too.
+   */
+  router.post("/api/visitors/:id/reserved-badges", giveVisitorBadges, editVisitors, (req, res) => {
     const id = positiveInt(req.params.id);
-    const before = visitors.get(id, { sites: req.ctx.sites });
-    if (!before) throw fail(404, "No such visitor.");
-    const badgeId = req.body?.badgeId === null ? null : positiveInt(req.body?.badgeId);
-    if (badgeId === null && req.body?.badgeId !== null) throw fail(400, "Choose the badge.");
-    if (badgeId && !badges.get(badgeId, { sites: req.ctx.sites })) throw fail(404, "There's no such badge at your sites.");
+    if (!visitors.get(id, { sites: req.ctx.sites })) throw fail(404, "No such visitor.");
+    const badgeId = badgeIdFrom(req.body || {});
+    const badge = badges.get(badgeId, { sites: req.ctx.sites });
+    if (!badge) throw fail(404, "There's no such badge at your sites.");
     refuseUncovered(req, badgeId, id);
-    const after = visitors.setReservedBadge(id, badgeId, { sites: req.ctx.sites });
-    auditFrom(req, "visitor.reserved_badge", `${after.firstName} ${after.lastName}`, after.reservedBadge ? `badge ${after.reservedBadge.label}` : `released ${before.reservedBadge?.label || ""}`.trim());
-    res.json({ ok: true, reservedBadge: after.reservedBadge });
+    const after = visitors.reserveBadge(id, badgeId, { sites: req.ctx.sites });
+    const others = badge.reservedFor.filter((x) => x.id !== id);
+    auditFrom(req, "visitor.reserved_badge", `${after.firstName} ${after.lastName}`, `badge ${badge.label}${others.length ? `; also kept for ${namesText(others)}` : ""}`);
+    res.json({ ok: true, reservedBadges: after.reservedBadges, badge: { id: badge.id, label: badge.label } });
+  });
+
+  /** Stops keeping a badge for a visitor. */
+  router.delete("/api/visitors/:id/reserved-badges/:badgeId", giveVisitorBadges, editVisitors, (req, res) => {
+    const { visitor, badge } = visitors.releaseBadge(positiveInt(req.params.id), positiveInt(req.params.badgeId), { sites: req.ctx.sites });
+    auditFrom(req, "visitor.reserved_badge", `${visitor.firstName} ${visitor.lastName}`, `released ${badge.label}`);
+    res.json({ ok: true, reservedBadges: visitor.reservedBadges });
   });
 
   // --- badge template images ------------------------------------------------------------------
@@ -677,7 +720,7 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const taken = events.pickedForOthers(event, visitorId);
     const available = found.filter((b) => validAtSite(b, event.siteId) && !taken.has(b.id)).map((b) => {
       const out = badgeOut(req, b);
-      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, cleared: out.cleared, clearanceLevelName: out.clearanceLevelName, outNow: Boolean(b.holder) };
+      return { id: out.id, number: out.number, facilityCode: out.facilityCode, label: out.label, cleared: out.cleared, clearanceLevelName: out.clearanceLevelName, outNow: Boolean(b.holder), reservedFor: keptForOther(b, "visitor", visitorId) };
     });
     res.json({ later, available });
   });
@@ -687,12 +730,13 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const visitorId = positiveInt(req.params.visitorId);
     const badgeId = req.body?.badgeId === null ? null : positiveInt(req.body?.badgeId);
     if (badgeId === null && req.body?.badgeId !== null) throw fail(400, "Choose the badge.");
-    if (badgeId && !badges.get(badgeId, { sites: req.ctx.sites })) throw fail(404, "There's no such badge at your sites.");
+    const badge = badgeId ? badges.get(badgeId, { sites: req.ctx.sites }) : null;
+    if (badgeId && !badge) throw fail(404, "There's no such badge at your sites.");
     refuseUncovered(req, badgeId, visitorId);
     const event = events.setGuestBadge(positiveInt(req.params.id), visitorId, badgeId, { sites: req.ctx.sites });
     const guest = event.guests.find((g) => g.visitorId === visitorId);
-    auditFrom(req, "event.guest_badge", event.title, `${guest.firstName} ${guest.lastName}: ${guest.badge?.source === "event" ? `badge ${guest.badge.label}` : "no badge picked"}`);
-    res.json({ ok: true, event });
+    auditFrom(req, "event.guest_badge", event.title, `${guest.firstName} ${guest.lastName}: ${guest.badge?.source === "event" ? `badge ${guest.badge.label}${badge ? reservedNote(badge, "visitor", visitorId) : ""}` : "no badge picked"}`);
+    return res.json({ ok: true, event });
   });
 
   router.delete("/api/events/:id/guests/:visitorId", editVisitors, (req, res) => {

@@ -49,7 +49,8 @@ function createBadges({ db, clearance, now = Date.now }) {
       (SELECT json_group_array(json_object('id', s.id, 'name', s.name)) FROM badge_sites bs JOIN sites s ON s.id = bs.site_id WHERE bs.badge_id = b.id) AS sites_json,
       a.id AS a_id, a.holder_kind, a.holder_id, a.holder_name, a.holder_company, a.visit_id, a.assigned_at, a.assigned_by,
       a.temporary AS a_temporary, a.due_at AS a_due_at, rb.number AS a_replaces_number, rb.facility_code AS a_replaces_code,
-      (SELECT json_object('id', rv.id, 'name', rv.first_name || ' ' || rv.last_name) FROM visitors rv WHERE rv.reserved_badge_id = b.id) AS reserved_json
+      (SELECT json_group_array(json_object('id', rv.id, 'name', rv.first_name || ' ' || rv.last_name) ORDER BY rv.last_name COLLATE NOCASE, rv.first_name COLLATE NOCASE, rv.id)
+        FROM visitor_reserved_badges vr JOIN visitors rv ON rv.id = vr.visitor_id WHERE vr.badge_id = b.id) AS reserved_json
     FROM badges b
     LEFT JOIN clearance_levels l ON l.id = b.clearance_level_id
     LEFT JOIN badge_assignments a ON a.badge_id = b.id AND a.returned_at IS NULL
@@ -73,8 +74,8 @@ function createBadges({ db, clearance, now = Date.now }) {
       expired: Boolean(r.expires_on && r.expires_on < today(undefined, now())),
       status: r.status,
       notes: r.notes,
-      // The visitor this badge is kept for, if any (handed to them at each check-in).
-      reservedFor: r.reserved_json ? JSON.parse(r.reserved_json) : null,
+      // The visitors this badge is kept for ([] for none): offered to each first at check-in.
+      reservedFor: JSON.parse(r.reserved_json || "[]"),
       holder: r.a_id ? {
         assignmentId: r.a_id, kind: r.holder_kind, id: r.holder_id, name: r.holder_name, company: r.holder_company, visitId: r.visit_id, assignedAt: r.assigned_at, assignedBy: r.assigned_by,
         temporary: Boolean(r.a_temporary), dueAt: r.a_due_at ?? null, replacesNumber: r.a_replaces_number ? badgeLabel(r.a_replaces_code, r.a_replaces_number) : null, overdue: Boolean(r.a_temporary && r.a_due_at && r.a_due_at < now())
@@ -436,7 +437,6 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (badge.type !== "visitor" && h.kind === "visitor") return `Badge ${badge.label} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`;
     if (badge.type === "personnel" && !h.buildingStaff) return `Badge ${badge.label} is a personnel badge, for building staff; ${h.company} isn't marked as building staff.`;
     if (badge.type === "tenant" && h.buildingStaff) return `Badge ${badge.label} is a tenant badge; ${h.name} is building staff and gets a personnel badge.`;
-    if (badge.reservedFor && !(h.kind === "visitor" && h.id === badge.reservedFor.id)) return `Badge ${badge.label} is reserved for ${badge.reservedFor.name}.`;
     if (!h.active) return `${h.name} is inactive.`;
     if (h.blocked) return `${h.name} is blocked.`;
     if (badge.temporary && h.kind !== "person") return `Badge ${badge.label} is temporary, for people who forgot their own; visitors get visitor badges.`;
@@ -445,20 +445,33 @@ function createBadges({ db, clearance, now = Date.now }) {
   }
 
   /**
+   * The visitors a badge is kept for ([{ id, name }]) when `h` isn't one of them, else null. Such
+   * a badge can still be given to `h`: lists say whose it is, and nothing more is asked.
+   */
+  const reservedForOther = (badge, h) => (badge.reservedFor.length && !isReservedFor(badge, h) ? badge.reservedFor : null);
+  /** Whether a badge is one kept for `h` (a visitor). */
+  const isReservedFor = (badge, h) => h.kind === "visitor" && badge.reservedFor.some((x) => x.id === h.id);
+
+  /** Badges on offer to `h`: those kept for them first, those kept for other visitors last. */
+  const keptLast = (found, h) => [...found.filter((b) => isReservedFor(b, h)), ...found.filter((b) => !b.reservedFor.length), ...found.filter((b) => reservedForOther(b, h))];
+
+  /**
    * Whether a badge is one to offer `h`. A visitor is offered only the badges at their own
    * clearance level: the level Security validated, or uncleared badges while their clearance
    * doesn't count. They may still hold a lower one (refusal decides that), given by its number.
+   * A badge kept for them is always on offer to them, whatever its level.
    */
   function offered(h) {
     if (h.kind !== "visitor") return () => true;
     const own = clearance.effectiveLevel(h)?.id ?? null;
-    return (b) => (b.clearanceLevelId ?? null) === own;
+    return (b) => (b.clearanceLevelId ?? null) === own || isReservedFor(b, h);
   }
 
   /**
    * Active, unheld badges `h` may be given, among those `sites` sees: their own kind, or with
    * `temporary` (a person only) the ones they may borrow for the day, the temporary stock of
    * their kind first, then visitor badges. For a visitor, only those at their own clearance level.
+   * A visitor badge kept for them comes first; one kept for other visitors is on offer too, after the rest.
    */
   function availableFor(kind, holderId, { sites = null, temporary = false } = {}) {
     const h = holder(kind, holderId);
@@ -466,7 +479,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     const own = kind === "visitor" ? "visitor" : h.buildingStaff ? "personnel" : "tenant";
     const found = list({ state: "available", type: own, temporary: kind === "visitor" ? null : temporary, sites, limit: 5000 }).badges;
     if (temporary && kind === "person") found.push(...list({ state: "available", type: "visitor", sites, limit: 5000 }).badges);
-    return found.filter((b) => !refusal(b, h)).filter(offered(h));
+    return keptLast(found.filter((b) => !refusal(b, h)).filter(offered(h)), h);
   }
 
   /**
@@ -477,7 +490,7 @@ function createBadges({ db, clearance, now = Date.now }) {
   function availableLater(visitorId, day, { sites = null } = {}) {
     const h = holder("visitor", visitorId);
     if (!h) throw fail(404, "No such person or visitor.");
-    return list({ type: "visitor", sites, limit: 5000 }).badges.filter((b) => !refusal(b, h) && !(b.expiresOn && b.expiresOn < day)).filter(offered(h));
+    return keptLast(list({ type: "visitor", sites, limit: 5000 }).badges.filter((b) => !refusal(b, h) && !(b.expiresOn && b.expiresOn < day)).filter(offered(h)), h);
   }
 
   /** Midnight at the end of today where `timeZone` is (or the server's), as a timestamp. */
@@ -655,7 +668,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     return [...out.values()];
   }
 
-  return { list, get, history, forHolder, openForHolder, heldByPeople, outOfStep, matchHolderLevel, create, createRange, update, remove, holder, refusal, clearanceRefusal, availableFor, availableLater, assign, recordForVisit, takeBack, outForVisit, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
+  return { list, get, history, forHolder, openForHolder, heldByPeople, outOfStep, matchHolderLevel, create, createRange, update, remove, holder, refusal, reservedForOther, isReservedFor, clearanceRefusal, availableFor, availableLater, assign, recordForVisit, takeBack, outForVisit, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
 }
 
 module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES, FACILITY_CODE_RE, badgeLabel, RECORDED_NOTE };

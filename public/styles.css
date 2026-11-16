@@ -797,6 +797,14 @@ input[type="color"] { width: 64px; min-height: 36px; padding: 2px; cursor: point
 .citizenship-field .btn-row { gap: 18px; }
 .citizen-country { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 .check-row.inline { display: inline-flex; }
+/* Check-in, the Confirm step: what is still needed stands out; what is on record is to read. */
+.checkin-needed { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 2px solid var(--warn); border-radius: var(--radius); background: var(--warn-soft); }
+.checkin-needed-title { margin: 0; font-size: 1rem; }
+.checkin-summary { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.checkin-summary h4 { margin: 0; }
+.checkin-facts { grid-template-columns: max-content 1fr max-content 1fr; }
+@media (max-width: 640px) { .checkin-facts { grid-template-columns: max-content 1fr; } }
+.dialog-actions .cancel-checkin { margin-right: auto; }
 .id-person { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
 .id-name { font-size: 1.5rem; font-weight: 700; margin-bottom: 6px; }
 .id-types { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
@@ -830,10 +838,16 @@ a.button-link:hover { text-decoration: none; }
 .badge-assigned-number { font-size: 2.6rem; font-weight: 800; letter-spacing: 0.04em; line-height: 1.1; }
 /* The badge reserved for a visitor, at the top of their record. */
 .reserved-badge { display: flex; align-items: center; justify-content: space-between; gap: 12px 18px; flex-wrap: wrap; padding: 14px 16px; border: 2px solid var(--primary); border-radius: var(--radius); background: var(--primary-soft); }
-.reserved-badge-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.reserved-badge-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 12rem; }
+/* The badges a visitor has and those kept for them, side by side where there's room. */
+.badge-callouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 10px; }
+.reserved-badge-img { height: 88px; width: auto; max-width: 120px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border); background: #fff; flex: none; }
 .reserved-badge-label { margin: 0; font-size: 0.95rem; font-weight: 700; }
 .reserved-badge-number { font-size: 2.2rem; font-weight: 800; letter-spacing: 0.04em; line-height: 1.15; color: var(--text); overflow-wrap: anywhere; }
 .reserved-badge-note { margin: 0; font-size: 0.95rem; }
+.reserved-badge-out { color: var(--warn); font-weight: 600; }
+/* The badge a visitor has now: the same box, in the colour of something to act on. */
+.reserved-badge.assigned-badge { border-color: var(--warn); background: var(--warn-soft); }
 .badge-number-input { font-size: 1.2rem; max-width: 220px; }
 .free-badges { display: flex; flex-wrap: wrap; gap: 6px; }
 .free-badges .chip { padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); color: var(--text); cursor: pointer; }
