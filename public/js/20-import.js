@@ -268,6 +268,18 @@ async function importDialog(kind) {
     const createCompanies = h("input", { type: "checkbox" });
     const addVisitors = h("input", { type: "checkbox" });
     const skipProblems = h("input", { type: "checkbox" });
+    // Visitors already on record: bring them up to date from the file, or leave them alone.
+    const existing = h("select", { "aria-label": "Visitors already on record" },
+      h("option", { value: "update", text: "Update them from the file" }),
+      h("option", { value: "skip", text: "Skip them: leave them as they are" }));
+    const existingHint = h("span", { class: "hint" });
+    const sayExisting = () => {
+      existingHint.textContent = existing.value === "skip"
+        ? "Only visitors who aren't on record are added. Anyone with the same email (or, without one, the same name) is left exactly as they are, whatever their row says."
+        : "Anyone with the same email (or, without one, the same name) gets the file's details in place of theirs, for the fields you matched.";
+    };
+    existing.addEventListener("change", sayExisting);
+    sayExisting();
     const tablePick = read.tables.length > 1
       ? h("label", {}, h("span", { text: "Table" }), (() => {
         const s = h("select", { "aria-label": "Table" }, read.tables.map((t) => h("option", { value: t.name, text: `${t.name} (${t.rowCount} row${t.rowCount === 1 ? "" : "s"})` })));
@@ -290,7 +302,7 @@ async function importDialog(kind) {
           stepReview(await api(`/api/import/${read.token}/tenant-badges/review`, { method: "POST", body: { table: table.name, mapping } }));
           return null;
         }
-        const result = await api(`/api/import/${read.token}/run`, { method: "POST", body: { table: table.name, target, mapping, createCompanies: createCompanies.checked, addVisitors: addVisitors.checked, skipProblems: skip } });
+        const result = await api(`/api/import/${read.token}/run`, { method: "POST", body: { table: table.name, target, mapping, createCompanies: createCompanies.checked, addVisitors: addVisitors.checked, skipProblems: skip, ...(target === "visitors" ? { existing: existing.value } : {}) } });
         dlg.finish(result);
       } catch (error) {
         // Nothing was imported because of some rows: offer to import the rest without them.
@@ -310,13 +322,14 @@ async function importDialog(kind) {
       h("h4", { text: `Preview: the first ${Math.min(5, table.sample.length)} of ${table.rowCount}` }),
       preview,
       // replaceChildren would write out null as text, so "" where there is nothing.
+      target === "visitors" ? h("label", { class: "import-existing" }, h("span", { text: "Visitors already on record" }), existing, existingHint) : "",
       target === "people" ? h("label", { class: "check-row" }, createCompanies, h("span", { text: "Add companies that don't exist yet" })) : "",
       target === "clearances" ? h("label", { class: "check-row" }, addVisitors, h("span", { text: "Add visitors who aren't on record yet: anyone the file names who isn't found is added as a visitor, with their clearance" })) : "",
       target === "tenant_badges" ? "" : h("label", { class: "check-row" }, skipProblems, h("span", { text: "Skip rows with problems (such as a required field left empty): import the rest, and list the ones skipped" })),
       h("p", { class: "muted small-text", text: `${{
         people: "Someone already in the company with the same email (or, without one, the same name) is updated rather than added twice.",
         companies: "A company with the same name is updated.",
-        visitors: `A visitor with the same email (or, without one, the same name) is updated rather than added twice. Imported visitors count as checked by staff. ${isSecurity() ? "Visitors with a clearance level are validated by you, on the date validated (unless validated more recently here)." : "Clearances aren't imported: Security validates them."}`,
+        visitors: `A visitor with the same email (or, without one, the same name) is updated or skipped, as you choose above, rather than added twice. Imported visitors count as checked by staff. ${isSecurity() ? "Visitors with a clearance level are validated by you, on the date validated (unless validated more recently here)." : "Clearances aren't imported: Security validates them."}`,
         badges: "A badge with the same facility code and number is updated; a file that gives the same badge twice is refused. One that is out can't change its type, clearance level or whether it is temporary.",
         clearances: "Each row validates the clearance of a person or visitor already on record; nobody is added unless you tick Add visitors below. They're found by email, else by name in any order (only among people or visitors, or at a company, when those columns are given), and validated on the date given, by you. Anyone validated more recently here is left as they are. A name that matches nobody, or more than one, is a problem to fix.",
         tenant_badges: "Next you'll see who each name is matched to, and choose where a name isn't exact or could be several people. Nothing is saved until you assign them."
@@ -541,7 +554,7 @@ async function showSkippedRows(kind, result) {
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   };
   // Clearances add nobody: they validate people and visitors already here.
-  const done = kind === "tenant_badges" ? `${result.added + result.updated} assigned${result.added ? `, ${result.added} of them new` : ""}${result.unchanged ? `, ${result.unchanged} already theirs` : ""}` : kind === "clearances" ? `${result.added ? `${result.added} ${IMPORT_KINDS.clearances.added(result.added).replace(", with their clearance", "")}, ` : ""}${result.updated} validated${result.unchanged ? `, ${result.unchanged} left as they were` : ""}` : `${result.added} added, ${result.updated} updated`;
+  const done = kind === "tenant_badges" ? `${result.added + result.updated} assigned${result.added ? `, ${result.added} of them new` : ""}${result.unchanged ? `, ${result.unchanged} already theirs` : ""}` : kind === "clearances" ? `${result.added ? `${result.added} ${IMPORT_KINDS.clearances.added(result.added).replace(", with their clearance", "")}, ` : ""}${result.updated} validated${result.unchanged ? `, ${result.unchanged} left as they were` : ""}` : `${result.added} added, ${result.updated} updated${result.unchanged ? `, ${result.unchanged} already here and left as they were` : ""}`;
   const summary = `${done}, ${result.skippedCount} ${result.skippedCount === 1 ? "row" : "rows"} skipped${result.blank ? `, ${result.blank} empty ${result.blank === 1 ? "row" : "rows"} passed over` : ""}.`;
   await openDialog({
     title: `Imported ${IMPORT_KINDS[kind].many}, with rows skipped`,

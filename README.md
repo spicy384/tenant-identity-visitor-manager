@@ -55,6 +55,15 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Sites.** One or more buildings, each with its own name and logo (for its kiosk), time
   zone and end-of-day check-out time. With a single site, nothing asks which.
 - **Companies** with contact details, placed at one or more sites with a suite or floor at each.
+- **Points of Contact (PoCs)** for a company: **Add PoC** on the company's panel adds one, with a
+  **PoC Role** (Billing, After hours, Office manager, ...), **Name**, **Email** and **Phone**.
+  Each box takes any text ("ask for Jane, or billing@acme.example"; "555-0101 ext 4, after
+  9"), and one at least must be filled in. A company can have many (up to 50), listed on its
+  panel in the order added, each with **Edit** and **Remove**; an email that is one opens a
+  message and a phone number dials. They are separate from the people in the company and
+  from a visit's points of contact: a PoC needn't be in the directory. Whoever reads the
+  directory sees them, whoever changes it changes them, and each change is in the audit log.
+  Merged companies' PoCs move to the company kept.
 - **People** in a company: names, job title, email, phones, the site they work at, whether they
   can host visitors.
 - **Inactive** companies and people stay on record but are left out of the lists: Companies,
@@ -557,9 +566,14 @@ Home.
   that rent, by size. A lease commences on its start unless you give another commencement
   date; rent is billed from the start either way, and only the yearly increases count from the
   commencement. A commencement left the same as the start moves with it. Making a lease assigns its offices to the
-  company for its dates, and changing its dates or offices changes those assignments. Offices assigned from Rooms or a company's page get
+  company for its dates, and changing its dates or offices changes those assignments. Offices assigned from Rooms, a floor plan or a company's page get
   a lease of their own (the ones assigned together share one); the assignments made before
-  leases became leases the same way. Moving one office of several to other dates on Rooms gives
+  leases became leases the same way. **When the company has a lease running** (active, or
+  ending soon), assigning a room asks first: add it to that lease, or make a new one. Added to
+  the lease, the room has the lease's own dates (the date boxes show them and can't be
+  changed) and its rent becomes part of the lease's; invoices already made aren't changed. A
+  room someone else had for part of the lease's term can't join it, and the answer says to
+  make a new lease from the later date instead. With several leases running, each is offered. Moving one office of several to other dates on Rooms gives
   it a lease of its own, with the same rates and yearly increase (not for a fixed rent: change
   that on the lease). The months already invoiced with that office in the lease it left aren't
   billed again on its own lease, which lists them, unless that invoice is voided. A lease that has been
@@ -999,7 +1013,12 @@ A company's site can come from one column (a site's name) and its suite from ano
 
 - **Visitors**: first and last name (required), their organization, email, phone, notes,
   blocked (yes/no), the company they visit and their host there (by name), and custom fields.
-  A visitor with the same email, else exactly the same name, is updated. Imported visitors
+  A visitor with the same email, else exactly the same name, is already on record, and
+  **Visitors already on record** on the import says what happens to them: **Update them from
+  the file** (as it was), or **Skip them**, which adds only the new visitors and leaves the
+  others exactly as they are, whatever their rows say (a skipped row's mistakes aren't
+  problems, and its clearance columns aren't used); the result counts them as already here,
+  left as they were. Imported visitors
   count as checked by staff. Clearance level, date validated (empty for today) and granted
   come only from an account with the Security role (and visitor change access, Security
   plus Front desk say): each visitor with a level is validated by them on the date given, unless

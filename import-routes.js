@@ -226,7 +226,7 @@ function createImportRoutes({ access, importCompanies, importPeople, importVisit
     const skipProblems = body.skipProblems === true;
     const result = target === "tenant_badges" ? tenantBadges.assign(req, rows, { choices: body.choices, where, from })
       : target === "companies" ? importCompanies(req, rows, { where, from, skipProblems })
-      : target === "visitors" ? importVisitors(req, rows, { where, from, skipProblems })
+      : target === "visitors" ? importVisitors(req, rows, { where, from, skipProblems, existing: body.existing === "skip" ? "skip" : "update" })
         : target === "badges" ? importBadges(req, rows, { where, from, skipProblems })
           : target === "clearances" ? importClearances(req, rows, { where, from, skipProblems, addVisitors: body.addVisitors === true })
             : importPeople(req, rows, { createCompanies: Boolean(body.createCompanies), where, from, skipProblems });

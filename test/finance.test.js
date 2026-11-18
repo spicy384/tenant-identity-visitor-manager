@@ -786,6 +786,44 @@ async function main() {
   r = await fetch(BASE + "/api/leases", { headers: { cookie: "ivm_session=__proto__" } });
   const afterOdd = await manager.raw("/api/lease-documents/" + harborDoc.ref);
   check("session: a cookie naming what every object has signs no one in, and leaves nothing behind", r.status === 401 && afterOdd.status === 200 && !afterOdd.headers.has("lastseenat"));
+
+  // --- a room joins a current lease of the company's, or gets a lease of its own -------------------------
+  const vandelay = await mk("Vandelay");
+  const [j1, j2, j3, j4] = [await office("J1", 100), await office("J2", 200), await office("J3", 300), await office("J4", 400)];
+  const joined = (await manager.post("/api/leases", { companyId: vandelay.id, officeIds: [j1.id], startDate: "2026-06-01", reference: "V-1" })).data.lease;
+  // Its leases that haven't ended.
+  const leasesOf = async (company) => (await manager.get(`/api/leases?companyId=${company.id}`)).data.leases.filter((l) => l.status !== "ended");
+  const joinedNow = async () => (await manager.get(`/api/leases/${joined.id}`)).data.lease;
+  check("join: the company's current leases can be asked for", (await manager.get(`/api/leases?companyId=${vandelay.id}&status=current`)).data.leases.map((l) => l.reference).join() === "V-1");
+  check("join: front desk can't", (await desk.post(`/api/offices/${j2.id}/assignments`, { companyId: vandelay.id, leaseId: joined.id })).status === 403);
+  r = await manager.post(`/api/offices/${j2.id}/assignments`, { companyId: vandelay.id, leaseId: joined.id, startDate: "2026-11-01", endDate: "2026-12-31", sharePct: 50 });
+  check("join: a room added to a current lease takes the lease's dates, not those given", r.status === 200 && r.data.assignment.startDate === "2026-06-01" && r.data.assignment.endDate === null && r.data.assignment.sharePct === 50
+    && r.data.lease.id === joined.id && r.data.lease.reference === "V-1", JSON.stringify(r.data).slice(0, 400));
+  r = await joinedNow();
+  check("join: it is one of the lease's offices, its rent part of the lease's, and no new lease is made", r.offices.map((o) => o.name).join() === "J1,J2" && r.currentMonthly === 400 && (await leasesOf(vandelay)).length === 1, JSON.stringify({ offices: r.offices.map((o) => o.name), monthly: r.currentMonthly }));
+  r = await manager.post(`/api/offices/${j2.id}/assignments`, { companyId: vandelay.id, leaseId: joined.id, sharePct: 50 });
+  check("join: not twice", r.status === 409 && /is in Vandelay's lease V-1 already/.test(r.data.error), JSON.stringify(r.data));
+  r = await manager.post(`/api/offices/${j3.id}/assignments`, { companyId: acme.id, leaseId: joined.id });
+  check("join: not into another company's lease", r.status === 400 && /Vandelay's/.test(r.data.error));
+  const over = (await manager.post("/api/leases", { companyId: vandelay.id, rentMode: "fixed", monthlyRent: 100, startDate: "2025-01-01", endDate: "2025-12-31", reference: "V-0" })).data.lease;
+  r = await manager.post(`/api/offices/${j3.id}/assignments`, { companyId: vandelay.id, leaseId: over.id });
+  check("join: not into one that has ended", r.status === 409 && /ended on 2025-12-31; make a new lease/.test(r.data.error), JSON.stringify(r.data));
+  check("join: not into one that doesn't exist", (await manager.post(`/api/offices/${j3.id}/assignments`, { companyId: vandelay.id, leaseId: 999999 })).status === 404);
+  // Someone else had the room for part of the lease's term: it can't join from the lease's start.
+  await manager.post(`/api/offices/${j3.id}/assignments`, { companyId: acme.id, startDate: "2026-06-01", endDate: "2026-08-31" });
+  r = await manager.post(`/api/offices/${j3.id}/assignments`, { companyId: vandelay.id, leaseId: joined.id });
+  check("join: a room let to someone else during the lease can't, and the answer says to make a new lease", r.status === 409 && /overlaps Acme's assignment/.test(r.data.error) && /from 2026-06-01\); to give it to Vandelay from a later date, make a new lease/.test(r.data.error)
+    && (await joinedNow()).offices.length === 2, JSON.stringify(r.data));
+  r = await manager.post(`/api/offices/${j3.id}/assignments`, { companyId: vandelay.id, startDate: "2026-09-01" });
+  check("join: with no lease named, a room still gets a lease of its own", r.status === 200 && r.data.lease === undefined && (await leasesOf(vandelay)).length === 2 && (await joinedNow()).offices.length === 2);
+  // Several rooms from the company's page: all or none.
+  r = await manager.post(`/api/companies/${vandelay.id}/offices`, { officeIds: [j4.id, j2.id], leaseId: joined.id, startDate: "2026-12-01" });
+  check("join: several at once are all or none", r.status === 409 && (await joinedNow()).offices.length === 2 && (await manager.get(`/api/offices/${j4.id}`)).data.office.assignments.length === 0, JSON.stringify(r.data));
+  check("join: only into this company's lease", (await manager.post(`/api/companies/${acme.id}/offices`, { officeIds: [j4.id], leaseId: joined.id })).status === 400);
+  r = await manager.post(`/api/companies/${vandelay.id}/offices`, { officeIds: [j4.id], leaseId: joined.id, startDate: "2026-12-01", shares: { [j4.id]: 100 } });
+  check("join: several added to the lease", r.status === 200 && r.data.assigned === 1 && r.data.lease.id === joined.id && (await joinedNow()).offices.map((o) => o.name).join() === "J1,J2,J4" && (await joinedNow()).currentMonthly === 1200
+    && (await leasesOf(vandelay)).length === 2, JSON.stringify(r.data));
+  check("join: the audit log says which lease a room was added to", (await admin.get("/api/audit?action=office.assign")).data.entries.filter((e) => /; added to lease V-1$/.test(e.detail)).length === 2);
 }
 
 main()

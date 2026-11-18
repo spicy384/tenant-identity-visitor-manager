@@ -481,8 +481,46 @@ app.get("/api/companies/:id", readDir, (req, res) => {
   res.json({
     company: { ...access.project(req.ctx, "company", record, list), peopleCount: record.people },
     fields: publicFields(list),
-    people: withHeldBadges(req.ctx, peopleOut(req.ctx, people.records))
+    people: withHeldBadges(req.ctx, peopleOut(req.ctx, people.records)),
+    contacts: directory.listContacts(record.id)
   });
+});
+
+// A company's points of contact (PoCs): who to reach there and what for. Free text, any number;
+// read with the directory, and changed by those who change it.
+function companyOfContacts(req) {
+  const company = directory.getCompany(positiveInt(req.params.id), { sites: req.ctx.sites });
+  if (!company) throw fail(404, "No such company.");
+  return company;
+}
+
+/** A PoC in a few words, for the audit log: "Billing: Jane Doe". */
+const pocWords = (c) => [c.role, c.name || c.email || c.phone].filter(Boolean).join(": ");
+
+app.get("/api/companies/:id/contacts", readDir, (req, res) => {
+  res.json({ contacts: directory.listContacts(companyOfContacts(req).id) });
+});
+
+app.post("/api/companies/:id/contacts", editDir, (req, res) => {
+  const company = companyOfContacts(req);
+  const contact = directory.addContact(company.id, req.body || {});
+  auditFrom(req, "company.poc_add", company.name, pocWords(contact));
+  res.json({ ok: true, contact, contacts: directory.listContacts(company.id) });
+});
+
+app.put("/api/companies/:id/contacts/:contactId", editDir, (req, res) => {
+  const company = companyOfContacts(req);
+  const { before, contact } = directory.updateContact(company.id, positiveInt(req.params.contactId), req.body || {});
+  const changed = ["role", "name", "email", "phone"].filter((k) => before[k] !== contact[k]);
+  if (changed.length) auditFrom(req, "company.poc_update", company.name, `${pocWords(contact)}; ${changed.join(", ")} changed${pocWords(before) !== pocWords(contact) ? ` (was ${pocWords(before)})` : ""}`);
+  res.json({ ok: true, contact, contacts: directory.listContacts(company.id) });
+});
+
+app.delete("/api/companies/:id/contacts/:contactId", editDir, (req, res) => {
+  const company = companyOfContacts(req);
+  const removed = directory.removeContact(company.id, positiveInt(req.params.contactId));
+  auditFrom(req, "company.poc_remove", company.name, pocWords(removed));
+  res.json({ ok: true, contacts: directory.listContacts(company.id) });
 });
 
 /** The pieces a write needs: which custom values it sets, and which fields the caller edits. */
@@ -971,12 +1009,14 @@ function validateFromImport(req, { kind, id, name, validatedAt }, c, from, today
  * Imports visitors from rows keyed by column (first_name, last_name, organization,
  * visitor_type, citizenship, email, phone, notes, blocked, company and host they visit,
  * custom field keys). A visitor with the
- * same email, else exactly the same name, is updated. Imported visitors count as checked by
+ * same email, else exactly the same name, is updated, or with existing: "skip" left exactly as
+ * they are (counted as unchanged), whatever their row says. Imported visitors count as checked by
  * staff. Clearances (level, validated, granted) only from the Security role: each
  * visitor is validated on the date given, unless validated more recently here.
  */
-function importVisitors(req, rows, { where, from = "CSV", skipProblems = false } = {}) {
+function importVisitors(req, rows, { where, from = "CSV", skipProblems = false, existing = "update" } = {}) {
   checkImport(rows, ["first_name", "last_name"]);
+  const skipExisting = existing === "skip";
   const withClearance = rows.some((r) => CLEARANCE_ROW_COLUMNS.some((c) => r[c] && String(r[c]).trim()));
   if (withClearance && !(access.isSecurity(req.ctx) && access.canSeeClearances(req.ctx))) throw fail(403, "Only Security imports clearances; leave the clearance columns out, or ask Security.");
   const levels = clearance.levels();
@@ -989,6 +1029,9 @@ function importVisitors(req, rows, { where, from = "CSV", skipProblems = false }
     return { custom: access.checkWrite(req.ctx, "visitor", patch, fieldList), editable: fieldList.filter((f) => f.access === "edit"), sites: req.ctx.sites };
   };
   const counts = importRows(rows, (row) => {
+    // Already on record, and those are to be skipped: nothing of the row is used, so nothing in
+    // it can be a problem either.
+    if (skipExisting && visitors.findMatch({ email: row.email, firstName: row.first_name, lastName: row.last_name })) return "unchanged";
     const patch = rowPatch(row, VISITOR_COLUMNS, writable);
     const c = withClearance ? clearanceOfRow(row, levels, todayStr) : null;
     const name = `${String(row.first_name || "").trim()} ${String(row.last_name || "").trim()}`;
@@ -1016,7 +1059,7 @@ function importVisitors(req, rows, { where, from = "CSV", skipProblems = false }
     return "added";
   }, where, "imported", { skipProblems });
   const ignored = ignoredColumns(rows, VISITOR_COLUMNS, writable).filter((c) => (linksWritable ? !["host"].includes(c) : true) && !CLEARANCE_ROW_COLUMNS.includes(c));
-  auditFrom(req, "import.visitors", importSummary(counts), `from ${from}`);
+  auditFrom(req, "import.visitors", importSummary(counts), `from ${from}${skipExisting ? "; visitors already on record were skipped" : ""}`);
   return { ...counts, ignored };
 }
 

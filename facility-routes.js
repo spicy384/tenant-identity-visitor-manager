@@ -5,7 +5,8 @@
  * by default, and Settings > Roles gives it (or read) to any other staff role.
  * Everything follows the caller's sites.
  *
- * Every office assignment belongs to a lease (leases.js): one made here gets a lease of its
+ * Every office assignment belongs to a lease (leases.js): one made here joins a current lease
+ * of the company's when the caller says which (leaseId), and otherwise gets a lease of its
  * own; new dates for a lease's only office change the lease too, and for one office of
  * several move it to a lease of its own; one removed here leaves its lease.
  */
@@ -174,11 +175,26 @@ function createFacilityRoutes({ access, facilities, leases, directory, sites, au
 
   const shareWords = (a) => (a.sharePct < 100 ? ` (${a.sharePct}%)` : "");
 
+  const leaseName = (lease) => `lease ${lease.reference || `#${lease.id}`}`;
+
+  /**
+   * Gives an office (or a share of it) to a company: { companyId, startDate, endDate, sharePct,
+   * notes }, which makes a lease of its own for it. With { leaseId } it joins that lease of the
+   * company's instead, for the lease's dates (the dates given are not used).
+   */
   router.post("/api/offices/:id/assignments", editFacilities, (req, res) => {
-    const { office, assignment } = facilities.assign(idOf(req), req.body || {}, { ...scoped(req), by: staffName(req) });
+    const body = req.body || {};
+    const leaseId = positiveInt(body.leaseId);
+    if (leaseId) {
+      const { lease, done } = leases.addOffices(leaseId, [{ officeId: idOf(req), sharePct: body.sharePct }], { ...scoped(req), by: staffName(req), companyId: body.companyId });
+      const { office, assignment } = done[0];
+      auditFrom(req, "office.assign", `${office.floorName}: ${office.name}`, `${assignment.companyName}${shareWords(assignment)} from ${assignment.startDate}${assignment.endDate ? ` to ${assignment.endDate}` : ""}; added to ${leaseName(lease)}`);
+      return res.json({ ok: true, office, assignment, lease: { id: lease.id, reference: lease.reference } });
+    }
+    const { office, assignment } = facilities.assign(idOf(req), body, { ...scoped(req), by: staffName(req) });
     leases.adoptAssignments({ by: staffName(req) });
     auditFrom(req, "office.assign", `${office.floorName}: ${office.name}`, `${assignment.companyName}${shareWords(assignment)} from ${assignment.startDate}${assignment.endDate ? ` to ${assignment.endDate}` : ""}`);
-    res.json({ ok: true, office, assignment });
+    return res.json({ ok: true, office, assignment });
   });
 
   router.put("/api/office-assignments/:id", editFacilities, (req, res) => {
@@ -273,15 +289,26 @@ function createFacilityRoutes({ access, facilities, leases, directory, sites, au
     res.json({ ok: true, rates });
   });
 
-  /** Assigns several offices to a company for the same dates (all or none): { officeIds, startDate, endDate, notes, shares: { officeId: percentage } }. */
+  /**
+   * Assigns several offices to a company for the same dates (all or none): { officeIds, startDate,
+   * endDate, notes, shares: { officeId: percentage } }, which makes one lease for them. With
+   * { leaseId } they join that lease of the company's instead, for the lease's dates.
+   */
   router.post("/api/companies/:id/offices", editFacilities, (req, res) => {
     const company = directory.getCompany(idOf(req), { sites: req.ctx.sites });
     if (!company) throw fail(404, "No such company, or not at your sites.");
+    const leaseId = positiveInt(req.body?.leaseId);
+    if (leaseId) {
+      const ids = [...new Set((Array.isArray(req.body?.officeIds) ? req.body.officeIds : []).map(Number))];
+      const { lease, done: added } = leases.addOffices(leaseId, ids.map((officeId) => ({ officeId, sharePct: req.body?.shares?.[officeId] })), { ...scoped(req), by: staffName(req), companyId: company.id });
+      auditFrom(req, "office.assign", company.name, `${added.map((d) => `${d.office.floorName}: ${d.office.name}`).join(", ")} from ${lease.startDate}${lease.endDate ? ` to ${lease.endDate}` : ""}; added to ${leaseName(lease)}`);
+      return res.json({ ok: true, assigned: added.length, lease: { id: lease.id, reference: lease.reference } });
+    }
     const done = facilities.assignMany(company.id, req.body?.officeIds, req.body || {}, { ...scoped(req), by: staffName(req) });
     leases.adoptAssignments({ by: staffName(req) });
     const first = done[0].assignment;
     auditFrom(req, "office.assign", company.name, `${done.map((d) => `${d.office.floorName}: ${d.office.name}`).join(", ")} from ${first.startDate}${first.endDate ? ` to ${first.endDate}` : ""}`);
-    res.json({ ok: true, assigned: done.length });
+    return res.json({ ok: true, assigned: done.length });
   });
 
   /** A company's offices (now, later and before), its own rate, and what it pays a month now. */

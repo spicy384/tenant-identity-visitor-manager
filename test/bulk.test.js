@@ -97,6 +97,36 @@ async function main() {
   const desk = await as("desk");
   const harborManager = await as("harborManager");
 
+  // --- a company's points of contact (PoCs) -----------------------------------------------------------
+  const pocs = async (who, company) => (await who.get(`/api/companies/${company.id}`)).data.contacts;
+  check("pocs: a company starts with none", (await pocs(admin, acme)).length === 0);
+  check("pocs: front desk can't add one (it only reads the directory)", (await desk.post(`/api/companies/${acme.id}/contacts`, { name: "Nope" })).status === 403);
+  check("pocs: nor a manager at a company they can't see", (await harborManager.post(`/api/companies/${acmeInc.id}/contacts`, { name: "Nope" })).status === 404);
+  check("pocs: one needs something in it", (await manager.post(`/api/companies/${acme.id}/contacts`, { role: "  ", name: "" })).status === 400);
+  let pr = await manager.post(`/api/companies/${acme.id}/contacts`, { role: "Billing", name: "Jane Doe", email: "ask for Jane, or billing@acme.example", phone: "555-0101 ext 4, after 9" });
+  const jane = pr.data.contact;
+  check("pocs: a manager adds one, each box as typed", pr.status === 200 && jane.role === "Billing" && jane.name === "Jane Doe" && jane.email === "ask for Jane, or billing@acme.example" && jane.phone === "555-0101 ext 4, after 9", JSON.stringify(pr.data));
+  pr = await manager.post(`/api/companies/${acme.id}/contacts`, { role: "After hours" });
+  check("pocs: and another, with only a role", pr.status === 200 && pr.data.contacts.map((c) => c.role).join() === "Billing,After hours" && pr.data.contact.name === null);
+  const afterHours = pr.data.contact;
+  check("pocs: anyone who reads the directory sees them, in the order added", (await pocs(desk, acme)).map((c) => c.role).join() === "Billing,After hours" && (await desk.get(`/api/companies/${acme.id}/contacts`)).data.contacts.length === 2);
+  pr = await manager.put(`/api/companies/${acme.id}/contacts/${afterHours.id}`, { name: "Sam Night", phone: "555-0199" });
+  check("pocs: changed, keeping what wasn't given", pr.status === 200 && pr.data.contact.role === "After hours" && pr.data.contact.name === "Sam Night" && pr.data.contact.phone === "555-0199");
+  check("pocs: not emptied altogether", (await manager.put(`/api/companies/${acme.id}/contacts/${afterHours.id}`, { role: "", name: "", phone: "" })).status === 400);
+  check("pocs: not through another company", (await manager.put(`/api/companies/${other.id}/contacts/${afterHours.id}`, { name: "X" })).status === 404 && (await manager.del(`/api/companies/${other.id}/contacts/${afterHours.id}`)).status === 404);
+  check("pocs: front desk can't change or remove one", (await desk.put(`/api/companies/${acme.id}/contacts/${jane.id}`, { name: "X" })).status === 403 && (await desk.del(`/api/companies/${acme.id}/contacts/${jane.id}`)).status === 403);
+  pr = await manager.post(`/api/companies/${acme.id}/contacts`, { name: "Short Stay" });
+  pr = await manager.del(`/api/companies/${acme.id}/contacts/${pr.data.contact.id}`);
+  check("pocs: removed", pr.status === 200 && pr.data.contacts.map((c) => c.name).join() === "Jane Doe,Sam Night");
+  const pocAudit = (await admin.get("/api/audit?action=company.poc")).data.entries;
+  check("pocs: each change is in the audit log", pocAudit.filter((e) => e.action === "company.poc_add").length === 3 && pocAudit.some((e) => e.action === "company.poc_update" && /After hours: Sam Night; name, phone changed \(was After hours\)/.test(e.detail || ""))
+    && pocAudit.some((e) => e.action === "company.poc_remove" && e.detail === "Short Stay") && pocAudit.every((e) => e.target === "Acme"), JSON.stringify(pocAudit.map((e) => [e.action, e.detail])));
+  // One at a company that will be merged into Acme, and one at a company that will be deleted.
+  await admin.post(`/api/companies/${acmeInc.id}/contacts`, { role: "Site lead", name: "Rita River" });
+  const gone = await mk("Short Lived", [{ siteId: harbor.id }]);
+  await admin.post(`/api/companies/${gone.id}/contacts`, { name: "Nobody Now" });
+  check("pocs: deleted with their company", (await admin.del(`/api/companies/${gone.id}`)).status === 200 && (await admin.get(`/api/companies/${gone.id}/contacts`)).status === 404);
+
   // --- merging companies ---------------------------------------------------------------------------
   const mergeBody = { intoId: acme.id, fromIds: [acmeInc.id, acmeCorp.id], company: { name: "Acme Corporation", custom: { [field.key]: "Eve" } } };
   check("merge: front desk can't (it only reads the directory)", (await desk.post("/api/companies/merge", mergeBody)).status === 403);
@@ -107,6 +137,7 @@ async function main() {
   check("merge: the kept company takes a merged one's name", r.data.company.name === "Acme Corporation" && r.data.company.id === acme.id);
   const merged = (await admin.get(`/api/companies/${acme.id}`)).data;
   check("merge: everyone is in it", merged.people.map((p) => p.firstName).sort().join() === "Ann,Bob,Cat");
+  check("merge: with the merged companies' PoCs after its own", merged.contacts.map((c) => c.name).join() === "Jane Doe,Sam Night,Rita River", JSON.stringify(merged.contacts));
   check("merge: at every site any of them was, with their suites", merged.company.sites.map((s) => `${s.siteName}: ${s.suite}`).sort().join("; ") === "Harbor Point: Suite 100; Riverside: Unit 4");
   check("merge: a person keeps their site where the company still is", merged.people.find((p) => p.firstName === "Bob").siteId === river.id);
   check("merge: the field value chosen is kept", merged.company.custom[field.key] === "Eve" && merged.company.phone === "555-0100");

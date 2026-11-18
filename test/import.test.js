@@ -196,6 +196,23 @@ async function main() {
   token = (await desk.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token;
   r = await desk.post(`/api/import/${token}/run`, { table: "Guests", target: "visitors", mapping: guests });
   check("visitors: importing again updates them (by email, else by name)", r.data.added === 0 && r.data.updated === 3 && (await desk.get("/api/visitors?limit=50")).data.total === 3);
+  // Those already on record can be skipped instead: left exactly as they are, and only the new ones added.
+  const guestCsv = (text) => desk.upload("/api/import/read?name=guests.csv", Buffer.from(text));
+  const guestMap = { first_name: { column: "First" }, last_name: { column: "Last" }, organization: { column: "Org" }, email: { column: "Email" }, company: { column: "Firm" } };
+  const hopperMail = gh.email || "";
+  const guestRows = `First,Last,Org,Email,Firm\nGrace,Hopper,Changed Org,${hopperMail},No Such Firm\nNewly,Arrived,Fresh Co,newly@example.com,\n`;
+  r = await desk.post(`/api/import/${(await guestCsv(guestRows)).data.token}/run`, { table: "CSV", target: "visitors", mapping: guestMap, existing: "skip" });
+  const afterSkip = (await desk.get("/api/visitors?limit=50")).data.visitors;
+  check("visitors: skipping those already on record adds only the new ones", r.status === 200 && r.data.added === 1 && r.data.updated === 0 && r.data.unchanged === 1 && r.data.skippedCount === 0 && afterSkip.length === 4, JSON.stringify(r.data));
+  check("visitors: a skipped visitor is left exactly as they were", afterSkip.find((v) => v.lastName === "Hopper").organization === "US Navy" && afterSkip.find((v) => v.lastName === "Hopper").companies[0]?.companyName === "Acme Corp");
+  check("visitors: a skipped row's mistakes don't matter", r.status === 200 && afterSkip.some((v) => v.lastName === "Arrived" && v.organization === "Fresh Co"));
+  check("visitors: the audit log says they were skipped", (await admin.get("/api/audit?action=import.visitors")).data.entries.some((e) => /1 added, 0 updated, 1 unchanged/.test(e.target || "") && /already on record were skipped/.test(e.detail || "")), JSON.stringify((await admin.get("/api/audit?action=import.visitors")).data.entries.slice(0, 2)));
+  r = await desk.post(`/api/import/${(await guestCsv(guestRows)).data.token}/run`, { table: "CSV", target: "visitors", mapping: guestMap });
+  check("visitors: without it, the same file is refused for the row's mistake (they're updated by default)", r.status === 400 && /no company called "No Such Firm"/.test(r.data.error), JSON.stringify(r.data));
+  r = await desk.post(`/api/import/${(await guestCsv("First,Last,Org,Email,Firm\nNewly,Arrived,Other Co,newly@example.com,\n")).data.token}/run`, { table: "CSV", target: "visitors", mapping: guestMap, existing: "update" });
+  check("visitors: or updated, when that is chosen", r.status === 200 && r.data.updated === 1 && (await desk.get("/api/visitors?q=Arrived")).data.visitors[0].organization === "Other Co");
+  r = await admin.del("/api/visitors/" + (await desk.get("/api/visitors?q=Arrived")).data.visitors[0].id);
+  check("visitors: (the one added is taken off again)", r.status === 200, JSON.stringify(r.data));
   r = await desk.post(`/api/import/${(await desk.upload("/api/import/read?name=directory.mdb", FIXTURE)).data.token}/run`, { table: "Guests", target: "visitors", mapping: { ...guests, host: { value: "Nobody Here" } } });
   check("visitors: a host who isn't in the company stops the lot", r.status === 400 && /Nobody at Acme Corp is called "Nobody Here"/.test(r.data.error));
 

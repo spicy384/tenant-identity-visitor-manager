@@ -236,7 +236,8 @@ check("projection: the clearance comes with its name", listed.clearanceLevel ===
 
 // --- visitor events -----------------------------------------------------------------------------------
 const day = today("America/New_York");
-const meeting = events.create({ siteId: site.id, title: "Quarterly review", date: day, startTime: "10:00", companyId: acme.id, hostId: plain.id }, { by: "desk" });
+// It starts at midnight, so a guest who leaves has left it whatever the time the suite runs (leaving before an event starts keeps them expected).
+const meeting = events.create({ siteId: site.id, title: "Quarterly review", date: day, startTime: "00:00", companyId: acme.id, hostId: plain.id }, { by: "desk" });
 check("events: added with company and host", meeting.companyName === "Acme Corp" && meeting.hostName === "Pat Plain");
 check("events: the host must be in the company", throwsStatus(() => events.create({ siteId: site.id, title: "X", date: day, companyId: acme.id, hostId: guard.id }), 400) === true);
 check("events: a bad time is refused", throwsStatus(() => events.create({ siteId: site.id, title: "X", date: day, startTime: "25:00" }), 400) === true);

@@ -110,6 +110,21 @@ CREATE TABLE IF NOT EXISTS company_sites (
 );
 CREATE INDEX IF NOT EXISTS company_sites_site ON company_sites(site_id);
 
+-- A company's points of contact (PoCs): who to reach there and what for, as free text, in the
+-- order added. Not people in the directory: a PoC may be anyone, anywhere.
+CREATE TABLE IF NOT EXISTS company_contacts (
+  id INTEGER PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  role TEXT,
+  name TEXT,
+  email TEXT,
+  phone TEXT,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS company_contacts_company ON company_contacts(company_id);
+
 CREATE TABLE IF NOT EXISTS people (
   id INTEGER PRIMARY KEY,
   company_id INTEGER NOT NULL REFERENCES companies(id),

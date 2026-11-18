@@ -109,6 +109,81 @@ function setShowInactivePeople(on) {
   }
 }
 
+// --- a company's points of contact (PoCs) --------------------------------------------------------
+
+/** A PoC in a few words, to name it in a message: "Jane Doe (Billing)". */
+function companyContactName(c) {
+  const who = c.name || c.email || c.phone;
+  return who ? `${who}${c.role ? ` (${c.role})` : ""}` : c.role || "this PoC";
+}
+
+/** Adds a point of contact to a company, or changes one. Each box takes any text; one at least is needed. */
+function companyContactDialog(company, contact = null) {
+  return formDialog({
+    title: contact ? `Edit PoC at ${company.name}` : `Add PoC to ${company.name}`,
+    submitLabel: contact ? "Save" : "Add PoC",
+    fields: [
+      { name: "role", label: "PoC Role", value: contact?.role || "", placeholder: "Office manager, Billing, After hours…", autofocus: true },
+      { name: "name", label: "Name", value: contact?.name || "" },
+      { name: "email", label: "Email", value: contact?.email || "", half: true },
+      { name: "phone", label: "Phone", value: contact?.phone || "", half: true }
+    ],
+    onSubmit: async (v) => {
+      const body = { role: v.role, name: v.name, email: v.email, phone: v.phone };
+      if (!Object.values(body).some((x) => String(x || "").trim())) throw new Error("Fill in at least one of the boxes.");
+      return api(`/api/companies/${company.id}/contacts${contact ? `/${contact.id}` : ""}`, { method: contact ? "PUT" : "POST", body });
+    }
+  });
+}
+
+async function addCompanyContact(company, refresh) {
+  const saved = await companyContactDialog(company);
+  if (!saved) return;
+  toast(`Added ${companyContactName(saved.contact)} as a PoC.`);
+  refresh();
+}
+
+async function editCompanyContact(company, contact, refresh) {
+  const saved = await companyContactDialog(company, contact);
+  if (!saved) return;
+  toast("Saved.");
+  refresh();
+}
+
+async function removeCompanyContact(company, contact, refresh) {
+  if (!(await confirmDialog(`Remove ${companyContactName(contact)} from ${company.name}'s PoCs?`, { danger: true, confirmLabel: "Remove" }))) return;
+  try {
+    await api(`/api/companies/${company.id}/contacts/${contact.id}`, { method: "DELETE" });
+    toast("PoC removed.");
+    refresh();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+/**
+ * A company's points of contact, on its panel: role, name, email and phone, as they were typed
+ * (an email that is one opens a message; a phone number dials). Nothing when it has none.
+ */
+function companyContactsSection(company, contacts, refresh) {
+  if (!contacts.length) return null;
+  const mail = (text) => (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? h("a", { href: `mailto:${text}`, text }) : text);
+  const dial = (text) => (/^[\d\s().+-]{7,}$/.test(text) && !/[a-z]/i.test(text) ? h("a", { href: `tel:${text.replace(/[^\d+]/g, "")}`, text }) : text);
+  const may = canEditDirectory();
+  return h("div", { class: "company-pocs" },
+    h("h4", { text: `Points of Contact (PoCs) (${contacts.length})` }),
+    h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
+      h("thead", {}, h("tr", {}, ["PoC Role", "Name", "Email", "Phone"].map((label) => h("th", { text: label })), may ? h("th", {}, h("span", { class: "visually-hidden", text: "Change" })) : null)),
+      h("tbody", {}, contacts.map((c) => h("tr", {},
+        h("td", {}, c.role ? h("strong", { text: c.role }) : ""),
+        h("td", { text: c.name || "" }),
+        h("td", {}, c.email ? mail(c.email) : ""),
+        h("td", {}, c.phone ? dial(c.phone) : ""),
+        may ? h("td", { class: "nowrap poc-actions" },
+          h("button", { type: "button", class: "link-btn", text: "Edit", "aria-label": `Edit ${companyContactName(c)}`, onclick: () => editCompanyContact(company, c, refresh) }),
+          h("button", { type: "button", class: "link-btn", text: "Remove", "aria-label": `Remove ${companyContactName(c)}`, onclick: () => removeCompanyContact(company, c, refresh) })) : null))))));
+}
+
 async function showCompanyDetail(id) {
   companiesView.selected = id;
   const pane = clear($("company-detail"));
@@ -123,15 +198,17 @@ async function showCompanyDetail(id) {
     pane.append(h("p", { class: "message error", text: error.message }));
     return;
   }
-  const { company, fields, people } = data;
+  const { company, fields, people, contacts = [] } = data;
   const head = h("div", { class: "panel" },
     h("div", { class: "panel-head" },
       h("div", {}, h("h2", { text: company.name }), company.active ? null : h("span", { class: "badge muted", text: "Inactive" })),
       h("div", { class: "btn-row" },
         canManageFields("company") ? h("button", { type: "button", class: "link-btn", text: "Add a field to this company", onclick: () => addRecordField("company", company.id, company.name, () => showCompanyDetail(id)) }) : null,
+        canEditDirectory() ? h("button", { type: "button", class: "secondary small", text: "Add PoC", onclick: () => addCompanyContact(company, () => showCompanyDetail(id)) }) : null,
         canEditDirectory() ? h("button", { type: "button", class: "secondary small", text: "Edit", onclick: () => editCompany(company, fields) }) : null,
         isAdmin() ? h("button", { type: "button", class: "secondary small", text: "Delete", onclick: () => deleteCompany(company) }) : null)),
-    recordFacts(fields, company, ["name", "active"]));
+    recordFacts(fields, company, ["name", "active"]),
+    companyContactsSection(company, contacts, () => showCompanyDetail(id)));
 
   // Inactive people are left out unless "Show inactive" is ticked (as on the People page).
   const inactive = people.filter((p) => !p.active).length;

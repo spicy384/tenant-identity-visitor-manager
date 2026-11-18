@@ -468,6 +468,41 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
     return get(id);
   }
 
+  /**
+   * Adds offices to a lease that hasn't ended, for its company and its dates, as choosing them
+   * on the lease would: entries [{ officeId, sharePct }] (the whole of each unless a share is
+   * given). All or nothing. `companyId`, when given, must be the lease's company.
+   */
+  function addOffices(id, entries, { scope = null, by = null, companyId = null } = {}) {
+    const existing = get(id, { scope });
+    if (!existing) throw fail(404, "No such lease, or not at your sites.");
+    const words = `${existing.companyName}'s lease${existing.reference ? ` ${existing.reference}` : ""}`;
+    if (companyId && Number(companyId) !== existing.companyId) throw fail(400, `That lease is ${existing.companyName}'s, not this company's.`);
+    if (existing.status === "ended") throw fail(409, `${words} ended on ${existing.endDate}; make a new lease.`);
+    const list = (Array.isArray(entries) ? entries : []).map((e) => ({ officeId: Number(e?.officeId), sharePct: e?.sharePct }));
+    if (!list.length || list.some((e) => !Number.isInteger(e.officeId) || e.officeId <= 0)) throw fail(400, "Choose at least one office.");
+    if (existing.offices.length + list.length > 200) throw fail(400, "At most 200 offices in a lease.");
+    const done = [];
+    db.transaction(() => {
+      for (const e of list) {
+        const has = existing.offices.find((o) => o.officeId === e.officeId);
+        if (has) throw fail(409, `Office ${has.name} (${has.floorName}) is in ${words} already.`);
+        let made;
+        try {
+          made = assignNamed(e.officeId, { companyId: existing.companyId, startDate: existing.startDate, endDate: existing.endDate, sharePct: e.sharePct }, { scope, by });
+        } catch (error) {
+          // Let to someone else for part of the lease's term: it can't join from the lease's start.
+          if (error.status === 409 && /overlaps/.test(error.message)) error.message += ` A room joins a lease for the lease's own dates (from ${existing.startDate}); to give it to ${existing.companyName} from a later date, make a new lease.`;
+          throw error;
+        }
+        raw.prepare("UPDATE office_assignments SET lease_id = ? WHERE id = ?").run(id, made.assignment.id);
+        done.push({ office: made.office, assignment: { ...made.assignment, leaseId: Number(id) } });
+      }
+      raw.prepare("UPDATE leases SET updated_by = ?, updated_at = ? WHERE id = ?").run(by, now(), id);
+    });
+    return { lease: get(id), done };
+  }
+
   /** Keeps a file (from readDocument) with a lease: kind is agreement, amendment or supporting. */
   function addDocument(leaseId, file, { kind, description } = {}, { by = null } = {}) {
     if (!DOCUMENT_KINDS.includes(kind)) throw fail(400, "Say what the document is: the agreement, a mod or amendment, or a supporting document.");
@@ -603,7 +638,7 @@ function createLeases({ db, facilities, directory, files, now = Date.now }) {
       .sort((a, b) => a.endDate.localeCompare(b.endDate));
   }
 
-  return { adoptAssignments, list, get, create, update, remove, addDocument, getDocument, removeDocument, documentFile, syncAfterAssignment, mayLeave, leave, leaseOfAssignment, rentFor, coveringMonth, endingSoon, today };
+  return { adoptAssignments, list, get, create, update, addOffices, remove, addDocument, getDocument, removeDocument, documentFile, syncAfterAssignment, mayLeave, leave, leaseOfAssignment, rentFor, coveringMonth, endingSoon, today };
 }
 
 module.exports = { createLeases, RENT_MODES, periodInput, monthBounds, periodName, money, dateInput, amountInput, text, fail };

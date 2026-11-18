@@ -330,6 +330,9 @@ main { max-width: 1280px; margin: 0 auto; padding: 18px max(16px, env(safe-area-
 .facts dt { color: var(--text-muted); font-weight: 600; font-size: 0.88rem; }
 .facts dd { margin: 0; }
 .inline-facts { margin-top: 4px; }
+/* A company's points of contact, under its details. */
+.company-pocs h4 { margin: 16px 0 6px; }
+.poc-actions { text-align: right; }
 .detail-top { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
 .detail-top .facts { flex: 1; min-width: 240px; }
 .plain-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }

@@ -1208,8 +1208,92 @@ async function facilityCompanyOptions() {
   return facilityCompanies.map((c) => ({ value: String(c.id), label: c.name }));
 }
 
+/** A company's leases running now (active, or ending soon), as those who see leases get them; none on any error. */
+async function currentLeasesOf(companyId) {
+  if (!companyId) return [];
+  try {
+    return (await api(`/api/leases?${new URLSearchParams({ companyId: String(companyId), status: "current" })}`)).leases;
+  } catch {
+    return [];
+  }
+}
+
+const leaseDates = (l) => `${fmtDay(l.startDate)} to ${l.endDate ? fmtDay(l.endDate) : "no end date"}`;
+
+/** A lease in a few words, to choose it by: "L-100 · 201, 202 · Jan 15, 2026 to no end date". */
+function leaseChoiceText(l) {
+  const names = l.offices.map((o) => o.name);
+  const rooms = names.length ? `${names.slice(0, 4).join(", ")}${names.length > 4 ? ` and ${names.length - 4} more` : ""}` : "no rooms yet";
+  return [l.reference || `Lease #${l.id}`, rooms, leaseDates(l)].join(" · ");
+}
+
+/**
+ * The question asked when a room is given to a company that has a lease running: add it to
+ * that lease, or make a new lease for it. A choice that must be made, shown only when there is
+ * such a lease. `rooms`: "the room" or "these rooms". onChange(lease) runs with the lease chosen
+ * (null for a new one, or no answer yet). Returns { node, setLeases(list, companyName),
+ * answered(), lease() }.
+ */
+function leaseChoice(onChange, { rooms = "the room" } = {}) {
+  let leases = [];
+  let company = "";
+  const select = h("select", { "aria-label": "Add to the current lease, or a new lease" });
+  const hint = h("span", { class: "hint" });
+  const node = h("label", { class: "full-row lease-choice", hidden: true }, h("span", { text: "Lease *" }), select, hint);
+  const chosen = () => leases.find((l) => String(l.id) === select.value) || null;
+  const several = rooms !== "the room";
+  const say = () => {
+    const l = chosen();
+    hint.textContent = l
+      ? `${several ? "They join" : "It joins"} the lease for the lease's own dates (${leaseDates(l)}), and ${several ? "their" : "its"} rent becomes part of the lease's${l.rentMode === "fixed" ? " (this lease has a fixed monthly rent, which stays as it is)" : ""}. Invoices already made aren't changed.`
+      : select.value === "new" ? `${several ? "They get" : "It gets"} a lease of ${several ? "their" : "its"} own, for the dates below.`
+        : `${company} has ${leases.length === 1 ? "a lease" : `${leases.length} leases`} running now. Add ${rooms} to ${leases.length === 1 ? "it" : "one"}, or make a new lease?`;
+  };
+  select.addEventListener("change", () => { say(); onChange(chosen()); });
+  return {
+    node,
+    setLeases(list, companyName) {
+      leases = list;
+      company = companyName;
+      node.hidden = !list.length;
+      select.replaceChildren(h("option", { value: "", text: "Choose: the current lease, or a new one" }),
+        ...list.map((l) => h("option", { value: String(l.id), text: `Add to ${leaseChoiceText(l)}` })),
+        h("option", { value: "new", text: "Make a new lease" }));
+      select.value = "";
+      say();
+    },
+    answered: () => !leases.length || select.value !== "",
+    lease: chosen
+  };
+}
+
 async function assignOffice(office, { companyId = null } = {}) {
   const options = await facilityCompanyOptions();
+  // Added to a lease, the room has the lease's dates: the boxes show them, and can't be changed.
+  let boxes = null;
+  let own = null;
+  const followLease = (lease) => {
+    if (!boxes) return;
+    if (lease && !own) own = { startDate: boxes.startDate.value, endDate: boxes.endDate.value };
+    for (const key of ["startDate", "endDate"]) {
+      boxes[key].disabled = Boolean(lease);
+      boxes[key].value = lease ? lease[key] || "" : own ? own[key] : boxes[key].value;
+    }
+    if (!lease) own = null;
+    boxes.notes.closest("label").hidden = Boolean(lease);
+  };
+  const choice = leaseChoice(followLease);
+  let asking = 0;
+  // The company's leases running now, each time a company is chosen.
+  const askAboutLease = async (input, inputs) => {
+    boxes = inputs;
+    asking += 1;
+    const mine = asking;
+    const list = await currentLeasesOf(Number(input.value) || null);
+    if (mine !== asking) return; // another company was chosen meanwhile
+    choice.setLeases(list, options.find((o) => o.value === input.value)?.label || "This company");
+    followLease(null);
+  };
   // From the day after the current company's last day, when it has one and has the whole room; else today.
   let start = todayISO();
   if (office.current?.endDate && !office.freePct) {
@@ -1221,16 +1305,21 @@ async function assignOffice(office, { companyId = null } = {}) {
     title: `Assign office ${office.name}`,
     intro: office.current || office.next ? h("p", { class: "muted small-text", text: `${officeHolder(office)}. Companies can share a room, up to 100% between them on any day.` }) : null,
     fields: [
-      { name: "companyId", label: "Company", type: "select", value: companyId ? String(companyId) : "", options: [{ value: "", label: "Choose a company" }, ...options], required: true },
+      { name: "companyId", label: "Company", type: "select", value: companyId ? String(companyId) : "", options: [{ value: "", label: "Choose a company" }, ...options], required: true, onChange: askAboutLease },
+      { node: choice.node },
       { name: "startDate", label: "From", type: "date", value: start, required: true, half: true },
       { name: "endDate", label: "To (the last day)", type: "date", half: true, hint: "Empty for no end date." },
       { name: "sharePct", label: "Share of the room (%)", type: "number", value: office.freePct || 100, half: true, step: "0.01", min: 0.01, max: 100, hint: "100 unless companies share it: they pay this part of its rent." },
       { name: "notes", label: "Notes", type: "textarea", rows: 2, placeholder: "Lease reference, terms…" }
     ],
     submitLabel: "Assign",
-    onSubmit: async (v) => api(`/api/offices/${office.id}/assignments`, { method: "POST", body: { companyId: Number(v.companyId), startDate: v.startDate, endDate: v.endDate || null, sharePct: v.sharePct, notes: v.notes } })
+    onSubmit: async (v) => {
+      if (!choice.answered()) throw new Error("Choose whether to add the room to the current lease, or make a new lease.");
+      const lease = choice.lease();
+      return api(`/api/offices/${office.id}/assignments`, { method: "POST", body: { companyId: Number(v.companyId), startDate: v.startDate, endDate: v.endDate || null, sharePct: v.sharePct, notes: v.notes, ...(lease ? { leaseId: lease.id } : {}) } });
+    }
   });
-  if (saved) toast(`${office.name} assigned to ${saved.assignment.companyName}.`);
+  if (saved) toast(saved.lease ? `${office.name} added to ${saved.assignment.companyName}'s lease${saved.lease.reference ? ` ${saved.lease.reference}` : ""}.` : `${office.name} assigned to ${saved.assignment.companyName}.`);
   return saved;
 }
 
@@ -1623,6 +1712,19 @@ async function assignOfficesToCompany(company, companyRates) {
   const from = h("input", { type: "date", value: todayISO(), required: true });
   const to = h("input", { type: "date" });
   const notes = h("input", { type: "text", placeholder: "Lease reference, terms…" });
+  // With a lease running: add them to it, or a new lease? Added to it, they have its dates, so
+  // the rooms offered are those free for all of them.
+  let own = null;
+  const choice = leaseChoice((lease) => {
+    if (lease && !own) own = { from: from.value, to: to.value };
+    from.disabled = Boolean(lease);
+    to.disabled = Boolean(lease);
+    from.value = lease ? lease.startDate : own ? own.from : from.value;
+    to.value = lease ? lease.endDate || "" : own ? own.to : to.value;
+    if (!lease) own = null;
+    notes.closest("label").hidden = Boolean(lease);
+    loadFree();
+  }, { rooms: "these rooms" });
   const floorPick = h("select", { "aria-label": "Floor" });
   const search = h("input", { type: "search", placeholder: "Find an office", "aria-label": "Find an office" });
   const planBox = h("div", { class: "pick-plan" });
@@ -1768,6 +1870,7 @@ async function assignOfficesToCompany(company, companyRates) {
 
   const body = h("div", { class: "stack assign-offices" },
     h("div", { class: "form-grid" },
+      choice.node,
       h("label", { class: "half" }, h("span", { text: "From" }), from),
       h("label", { class: "half" }, h("span", { text: "To (the last day)" }), to, h("span", { class: "hint", text: "Empty for no end date." })),
       h("label", {}, h("span", { text: "Notes" }), notes)),
@@ -1779,7 +1882,10 @@ async function assignOfficesToCompany(company, companyRates) {
     title: `Assign offices to ${company.name}`,
     body,
     wide: true,
-    onOpen: () => loadFree(),
+    onOpen: async () => {
+      loadFree();
+      choice.setLeases(await currentLeasesOf(company.id), company.name);
+    },
     actions: [
       { label: "Cancel", value: null },
       {
@@ -1788,11 +1894,13 @@ async function assignOfficesToCompany(company, companyRates) {
         onClick: async () => {
           if (!from.value) throw new Error("Give the start date.");
           if (!picked.size) throw new Error("Choose at least one office: click it on the plan or tick it in the list.");
-          return api(`/api/companies/${company.id}/offices`, { method: "POST", body: { officeIds: [...picked.keys()], startDate: from.value, endDate: to.value || null, notes: notes.value, shares: Object.fromEntries([...picked.values()].map((o) => [o.id, o.freeShare])) } });
+          if (!choice.answered()) throw new Error("Choose whether to add these rooms to the current lease, or make a new lease.");
+          const lease = choice.lease();
+          return api(`/api/companies/${company.id}/offices`, { method: "POST", body: { officeIds: [...picked.keys()], startDate: from.value, endDate: to.value || null, notes: notes.value, shares: Object.fromEntries([...picked.values()].map((o) => [o.id, o.freeShare])), ...(lease ? { leaseId: lease.id } : {}) } });
         }
       }
     ]
   });
-  if (done) toast(`${done.assigned} ${done.assigned === 1 ? "office" : "offices"} assigned to ${company.name}.`);
+  if (done) toast(`${done.assigned} ${done.assigned === 1 ? "office" : "offices"} ${done.lease ? `added to ${company.name}'s lease${done.lease.reference ? ` ${done.lease.reference}` : ""}` : `assigned to ${company.name}`}.`);
   return done;
 }

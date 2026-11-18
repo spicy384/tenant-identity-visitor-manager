@@ -11,6 +11,10 @@ const { cleanDate, statusFor, recheckDays } = require("./clearance");
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// A company's points of contact: how many, and how long each of their four boxes may be.
+const MAX_COMPANY_CONTACTS = 50;
+const MAX_CONTACT_TEXT = 200;
+
 function fail(status, message) {
   const error = new Error(message);
   error.status = status;
@@ -325,6 +329,11 @@ function createDirectory({ db, fields }) {
       // So do their leases, charges and invoices (each keeps the name it was billed under), their
       // certificates of insurance and the tenant badges they were allotted.
       for (const table of ["leases", "charges", "invoices", "insurance_certificates", "badge_allotments"]) raw.prepare(`UPDATE ${table} SET company_id = ? WHERE company_id IN (${marks})`).run(into.id, ...ids);
+      // And their points of contact, after the kept company's own.
+      for (const id of ids) {
+        const last = raw.prepare("SELECT coalesce(max(position), 0) AS n FROM company_contacts WHERE company_id = ?").get(into.id).n;
+        raw.prepare("UPDATE company_contacts SET company_id = ?, position = position + ? WHERE company_id = ?").run(into.id, last, id);
+      }
       // Fields added to a merged company alone come along, with their values.
       for (const id of ids) {
         const own = raw.prepare("SELECT id FROM field_definitions WHERE entity = 'company' AND record_id = ?").all(id).map((r) => r.id);
@@ -363,6 +372,55 @@ function createDirectory({ db, fields }) {
       raw.prepare("DELETE FROM companies WHERE id = ?").run(id);
     });
     return { ...existing, peopleRemoved };
+  }
+
+  // --- a company's points of contact (PoCs) ---------------------------------------------
+
+  const contactOut = (r) => ({ id: r.id, companyId: r.company_id, role: r.role, name: r.name, email: r.email, phone: r.phone });
+
+  /** A company's points of contact, in the order added: [{ id, companyId, role, name, email, phone }]. */
+  function listContacts(companyId) {
+    return raw.prepare("SELECT * FROM company_contacts WHERE company_id = ? ORDER BY position, id").all(companyId).map(contactOut);
+  }
+
+  /** Role, name, email and phone as given (any text; what isn't given stays), of which one at least is needed. */
+  function cleanContact(input, existing = null) {
+    const c = {};
+    for (const key of ["role", "name", "email", "phone"]) c[key] = input?.[key] !== undefined ? text(input[key], MAX_CONTACT_TEXT) : existing ? existing[key] : null;
+    if (!c.role && !c.name && !c.email && !c.phone) throw fail(400, "Give the PoC a role, a name, an email or a phone number.");
+    return c;
+  }
+
+  function getContact(companyId, contactId) {
+    const row = raw.prepare("SELECT * FROM company_contacts WHERE id = ? AND company_id = ?").get(contactId, companyId);
+    if (!row) throw fail(404, "No such PoC at that company.");
+    return contactOut(row);
+  }
+
+  /** Adds a point of contact to a company (the caller has checked it may be seen). */
+  function addContact(companyId, input) {
+    const c = cleanContact(input);
+    const have = raw.prepare("SELECT count(*) AS n, coalesce(max(position), 0) AS last FROM company_contacts WHERE company_id = ?").get(companyId);
+    if (have.n >= MAX_COMPANY_CONTACTS) throw fail(400, `A company has at most ${MAX_COMPANY_CONTACTS} PoCs.`);
+    const now = Date.now();
+    const id = raw.prepare("INSERT INTO company_contacts (company_id, role, name, email, phone, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(companyId, c.role, c.name, c.email, c.phone, have.last + 1, now, now).lastInsertRowid;
+    return getContact(companyId, Number(id));
+  }
+
+  /** Changes a point of contact. Returns { before, contact }. */
+  function updateContact(companyId, contactId, input) {
+    const before = getContact(companyId, contactId);
+    const c = cleanContact(input, before);
+    raw.prepare("UPDATE company_contacts SET role = ?, name = ?, email = ?, phone = ?, updated_at = ? WHERE id = ?").run(c.role, c.name, c.email, c.phone, Date.now(), contactId);
+    return { before, contact: getContact(companyId, contactId) };
+  }
+
+  /** Removes a point of contact, and returns it as it was. */
+  function removeContact(companyId, contactId) {
+    const before = getContact(companyId, contactId);
+    raw.prepare("DELETE FROM company_contacts WHERE id = ?").run(contactId);
+    return before;
   }
 
   // --- people -------------------------------------------------------------------------
@@ -556,6 +614,10 @@ function createDirectory({ db, fields }) {
     updateCompany,
     deleteCompany,
     mergeCompanies,
+    listContacts,
+    addContact,
+    updateContact,
+    removeContact,
     listPeople,
     getPerson,
     createPerson,
