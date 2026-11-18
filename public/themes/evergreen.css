@@ -1,0 +1,49 @@
+/*
+ * Theme: Evergreen
+ * About: Green accents on warm paper.
+ */
+
+/* In both light and dark: slightly squarer corners. */
+:root {
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 12px;
+}
+
+:root[data-appearance="light"] {
+  --bg: #f3f1ea;
+  --surface: #fffdf8;
+  --surface-2: #f8f5ee;
+  --surface-3: #efebe1;
+  --border: #e2ddd0;
+  --border-strong: #c9c2b1;
+  --text: #1c2a22;
+  --text-muted: #5d6b62;
+  --primary: #166534;
+  --primary-hover: #14532d;
+  --primary-soft: #e8f3ea;
+  --primary-ring: rgba(22, 101, 52, 0.35);
+  --primary-fg: #ffffff;
+  --secondary-bg: #ece8dd;
+  --secondary-hover: #e0dbcd;
+  --secondary-text: #23312a;
+}
+
+:root[data-appearance="dark"] {
+  --bg: #101412;
+  --surface: #171c19;
+  --surface-2: #1d2420;
+  --surface-3: #252d28;
+  --border: #2a332e;
+  --border-strong: #3c4841;
+  --text: #e6ece8;
+  --text-muted: #9fada5;
+  --primary: #5fd38d;
+  --primary-hover: #8ee4ae;
+  --primary-soft: #1d2b23;
+  --primary-ring: rgba(95, 211, 141, 0.4);
+  --primary-fg: #0c1410;
+  --secondary-bg: #252d28;
+  --secondary-hover: #2f3933;
+  --secondary-text: #e6ece8;
+}

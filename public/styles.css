@@ -1,6 +1,7 @@
 /* ============================================================
    Design tokens (the palette of the DMARC analyzer and PBX
-   Manager; light or dark as chosen, else as the device is set)
+   Manager; light or dark as chosen, else as the device is set).
+   A theme (themes.js, public/themes) changes any of these.
    ============================================================ */
 :root {
   color-scheme: light;
@@ -39,9 +40,9 @@
   --tap: 44px;
 }
 
-/* Dark: chosen in the app (data-theme on <html>, 00-theme.js), or the device's setting when
-   nothing is chosen. */
-:root[data-theme="dark"] {
+/* Dark: data-appearance on <html>, which 00-theme.js always sets: to what was chosen in the
+   app, or to the device's setting when nothing was. */
+:root[data-appearance="dark"] {
   color-scheme: dark;
   --bg: #131211;
   --surface: #1c1b19;
@@ -72,38 +73,6 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --bg: #131211;
-    --surface: #1c1b19;
-    --surface-2: #232220;
-    --surface-3: #2b2927;
-    --border: #302e2b;
-    --border-strong: #433f3a;
-    --text: #ece8e2;
-    --text-muted: #aca59c;
-    --primary: #6aabf7;
-    --primary-hover: #9cc6fa;
-    --primary-soft: #272b30;
-    --primary-ring: rgba(106, 171, 247, 0.4);
-    --primary-fg: #121417;
-    --danger: #f87171;
-    --danger-hover: #fca5a5;
-    --danger-soft: #2d1e1c;
-    --danger-fg: #260a0c;
-    --success: #34d399;
-    --success-soft: #1a2a23;
-    --warn: #fbbf24;
-    --warn-soft: #2c2516;
-    --secondary-bg: #2b2927;
-    --secondary-hover: #36332f;
-    --secondary-text: #ece8e2;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
-    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
-  }
-}
 
 /* ============================================================
    Base
@@ -423,6 +392,17 @@ dialog::backdrop { background: rgba(15, 23, 42, 0.5); }
 .logo-preview img { max-height: 120px; max-width: 100%; object-fit: contain; }
 .logo-cell { width: 56px; }
 .site-logo-thumb { max-width: 48px; max-height: 32px; object-fit: contain; display: block; }
+/* A logo of the installation's own, in place of the mark (Settings > General, 01-core.js). */
+.brand-logo { display: block; height: 36px; width: auto; max-width: 180px; object-fit: contain; flex: none; }
+.auth-brand { flex-wrap: wrap; }
+.auth-brand .brand-logo { height: 48px; max-width: 100%; }
+@media (max-width: 640px) { .app-header .brand-logo { max-width: 110px; } }
+.brand-logo-places { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 8px; }
+@media (max-width: 600px) { .brand-logo-places { grid-template-columns: 1fr; } }
+.brand-logo-place { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* Each preview is the page it is for, light or dark, whichever is showing here. */
+.logo-preview.on-light-page { background: #ffffff; color: #5b6b7f; border: 1px solid #cbd5e1; }
+.logo-preview.on-dark-page { background: #1c1b19; color: #aca59c; border: 1px solid #433f3a; }
 .access-grid th[scope="row"] { font-weight: 600; white-space: nowrap; }
 .access-grid td { min-width: 120px; }
 .access-select { min-height: 32px; padding: 2px 8px; font-size: 0.85rem; width: 100%; }
@@ -631,19 +611,11 @@ tr.is-picked td { background: var(--primary-soft); }
   --office-unavailable: #64748b;
   --office-shared: #0891b2;
 }
-:root[data-theme="dark"] {
+:root[data-appearance="dark"] {
   --office-available: #34d399;
   --office-occupied: #6aabf7;
   --office-upcoming: #fbbf24;
   --office-unavailable: #8b8780;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --office-available: #34d399;
-    --office-occupied: #6aabf7;
-    --office-upcoming: #fbbf24;
-    --office-unavailable: #8b8780;
-  }
 }
 .status-available { --office: var(--office-available); }
 .status-occupied { --office: var(--office-occupied); }
@@ -863,12 +835,8 @@ a.button-link:hover { text-decoration: none; }
 .badge-alerts-head { font-size: 0.95rem; color: #7c2d12; }
 .badge-alert.stage-id, .badge-alert.stage-badge { border-left: 6px solid #f97316; }
 .checkin-row.stage-id .dash-row, .checkin-row.stage-badge .dash-row { background: #fff7ed; border-left: 4px solid #f97316; }
-:root[data-theme="dark"] .checkin-row.stage-id .dash-row, :root[data-theme="dark"] .checkin-row.stage-badge .dash-row { background: #3a2412; }
-:root[data-theme="dark"] .badge-alerts-head { color: #fdba74; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .checkin-row.stage-id .dash-row, :root:not([data-theme="light"]) .checkin-row.stage-badge .dash-row { background: #3a2412; }
-  :root:not([data-theme="light"]) .badge-alerts-head { color: #fdba74; }
-}
+:root[data-appearance="dark"] .checkin-row.stage-id .dash-row, :root[data-appearance="dark"] .checkin-row.stage-badge .dash-row { background: #3a2412; }
+:root[data-appearance="dark"] .badge-alerts-head { color: #fdba74; }
 .wizard-step-link { background: none; border: 0; padding: 0; font: inherit; color: var(--primary); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 
 /* --- the sign-in card with Microsoft sign-in up front (02-auth.js) --- */
@@ -914,10 +882,7 @@ a.button-link:hover { text-decoration: none; }
   --material-blur: blur(20px) saturate(180%);
   --scrim-color: rgba(15, 23, 42, 0.42);
 }
-:root[data-theme="dark"] { --scrim-color: rgba(0, 0, 0, 0.58); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --scrim-color: rgba(0, 0, 0, 0.58); }
-}
+:root[data-appearance="dark"] { --scrim-color: rgba(0, 0, 0, 0.58); }
 
 /* --- type: the system font, size-specific tracking and leading --- */
 body {
@@ -1144,7 +1109,7 @@ dialog.dialog.is-closing::backdrop { opacity: 0; }
 
 /* --- asked for more contrast: solid surfaces and clear edges --- */
 @media (prefers-contrast: more) {
-  :root, :root[data-theme] { --border: var(--border-strong); }
+  :root { --border: var(--border-strong) !important; }
   .chrome { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
   .chrome::after { opacity: 1; background: var(--border-strong); }
   .site-menu, .action-menu { background: var(--surface); border-color: var(--border-strong); }

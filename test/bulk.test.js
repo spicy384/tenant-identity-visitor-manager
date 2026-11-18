@@ -52,6 +52,10 @@ async function waitFor(fn) {
 let server;
 async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ivm-bulk-"));
+  // A theme of this installation's own, and a file that can't be one (themes.js).
+  fs.mkdirSync(path.join(dataDir, "themes"));
+  fs.writeFileSync(path.join(dataDir, "themes", "harbor.css"), "/* Theme: Harbor\n   About: Sea colors. */\n:root[data-appearance=\"dark\"] { --primary: skyblue; }\n");
+  fs.writeFileSync(path.join(dataDir, "themes", "leaky.css"), ".panel { display: none; }\n");
   server = spawn(process.execPath, ["server.js"], {
     cwd: path.join(__dirname, ".."),
     env: { ...process.env, PORT: String(PORT), KIOSK_PORT: "", DATA_DIR: dataDir, DB_KEY: crypto.randomBytes(32).toString("hex"), DB_KEY_FILE: "", LOGIN_RATE_LIMIT: "0", ENTRA_TENANT_ID: "", ENTRA_CLIENT_ID: "", TZ: "UTC" },
@@ -247,10 +251,21 @@ async function main() {
   await security.post("/api/badges/bulk-delete", { ids: rangeIds });
   check("badge fields: deleted with their badge", (await security.get(`/api/badges/${rangeIds[0]}`)).status === 404);
 
-  // --- light or dark, kept with the account ----------------------------------------------------------
-  check("theme: follows the device to start with", (await manager.get("/api/me/prefs")).data.theme === "auto");
-  check("theme: kept when chosen", (await manager.put("/api/me/prefs", { theme: "light" })).data.theme === "light" && (await manager.get("/api/me/prefs")).data.theme === "light");
-  check("theme: only auto, light or dark", (await manager.put("/api/me/prefs", { theme: "purple" })).status === 400);
+  // --- light or dark, and the theme, kept with the account -------------------------------------------
+  check("appearance: follows the device to start with", (await manager.get("/api/me/prefs")).data.appearance === "auto");
+  check("appearance: kept when chosen", (await manager.put("/api/me/prefs", { appearance: "light" })).data.appearance === "light" && (await manager.get("/api/me/prefs")).data.appearance === "light");
+  check("appearance: only auto, light or dark", (await manager.put("/api/me/prefs", { appearance: "purple" })).status === 400);
+  const themeList = (await manager.get("/api/config")).data.themes;
+  check("themes: the standard look, the shipped one and this installation's own are offered", themeList.map((t) => t.id).join() === "standard,evergreen,harbor" && themeList[2].name === "Harbor" && themeList[2].about === "Sea colors.", JSON.stringify(themeList));
+  const sheet = await fetch(`${BASE}/themes.css`);
+  const sheetText = await sheet.text();
+  check("themes: one stylesheet, there before sign-in, each theme only for those who chose it", sheet.status === 200 && /^text\/css/.test(sheet.headers.get("content-type"))
+    && sheetText.includes(':root[data-theme="harbor"][data-appearance="dark"]') && !sheetText.includes(".panel"), sheetText);
+  check("themes: the page loads it", (await (await fetch(`${BASE}/`)).text()).includes('href="/themes.css?v='));
+  check("themes: the standard look to start with", (await manager.get("/api/me/prefs")).data.theme === "standard");
+  check("themes: kept when chosen, beside light or dark", (await manager.put("/api/me/prefs", { theme: "harbor" })).data.theme === "harbor" && (await manager.get("/api/me/prefs")).data.theme === "harbor" && (await manager.get("/api/me/prefs")).data.appearance === "light");
+  check("themes: each person's own", (await admin.get("/api/me/prefs")).data.theme === "standard");
+  check("themes: only one there is", (await manager.put("/api/me/prefs", { theme: "leaky" })).status === 400 && (await manager.put("/api/me/prefs", { theme: "dark" })).status === 400 && (await manager.get("/api/me/prefs")).data.theme === "harbor");
 
   server.kill();
   await new Promise((r2) => setTimeout(r2, 300));

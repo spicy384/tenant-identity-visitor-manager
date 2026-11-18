@@ -39,10 +39,29 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Settings** has a grouped menu down the side: Building, Directory, Security, Accounts and
   Records. **General** sets the app's name, shown at the top left, on the sign-in page and in
   the browser's tab, and the line under it (shown when no single site is chosen; otherwise the
-  line shows the chosen site).
+  line shows the chosen site). It also takes **a logo of your own**, shown in place of the
+  standard mark at the top left and on the sign-in page, and as the browser tab's icon when it
+  is about square. There is room for a second version **for dark pages** (a logo in dark ink
+  disappears on one); without it, dark pages show the same logo. When the logo spells the
+  name out, untick **Show the name beside the logo**. PNG, JPEG, SVG or WebP; like a site's
+  logo it is resized, turned into a plain image and kept in the encrypted database.
 - **Light or dark.** The moon/sun button in the header switches at once; Account > Appearance
   also offers "Match this device" (the default). The choice is kept with the account, so it
   follows you, and applied before the page draws.
+- **Themes.** A theme is a look of its own (colors, corners, anything on the page), in light
+  and in dark; each person picks theirs under Account > Appearance, beside light or dark, and
+  it follows them like the rest. One ships beside the standard look: **Evergreen**, green
+  accents on warm paper. A theme is one CSS file, in
+  `public/themes` (shipped with the app) or in a `themes` folder inside the data folder (your
+  own, no rebuild; one there replaces a shipped theme of the same name), read when the server
+  starts. `public/themes/_template.css` is where to start one: copy it to a name of your own
+  (`harbor.css`) and restart. The file's name is the theme's id, its first comment gives the name and a line
+  about it, and everything in it goes under `:root`: `:root { }` for both light and dark,
+  `:root[data-appearance="light"] { }` and `:root[data-appearance="dark"] { }` for one, and
+  `:root .anything { }` where the design tokens at the top of `public/styles.css` aren't
+  enough. The server makes each theme apply only to those who chose it, and leaves out (with
+  the reason in its log) a file that styles anything outside `:root` or loads anything. The
+  kiosk keeps its own look.
 - **Motion.** Buttons and rows respond the moment they are pressed; dialogs, menus and messages
   leave the way they came; the header is a translucent layer the page scrolls under. On a
   phone, dialogs are sheets from the bottom: drag the top down (or flick it) to put one away.
@@ -1107,7 +1126,7 @@ is imported. Columns for fields the importer can't change are skipped and listed
 npm test
 ```
 
-Nineteen suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
+Twenty suites: the encrypted database (nothing readable on disk, wrong key refused, rekey),
 field access and site limits (the most important), visitors (name matching, end of day across
 time zones and daylight-saving changes, retention, merging), Entra sign-in against a fake
 Microsoft, the HTTP API end to end, the kiosk and visitor routes end to end, the API for other
@@ -1118,7 +1137,8 @@ receive a level name, pick levels by image, and are shown the right badge), impo
 database in test/fixtures, made by make-access-fixture.ps1), merging and bulk changes (custom badge fields too), and facilities
 (floors and plans, offices, overlapping dates refused, which rate wins, who may see and change them), accounts with several roles, and Security's mail (alarm notices and guard report PDFs made
 up in the real ones' shapes, the .msg and .eml files they come in, unread until opened, by site,
-and the mailbox check against a stand-in for Microsoft Graph). Equipment Checkout's own tests run its directory mode against this app.
+and the mailbox check against a stand-in for Microsoft Graph), and themes (a theme file applies only to those who chose it, one that
+styles anything else is left out, and each person's choice is kept beside light or dark). Equipment Checkout's own tests run its directory mode against this app.
 
 ## Not yet tried
 

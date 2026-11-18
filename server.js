@@ -39,6 +39,8 @@ const { createFinanceRoutes } = require("./finance-routes");
 const { createClearanceRoutes } = require("./clearance-routes");
 const { createBadgeTemplates } = require("./badge-templates");
 const { createPrefs } = require("./prefs");
+const { createBranding, DEFAULT_APP_NAME } = require("./branding");
+const { loadThemes } = require("./themes");
 const { createImportRoutes } = require("./import-routes");
 const { createTenantBadgeImport } = require("./tenant-badge-import");
 const { nameWords } = require("./name-match");
@@ -198,6 +200,16 @@ const sayVersion = (req, res, next) => {
 app.use("/api", sayVersion);
 app.use("/kiosk/api", sayVersion);
 kioskApp.use("/kiosk/api", sayVersion);
+// Themes: the files in public/themes, and this installation's own in its data folder
+// (themes.js), read once at start. All of them are one stylesheet, which the sign-in page
+// needs too.
+const themes = loadThemes([path.join(__dirname, "public", "themes"), path.join(DATA_DIR, "themes")]);
+for (const p of themes.problems) console.error(`themes: ${p.file} was left out: ${p.reason}.`);
+app.get("/themes.css", (req, res) => {
+  res.setHeader("Content-Type", "text/css; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.send(themes.css);
+});
 // Directory pages (the kiosk at /kiosk/) still come from here; the main page from the route above.
 app.use(express.static(path.join(__dirname, "public"), { index: "index.html" }));
 
@@ -247,19 +259,18 @@ const apiClients = createApiClients({ db, access, sites });
 const clearance = createClearance({ db, digitsHours: CLEARANCE_DIGITS_HOURS });
 const badges = createBadges({ db, clearance });
 const templates = createBadgeTemplates({ db, clearance });
-const prefs = createPrefs({ db, access });
+const prefs = createPrefs({ db, access, themes });
 const events = createEvents({ db });
 const store = { read: db.readDoc, write: db.writeDoc };
 const entra = createEntra({ store, roles: () => access.listRoles({ kind: "user" }) });
 // Security's mail: alarm notices and guard reports, from the shared mailbox or dropped in.
 const securityReports = createSecurityReports({ db });
 const securityMailbox = createSecurityMailbox({ store, reports: securityReports, token: () => entra.appToken(), graphBase: () => entra.graphBase() });
-// The name in the header, on the sign-in page and in the browser's tab, and the line under it
-// (shown when no one site is chosen). Settings > General.
-const DEFAULT_APP_NAME = "Identity and Visitor Manager";
-function branding() {
-  return { name: db.getSetting("branding.name") || DEFAULT_APP_NAME, subtitle: db.getSetting("branding.subtitle") || "" };
-}
+// The name in the header, on the sign-in page and in the browser's tab, the line under it
+// (shown when no one site is chosen), and a logo in place of the standard mark. Settings >
+// General (branding.js).
+const brand = createBranding({ db });
+const branding = () => brand.get();
 
 const authGuard = createAuth({
   store,
@@ -293,6 +304,16 @@ app.use("/api/v1", createApiV1({ db, access, directory, sites, apiClients }));
 const kioskRoutes = createKioskRoutes({ db, kiosks, visitors, events, sites, clock, cookieSecure: authGuard.cookieSecure });
 (KIOSK_PORT ? kioskApp : app).use("/kiosk/api", kioskRoutes.router);
 kioskApp.use(notFound);
+
+// The logo goes out before sign-in, as the name does: the sign-in page shows it. Its address
+// says when it was last changed, so a browser may keep it for good.
+app.get("/branding/logo/:slot", (req, res) => {
+  const logo = brand.getLogo(req.params.slot);
+  if (!logo) return notFound(req, res);
+  res.setHeader("Content-Type", logo.type);
+  res.setHeader("Cache-Control", str(req.query.v) === String(logo.updatedAt) ? "public, max-age=31536000, immutable" : "no-cache");
+  return res.send(logo.data);
+});
 
 app.use(authGuard.router);
 app.use("/api", authGuard.requireAuth, (req, res, next) => {
@@ -382,6 +403,8 @@ app.get("/api/config", (req, res) => {
     securityMail: access.canReadAlarms(ctx) ? { ...securityReports.unread({ sites: ctx.sites }), mailbox: Boolean(securityMailbox.settings().enabled && securityMailbox.settings().mailbox) } : null,
     sites: visibleSites(ctx).map((s) => ({ id: s.id, name: s.name, active: s.active, hasLogo: s.hasLogo, logoUpdatedAt: s.logoUpdatedAt })),
     siteCount: sites.count(),
+    // The looks a person may pick on their Account page (themes.js); the first is the standard one.
+    themes: themes.list(),
     // For a visitor's citizenship, and the IDs the desk checks at check-in.
     checkin: access.canReadVisitors(ctx) ? { countries: COUNTRIES, idTypes: ID_TYPES, otherId: OTHER_ID } : null
   });
@@ -1487,21 +1510,30 @@ app.get("/api/backup", admin, (req, res) => {
   });
 });
 
-// --- the name in the header (administrators) ------------------------------------------------------
+// --- the name in the header, and the logo (administrators) ---------------------------------------
 
 app.get("/api/branding", admin, (req, res) => {
   res.json({ ...branding(), defaultName: DEFAULT_APP_NAME });
 });
 
+/** Saves what is given of name, subtitle and showName (whether the header shows the name beside a logo). */
 app.put("/api/branding", admin, (req, res) => {
-  const name = String(req.body?.name ?? "").replace(/\s+/g, " ").trim();
-  const subtitle = String(req.body?.subtitle ?? "").replace(/\s+/g, " ").trim();
-  if (name.length > 60) throw fail(400, "Keep the name to 60 characters.");
-  if (subtitle.length > 80) throw fail(400, "Keep the line under it to 80 characters.");
-  // Empty: back to the default.
-  db.setSetting("branding.name", name && name !== DEFAULT_APP_NAME ? name : null);
-  db.setSetting("branding.subtitle", subtitle || null);
-  auditFrom(req, "branding.update", branding().name, subtitle ? `subtitle "${subtitle}"` : "no subtitle");
+  const before = branding();
+  const now = brand.save({ name: req.body?.name, subtitle: req.body?.subtitle, showName: typeof req.body?.showName === "boolean" ? req.body.showName : undefined });
+  auditFrom(req, "branding.update", now.name, `${now.subtitle ? `subtitle "${now.subtitle}"` : "no subtitle"}${now.showName === before.showName ? "" : `; the name is ${now.showName ? "shown" : "not shown"} beside the logo`}`);
+  res.json({ ok: true, ...now });
+});
+
+const LOGO_WORDS = { light: "logo", dark: "logo for dark pages" };
+
+app.put("/api/branding/logo/:slot", admin, (req, res) => {
+  const now = brand.setLogo(req.params.slot, req.body?.dataUrl);
+  auditFrom(req, "branding.logo", now.name, `${LOGO_WORDS[req.params.slot]} changed`);
+  res.json({ ok: true, ...now });
+});
+
+app.delete("/api/branding/logo/:slot", admin, (req, res) => {
+  if (brand.clearLogo(req.params.slot)) auditFrom(req, "branding.logo", branding().name, `${LOGO_WORDS[req.params.slot]} removed`);
   res.json({ ok: true, ...branding() });
 });
 

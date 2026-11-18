@@ -82,13 +82,66 @@ const canManageFields = (entity = null) => {
   return entity ? mine.includes(entity) : mine.length > 0;
 };
 
-/** The app's name (header, sign-in page, browser tab) as set under Settings > General. */
+/** The app's name (header, sign-in page, browser tab) and its logo, as set under Settings > General. */
 function applyBranding(branding) {
   if (!branding) return;
   state.branding = branding;
   document.title = branding.name;
   if ($("brand-name")) $("brand-name").textContent = branding.name;
   if ($("auth-sub")) $("auth-sub").textContent = branding.name;
+  showBrandLogo();
+}
+
+// Where a logo goes, and the standard mark it stands in place of: the header, the sign-in page.
+const BRAND_LOGOS = [["brand-logo", "brand-mark"], ["auth-logo", "auth-mark"]];
+
+/** The address of the installation's own logo for the page as it shows now (the one for dark pages on a dark page, when there is one), or null. */
+function brandLogoSrc() {
+  const logo = state.branding?.logo || {};
+  const slot = currentAppearance() === "dark" && logo.dark ? "dark" : logo.light ? "light" : null;
+  return slot ? `/branding/logo/${slot}?v=${logo[slot]}` : null;
+}
+
+/** The logo in place of the standard mark, and as the browser tab's icon. */
+function showBrandLogo() {
+  if (!state.branding) return;
+  const src = brandLogoSrc();
+  for (const [logoId, markId] of BRAND_LOGOS) {
+    const img = $(logoId);
+    if (!img) continue;
+    if (src && img.getAttribute("src") !== src) img.src = src;
+    img.hidden = !src;
+    $(markId).hidden = Boolean(src);
+  }
+  // A logo that spells the name out needs no second copy beside it (screen readers keep it).
+  $("brand-name")?.parentElement.classList.toggle("visually-hidden", Boolean(src) && state.branding.showName === false);
+  showTabIcon();
+}
+// A logo that can't be had (taken away since): the standard mark again.
+for (const [logoId, markId] of BRAND_LOGOS) $(logoId)?.addEventListener("error", () => { $(logoId).hidden = true; $(markId).hidden = false; });
+// Light to dark: the logo for dark pages, when there is one.
+window.addEventListener("lookchange", showBrandLogo);
+
+let tabIconWanted;
+/** The browser tab's icon: the logo when it is about square (a wide one would be squeezed into it), else the standard one. */
+function showTabIcon() {
+  const version = state.branding?.logo?.light;
+  const want = version ? `/branding/logo/light?v=${version}` : null;
+  const link = document.querySelector('link[rel="icon"]');
+  if (want === tabIconWanted || !link) return;
+  tabIconWanted = want;
+  const standard = () => { link.setAttribute("type", "image/svg+xml"); link.href = "/icon.svg"; };
+  if (!want) { standard(); return; }
+  const probe = new Image();
+  probe.onload = () => {
+    if (tabIconWanted !== want) return;
+    const shape = probe.naturalWidth / (probe.naturalHeight || 1);
+    if (shape < 0.8 || shape > 1.25) { standard(); return; }
+    link.removeAttribute("type");
+    link.href = want;
+  };
+  probe.onerror = () => { if (tabIconWanted === want) standard(); };
+  probe.src = want;
 }
 const multiSite = () => (state.config?.sites || []).length > 1;
 

@@ -89,6 +89,15 @@ CREATE TABLE IF NOT EXISTS sites (
   updated_at INTEGER NOT NULL
 );
 
+-- The installation's own logo, in place of the standard mark (branding.js): "light", and
+-- optionally "dark" for dark pages.
+CREATE TABLE IF NOT EXISTS app_logos (
+  slot TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  data BLOB NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS companies (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL COLLATE NOCASE UNIQUE,

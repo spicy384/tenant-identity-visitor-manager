@@ -4,10 +4,20 @@
 async function renderAccount() {
   const body = clear($("account-body"));
   const me = state.me;
-  const appearance = h("select", { "aria-label": "Appearance" },
+  const appearance = h("select", { id: "appearance-choice", "aria-label": "Appearance" },
     h("option", { value: "auto", text: "Match this device" }), h("option", { value: "light", text: "Light" }), h("option", { value: "dark", text: "Dark" }));
-  appearance.value = chosenTheme();
-  appearance.addEventListener("change", () => { setTheme(appearance.value); toast("Saved."); });
+  appearance.value = chosenAppearance();
+  appearance.addEventListener("change", () => { setAppearance(appearance.value); toast("Saved."); });
+  // Themes: offered once there is one besides the standard look.
+  const themes = state.config.themes || [];
+  const theme = h("select", { "aria-label": "Theme" }, themes.map((t) => h("option", { value: t.id, text: t.name })));
+  theme.value = chosenTheme();
+  // One that has since been taken away: the standard look, as the server has it.
+  if (theme.selectedIndex < 0) theme.value = "standard";
+  const themeAbout = h("span", { class: "hint" });
+  const sayTheme = () => { themeAbout.textContent = themes.find((t) => t.id === theme.value)?.about || ""; };
+  theme.addEventListener("change", () => { setTheme(theme.value); sayTheme(); toast("Saved."); });
+  sayTheme();
   body.append(h("div", { class: "panel" },
     h("h3", { text: me.displayName || me.username }),
     h("dl", { class: "facts inline-facts" },
@@ -17,8 +27,10 @@ async function renderAccount() {
       h("dt", { text: "Signs in with" }), h("dd", { text: me.provider === "entra" ? "Microsoft Entra ID" : "Password" }))),
     h("div", { class: "panel" },
       h("h3", { text: "Appearance" }),
-      h("p", { class: "muted", text: "Light or dark, or as this device is set. The button with the moon or sun in the header switches too. Kept with your account, so it follows you." }),
-      h("label", { class: "half" }, h("span", { text: "Show" }), appearance)),
+      h("p", { class: "muted", text: `Light or dark, or as this device is set. The button with the moon or sun in the header switches too.${themes.length > 1 ? " A theme is a look of its own, in light and in dark." : ""} Kept with your account, so it follows you.` }),
+      h("div", { class: "form-grid" },
+        h("label", { class: "half" }, h("span", { text: "Show" }), appearance),
+        themes.length > 1 ? h("label", { class: "half" }, h("span", { text: "Theme" }), theme, themeAbout) : null)),
     startSitePanel());
 
   if (me.provider === "local") {

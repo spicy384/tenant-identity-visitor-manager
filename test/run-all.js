@@ -21,6 +21,7 @@ const SUITES = [
   "finance.test.js",
   "roles.test.js",
   "security-mail.test.js",
+  "themes.test.js",
   "frontend.test.js"
 ];
 

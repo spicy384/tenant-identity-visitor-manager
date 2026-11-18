@@ -1,0 +1,62 @@
+/*
+ * Theme: Your theme's name
+ * About: A line about it, shown under the picker.
+ *
+ * A template, not a theme: a file whose name starts with an underscore is never loaded.
+ * To make a theme, copy this to a name of your own (harbor.css), here or in the "themes"
+ * folder of the data folder, and restart the server. It is then offered under Your account >
+ * Appearance > Theme. The file's name is the theme's id: lower-case letters, digits and
+ * hyphens. The two lines above are what the Account page calls it, and says about it.
+ * evergreen.css, beside this file, is a theme in use.
+ *
+ * A theme only says what differs from the standard look; whatever it leaves out stays as it
+ * is. The tokens (--primary, --surface, --radius...) are at the top of public/styles.css.
+ * Everything goes under :root, which the server makes apply only to those who chose the
+ * theme (themes.js):
+ *
+ *   :root { }                             in both light and dark
+ *   :root[data-appearance="light"] { }    in light
+ *   :root[data-appearance="dark"] { }     in dark
+ *   :root .app-header { }                 anything on the page, where tokens aren't enough
+ *
+ * A token set in "both" stays in dark too, so colors belong in the light and dark blocks.
+ */
+
+/* In both: shapes and type. */
+:root {
+  --radius: 10px;
+}
+
+/* Light: the page, its surfaces, text, and the accent. */
+:root[data-appearance="light"] {
+  --bg: #f1f5f9;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --surface-3: #f1f5f9;
+  --border: #e3e8ef;
+  --border-strong: #cbd5e1;
+  --text: #0f172a;
+  --text-muted: #5b6b7f;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-soft: #eff6ff;
+  --primary-ring: rgba(37, 99, 235, 0.35);
+  --primary-fg: #ffffff;
+}
+
+/* Dark: the same, for dark pages. */
+:root[data-appearance="dark"] {
+  --bg: #131211;
+  --surface: #1c1b19;
+  --surface-2: #232220;
+  --surface-3: #2b2927;
+  --border: #302e2b;
+  --border-strong: #433f3a;
+  --text: #ece8e2;
+  --text-muted: #aca59c;
+  --primary: #6aabf7;
+  --primary-hover: #9cc6fa;
+  --primary-soft: #272b30;
+  --primary-ring: rgba(106, 171, 247, 0.4);
+  --primary-fg: #121417;
+}

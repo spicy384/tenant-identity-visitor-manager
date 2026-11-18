@@ -1,8 +1,8 @@
 /**
  * Each person's own preferences, kept on the server so they follow them to any device: the
  * site they last chose in the header, which site to start at when they sign in (all, the one they
- * last chose, or a site's id), the modules on their dashboard (Home), in order, and light or dark
- * (or as the device is set).
+ * last chose, or a site's id), the modules on their dashboard (Home), in order, their appearance
+ * (light or dark, or as the device is set) and their theme (a named look; themes.js).
  *
  * A module is offered only to roles that may see what it shows; one a person can no longer
  * see (their role changed) is left out of what they get back, and refused when saved.
@@ -14,9 +14,10 @@ function fail(status, message) {
   return error;
 }
 
-const THEMES = ["auto", "light", "dark"];
+const APPEARANCES = ["auto", "light", "dark"];
+const STANDARD_THEME = "standard";
 
-function createPrefs({ db, access }) {
+function createPrefs({ db, access, themes = { has: (id) => id === STANDARD_THEME } }) {
   const securityOrAdmin = (ctx) => (access.isSecurity(ctx) || ctx.isAdmin) && access.canSeeClearances(ctx);
   const MODULES = {
     badgeNeeded: (ctx) => access.canReadVisitors(ctx) && access.canEditBadges(ctx),
@@ -52,22 +53,36 @@ function createPrefs({ db, access }) {
   const defaults = (ctx) => [...new Set((ctx.roles?.length ? ctx.roles : [ctx.role]).flatMap((r) => DEFAULTS[r?.id] || DEFAULTS.other))].filter((id) => MODULES[id](ctx));
   const key = (user) => `prefs.${user.id}`;
 
-  /** { site, startSite, dashboard (the modules they see, in order), available, defaults }. */
+  /**
+   * What is kept for them. Before there were themes, light or dark was kept as "theme"; one
+   * kept that way is their appearance.
+   */
+  function storedFor(user) {
+    const stored = { ...(db.readDoc(key(user), {}) || {}) };
+    if (APPEARANCES.includes(stored.theme)) {
+      if (stored.appearance === undefined) stored.appearance = stored.theme;
+      delete stored.theme;
+    }
+    return stored;
+  }
+
+  /** { site, startSite, dashboard (the modules they see, in order), appearance, theme, available, defaults }. */
   function get(user, ctx) {
-    const stored = db.readDoc(key(user), {}) || {};
+    const stored = storedFor(user);
     const allowed = new Set(available(ctx));
     const site = stored.site && (!ctx.sites || ctx.sites.has(Number(stored.site))) ? Number(stored.site) : null;
     const dashboard = Array.isArray(stored.dashboard) ? stored.dashboard.filter((id) => allowed.has(id)) : defaults(ctx);
-    const theme = THEMES.includes(stored.theme) ? stored.theme : "auto";
+    const appearance = APPEARANCES.includes(stored.appearance) ? stored.appearance : "auto";
+    // A theme that is no longer there goes back to the standard look.
+    const theme = typeof stored.theme === "string" && themes.has(stored.theme) ? stored.theme : STANDARD_THEME;
     // A site they can no longer see goes back to all of theirs.
     const startSite = stored.startSite === "last" || (Number.isInteger(stored.startSite) && (!ctx.sites || ctx.sites.has(stored.startSite))) ? stored.startSite : "all";
-    return { site, startSite, dashboard, theme, available: [...allowed], defaults: defaults(ctx) };
+    return { site, startSite, dashboard, appearance, theme, available: [...allowed], defaults: defaults(ctx) };
   }
 
-  /** Saves what is given: site (a site id, or null for all their sites), startSite (all, last or a site id) and dashboard (module ids, or null for the defaults). */
+  /** Saves what is given: site (a site id, or null for all their sites), startSite (all, last or a site id), dashboard (module ids, or null for the defaults), appearance (auto, light or dark) and theme (a theme's id). */
   function save(user, ctx, patch = {}, { siteExists = () => true } = {}) {
-    const stored = db.readDoc(key(user), {}) || {};
-    const next = { ...stored };
+    const next = storedFor(user);
     if (patch.site !== undefined) {
       if (patch.site === null || patch.site === "") next.site = null;
       else {
@@ -86,8 +101,12 @@ function createPrefs({ db, access }) {
         next.startSite = id;
       }
     }
+    if (patch.appearance !== undefined) {
+      if (!APPEARANCES.includes(patch.appearance)) throw fail(400, "The appearance is auto, light or dark.");
+      next.appearance = patch.appearance;
+    }
     if (patch.theme !== undefined) {
-      if (!THEMES.includes(patch.theme)) throw fail(400, "The theme is auto, light or dark.");
+      if (typeof patch.theme !== "string" || !themes.has(patch.theme)) throw fail(400, "There is no such theme.");
       next.theme = patch.theme;
     }
     if (patch.dashboard !== undefined) {

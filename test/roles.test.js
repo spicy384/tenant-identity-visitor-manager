@@ -203,6 +203,38 @@ async function main() {
   r = await admin.put("/api/branding", { name: "", subtitle: "" });
   check("name: empty goes back to the default", r.data.name === "Identity and Visitor Manager" && r.data.subtitle === "");
 
+  // --- a logo in place of the standard mark -------------------------------------------------------
+  const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const logoAt = async (slot, v) => {
+    const res = await fetch(`${BASE}/branding/logo/${slot}${v ? `?v=${v}` : ""}`);
+    return { status: res.status, type: res.headers.get("content-type"), cache: res.headers.get("cache-control"), bytes: Buffer.from(await res.arrayBuffer()) };
+  };
+  r = (await anon.get("/api/auth/me")).data.branding;
+  check("logo: none to start with", r.logo.light === null && r.logo.dark === null && r.showName === true && (await logoAt("light")).status === 404);
+  check("logo: only administrators set it", (await manny.put("/api/branding/logo/light", { dataUrl: PNG })).status === 403 && (await manny.del("/api/branding/logo/light")).status === 403);
+  check("logo: a PNG or JPEG, and what it claims to be", (await admin.put("/api/branding/logo/light", { dataUrl: "data:image/svg+xml;base64,PHN2Zy8+" })).status === 400
+    && (await admin.put("/api/branding/logo/light", { dataUrl: "data:image/png;base64,aGVsbG8gd29ybGQ=" })).status === 400);
+  check("logo: for every page or for dark pages, nowhere else", (await admin.put("/api/branding/logo/header", { dataUrl: PNG })).status === 404 && (await logoAt("header")).status === 404);
+  r = await admin.put("/api/branding/logo/light", { dataUrl: PNG });
+  check("logo: set", r.status === 200 && r.data.logo.light > 0 && r.data.logo.dark === null, JSON.stringify(r.data));
+  const logoVersion = r.data.logo.light;
+  const logo = await logoAt("light", logoVersion);
+  check("logo: shown before sign-in, and kept by the browser while it is the same one", logo.status === 200 && logo.type === "image/png" && /immutable/.test(logo.cache)
+    && logo.bytes.equals(Buffer.from(PNG.split(",")[1], "base64")) && (await anon.get("/api/auth/me")).data.branding.logo.light === logoVersion, JSON.stringify({ ...logo, bytes: logo.bytes.length }));
+  check("logo: asked for without its version, checked each time", (await logoAt("light")).cache === "no-cache" && (await logoAt("light", 1)).cache === "no-cache");
+  check("logo: everyone signed in is told of it", (await desk.get("/api/config")).data.branding.logo.light === logoVersion);
+  r = await admin.put("/api/branding/logo/dark", { dataUrl: PNG });
+  check("logo: one for dark pages beside it", r.status === 200 && r.data.logo.dark > 0 && r.data.logo.light === logoVersion && (await logoAt("dark", r.data.logo.dark)).status === 200);
+  r = await admin.put("/api/branding", { showName: false });
+  check("logo: the name beside it can be left out, the name itself kept", r.status === 200 && r.data.showName === false && r.data.name === "Identity and Visitor Manager" && (await anon.get("/api/auth/me")).data.branding.showName === false);
+  check("logo: saving the name leaves that alone", (await admin.put("/api/branding", { name: "Harbor Point Tenants", subtitle: "" })).data.showName === false
+    && (await admin.put("/api/branding", { showName: true })).data.name === "Harbor Point Tenants" && (await admin.put("/api/branding", { name: "" })).data.showName === true);
+  check("logo: taken away", (await admin.del("/api/branding/logo/dark")).data.logo.dark === null && (await logoAt("dark")).status === 404
+    && (await admin.del("/api/branding/logo/light")).data.logo.light === null && (await anon.get("/api/auth/me")).data.branding.logo.light === null);
+  const logoAudit = (await admin.get("/api/audit?action=branding.logo")).data.entries.map((e) => e.detail);
+  check("logo: in the audit log", ["logo changed", "logo for dark pages changed", "logo for dark pages removed", "logo removed"].every((d) => logoAudit.includes(d)) && logoAudit.length === 4
+    && (await admin.get("/api/audit?action=branding.update")).data.entries.some((e) => /the name is not shown beside the logo/.test(e.detail)), JSON.stringify(logoAudit));
+
   // --- the page knows which version served it ---------------------------------------------------
   const version = require("../package.json").version;
   const page = await (await fetch(BASE + "/")).text();

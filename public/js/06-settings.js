@@ -96,7 +96,7 @@ $("settings-tabs").addEventListener("click", (e) => {
   location.hash = `#settings/${b.dataset.tab}`;
 });
 
-// --- general: the name in the header ----------------------------------------------------------
+// --- general: the name in the header, and the logo --------------------------------------------
 
 async function settingsGeneral(body) {
   const current = await api("/api/branding");
@@ -113,7 +113,70 @@ async function settingsGeneral(body) {
       return "Saved.";
     }
   });
-  body.append(form);
+  body.append(form, brandLogoPanel(current));
+}
+
+/**
+ * A logo of the installation's own, in place of the standard mark: one for every page, and
+ * optionally another for dark pages. Each change is saved as it is made.
+ */
+function brandLogoPanel(current) {
+  const changed = async (message) => {
+    toast(message);
+    await reloadConfig();
+    renderSettings();
+  };
+  const place = (slot, title, none, hint) => {
+    const version = current.logo?.[slot];
+    const fileInput = h("input", { type: "file", accept: "image/png,image/jpeg,image/svg+xml,image/webp,image/gif", hidden: true });
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      try {
+        await api(`/api/branding/logo/${slot}`, { method: "PUT", body: { dataUrl: await imageToPng(file) } });
+        await changed("Logo saved.");
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    });
+    const remove = async () => {
+      try {
+        await api(`/api/branding/logo/${slot}`, { method: "DELETE" });
+        await changed("Logo removed.");
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    };
+    return h("div", { class: "brand-logo-place" },
+      h("span", { class: "label", text: title }),
+      // Each is shown on the page it is for, whichever the administrator's own is showing.
+      h("div", { class: `logo-preview on-${slot}-page` }, version ? h("img", { src: `/branding/logo/${slot}?v=${version}`, alt: `${title}, as it is now` }) : h("span", { text: none })),
+      h("div", { class: "btn-row" },
+        h("button", { type: "button", class: "secondary small", text: version ? "Replace" : "Choose image", onclick: () => fileInput.click() }),
+        version ? h("button", { type: "button", class: "link-btn danger-text", text: "Remove", onclick: remove }) : null),
+      h("span", { class: "hint", text: hint }),
+      fileInput);
+  };
+  const showName = h("input", { type: "checkbox" });
+  showName.checked = current.showName !== false;
+  showName.addEventListener("change", async () => {
+    try {
+      await api("/api/branding", { method: "PUT", body: { showName: showName.checked } });
+      await changed("Saved.");
+    } catch (error) {
+      showName.checked = !showName.checked;
+      toast(error.message, "error");
+    }
+  });
+  return h("div", { class: "panel" },
+    h("h3", { text: "Logo" }),
+    h("p", { class: "muted", text: "Your own logo, in place of the standard mark at the top left and on the sign-in page; it is the browser tab's icon too when it is about square. PNG, JPEG, SVG or WebP. It is resized to fit 600 pixels and stored, encrypted, in the database." }),
+    h("div", { class: "brand-logo-places" },
+      place("light", "Logo", "No logo. The standard mark is shown.", "Shown on dark pages too, unless they have one of their own."),
+      place("dark", "For dark pages (optional)", current.logo?.light ? "None. Dark pages show the logo." : "None.", "For a logo whose dark ink would disappear on a dark page: the same logo in light ink.")),
+    current.logo?.light || current.logo?.dark
+      ? h("label", { class: "check-row" }, showName, h("span", { text: "Show the name beside the logo" }), h("span", { class: "hint", text: "Take the tick off when the logo spells the name out. The sign-in page and the browser's tab keep the name." }))
+      : null);
 }
 
 // --- sites ------------------------------------------------------------------------------

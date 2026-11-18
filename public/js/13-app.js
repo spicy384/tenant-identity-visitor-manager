@@ -201,11 +201,11 @@ $("site-button").addEventListener("click", () => {
 document.addEventListener("click", (e) => { if (!e.target.closest("#site-picker")) closeSiteMenu(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("site-menu").hidden) { closeSiteMenu(); $("site-button").focus(); } });
 
-// --- light or dark -------------------------------------------------------------------------------
+// --- light or dark, and the theme ----------------------------------------------------------------
 
 /** The header button shows what a click switches to. */
 function showThemeButton() {
-  const dark = currentTheme() === "dark";
+  const dark = currentAppearance() === "dark";
   const label = dark ? "Switch to light" : "Switch to dark";
   $("theme-button").title = label;
   $("theme-button").setAttribute("aria-label", label);
@@ -213,16 +213,24 @@ function showThemeButton() {
 }
 
 /** "light", "dark" or "auto": shown at once, kept in this browser and with the account. */
+function setAppearance(appearance) {
+  softly(() => applyAppearance(appearance));
+  if (state.me) api("/api/me/prefs", { method: "PUT", body: { appearance } }).catch(() => {});
+}
+
+/** A theme's id ("standard" for the standard look): shown at once, and kept the same way. */
 function setTheme(theme) {
-  softly(() => {
-    applyTheme(theme);
-    showThemeButton();
-  });
+  softly(() => applyTheme(theme));
   if (state.me) api("/api/me/prefs", { method: "PUT", body: { theme } }).catch(() => {});
 }
 
-$("theme-button").addEventListener("click", () => setTheme(currentTheme() === "dark" ? "light" : "dark"));
-if (window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListener("change", showThemeButton);
+$("theme-button").addEventListener("click", () => setAppearance(currentAppearance() === "dark" ? "light" : "dark"));
+// However it changed: chosen here, on the Account page, or the device turning dark.
+window.addEventListener("lookchange", () => {
+  showThemeButton();
+  // The Account page's own choice, when it is open, says the same.
+  if ($("appearance-choice")) $("appearance-choice").value = chosenAppearance();
+});
 showThemeButton();
 
 // --- routing ---------------------------------------------------------------------------------------
@@ -392,9 +400,9 @@ async function startApp() {
   }
   state.site = startingSite();
   try { sessionStorage.setItem(SESSION_SITE_KEY, state.site); } catch { /* storage blocked */ }
-  // Light or dark as chosen on their account, wherever they chose it.
+  // Light or dark, and the theme, as chosen on their account, wherever they chose them.
+  applyAppearance(state.prefs.appearance);
   applyTheme(state.prefs.theme);
-  showThemeButton();
   applyConfig();
   $("main").hidden = false;
   $("nav").hidden = false;
