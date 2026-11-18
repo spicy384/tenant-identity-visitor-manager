@@ -79,7 +79,10 @@ The design and decisions are in [PLAN.md](PLAN.md).
   Each box takes any text ("ask for Jane, or billing@acme.example"; "555-0101 ext 4, after
   9"), and one at least must be filled in. A company can have many (up to 50), listed on its
   panel in the order added, each with **Edit** and **Remove**; an email that is one opens a
-  message and a phone number dials. They are separate from the people in the company and
+  message and a phone number dials. When the company has people, the dialog lists them
+  first: choose one and their name, email and phone (work, else mobile) are filled in, leaving
+  only the role to give. What was filled in can still be changed, and the PoC is a copy: it
+  doesn't change when the person's record does. They are separate from the people in the company and
   from a visit's points of contact: a PoC needn't be in the directory. Whoever reads the
   directory sees them, whoever changes it changes them, and each change is in the audit log.
   Merged companies' PoCs move to the company kept.
@@ -567,7 +570,7 @@ Home.
   and keeps the books: it logs charges, makes and issues invoices, records payments, and keeps
   the billing settings and the QuickBooks connection. Administrators can do it all. Settings >
   Roles gives any role finance access (none, read, or read and change).
-- **Leases** (Facilities > Leases, and the Leases panel on a company's page): a company's agreement for offices, from a start date to an
+- **Leases** (Facilities > Leases, also under Finance > Leases, and the Leases panel on a company's page): a company's agreement for offices, from a start date to an
   end date (none: month to month), with a reference, a deposit and notes. Rent comes from the
   rates or is a fixed amount a month. A lease has its own **rates by classification** (Unclassified,
   SCAR, SCIF and so on), as they were when it began, and a room ticked **Custom rate** has its own
@@ -640,7 +643,7 @@ Home.
   one of its offices has desks or it has bought badges; until then its badges are given out as before. **Adjust** (Managers
   and Finance) adds badges, such as ones paid for before allotments were counted, or takes some
   away, with a reason; the panel's **History** lists every change.
-- **Charges** (Facilities > Charges): billable items and hours logged against a company: from
+- **Charges** (Facilities > Charges, also under Finance > Charges): billable items and hours logged against a company: from
   the **price list** (say After-hours HVAC at $75 an hour, its rate filled in) or one-off. A
   charge can be changed or deleted until it is on an invoice.
 - **Invoices** (Finance > Invoices): **Invoice a month** drafts an invoice for each company

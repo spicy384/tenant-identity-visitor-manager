@@ -43,7 +43,8 @@ const seesSecurity = () => isSecurity() || (isAdmin() && canSeeClearances());
 /**
  * The sections in the header and the pages in each (the bar below it). A page is listed
  * only where the account may open it; a section with no pages it may open isn't shown.
- * Badges appear in three sections, each showing its own kind of badge.
+ * Badges appear in three sections, each showing its own kind of badge. Leases and Charges are
+ * under Facilities (what is let) and under Finance (what is billed): the same pages in both.
  */
 const SECTIONS = [
   { id: "home", label: "Home", href: "#home", pages: [] },
@@ -72,6 +73,8 @@ const SECTIONS = [
     { view: "invoices", href: "#invoices", label: "Invoices", show: canReadFinance },
     { view: "balances", href: "#balances", label: "Balances", show: canReadFinance },
     { view: "payments", href: "#payments", label: "Payments", show: canReadFinance },
+    { view: "leases", href: "#leases", label: "Leases", show: canSeeLeases },
+    { view: "charges", href: "#charges", label: "Charges", show: canSeeLeases },
     { view: "finance-settings", href: "#finance-settings", label: "Billing settings", show: canEditFinance }
   ] },
   { id: "security", label: "Security", pill: "nav-security", show: () => seesSecurity() || canReadAlarms(), pages: [
@@ -88,11 +91,21 @@ const SECTIONS = [
 const pagesOf = (section) => section.pages.filter((p) => p.show());
 const sectionShown = (section) => (section.show ? section.show() : true) && (section.href || pagesOf(section).length > 0);
 
-/** Which section a page belongs to (badges: by the part of the address after it). */
+/**
+ * Which section a page belongs to (badges: by the part of the address after it). A page in
+ * two sections stays in the one they are in; arrived at from elsewhere, it is under Facilities
+ * for those who see the building's rooms, and under Finance for those who only keep the books.
+ */
 function sectionOf(view, sub) {
   if (view === "badges") return sub === "tenants" ? "tenants" : sub === "visitors" ? "visitors" : seesSecurity() ? "security" : "visitors";
-  for (const s of SECTIONS) if (s.pages.some((p) => p.view === view) || s.id === view) return s.id;
-  return null;
+  const listing = SECTIONS.filter((s) => s.pages.some((p) => p.view === view));
+  if (listing.length > 1) {
+    const open = listing.filter((s) => sectionShown(s) && pagesOf(s).some((p) => p.view === view));
+    const here = open.find((s) => s.id === state.section);
+    if (here) return here.id;
+    if (open.length) return (canReadFacilities() ? open[0] : open[open.length - 1]).id;
+  }
+  return (listing[0] || SECTIONS.find((s) => s.id === view))?.id || null;
 }
 
 function renderNav() {
