@@ -285,12 +285,26 @@ The design and decisions are in [PLAN.md](PLAN.md).
   check visitors in add them, and so does Security; everyone who sees visits reads them. A
   comment can't be edited; an administrator can remove one, and what it said stays in the audit
   log. The log's search also finds a visit by what a comment says, and the CSV export has them.
+- **A visit's entry, in its own window**: click a visit (in the Visit log, or a visitor's
+  visits; **Edit** at the end of the row does the same, and **Edit entry** under In the
+  building) to open it: what is on record, its comments, and at the foot **Changes to this
+  entry**, every change made since it was recorded: what was changed, what it was before and
+  after, who changed it and when (and why, when they said). Staff who check visitors in
+  (the front desk, managers, administrators), and Security (which otherwise only reads
+  visitors), correct it there: the site it was at (with more than one site; an open one the
+  account sees), who was visited (choose the points of contact, and their company comes with
+  them), the purpose, and when they arrived and left. Everyone else who sees visits opens it
+  to read. A visit moved to another site is noted against the events its visitor was expected
+  at there that day, and no longer against the old site's; someone still in the building
+  can't be moved to a site where another visit of theirs is open. A changed time needs a reason; for the rest it is optional. Each change is in the
+  audit log too. A comment an administrator removed, and a badge entered after the fact, are
+  listed among the changes as well. The visitor and the ID shown can't be changed.
 - **Correcting arrival and departure times**: when a visitor didn't check in or out as they
-  should have, **Correct times** on a visit (in the Visit log, or a visitor's visits) changes
-  when they arrived and left, for staff who check visitors in, and for Security (which otherwise
-  only reads visitors). A reason is required. Each
+  should have, the visit's window changes
+  when they arrived and left. A reason is required. Each
   correction is kept with the visit (who, when, the times before and after, and why: the
-  "Changed" badge beside each corrected time shows the latest reason, and opens them all) and
+  "Changed" badge beside each corrected time shows the latest reason, and opens the entry;
+  the same badge beside who they visited says that, or the purpose, was changed) and
   in the audit log, and the CSV export counts them. **Times changed only** in the Visit log
   lists just the corrected visits. "Here since" and In the building use the corrected times. Giving a
   visit still open a time they left checks them out then; a visit that has ended can't be
@@ -442,7 +456,13 @@ Guard reports**.
   unread, and whether they have incidents, missed checkpoints or questions answered No. The log inside
   an alarm and the entries inside a guard report have a search of their own. The **Clearance queue**
   and each panel of **Re-checks and expiry** have a search box and dropdowns too; what's typed there
-  stays in the browser, and the digits of an SSN are never among what's searched.
+  stays in the browser, and the digits of an SSN are never among what's searched. **Print
+  list** on the Clearance queue prints the names waiting to be validated, as searched and
+  filtered: each with their company, the clearance on record, who asked and when, and the
+  note. Nothing of an SSN is printed: the digits are never sent to that page, the column
+  saying whether any were given is left off the paper, and they are hidden from any printout
+  even while the validation window is showing them. Printed pages are always light, whatever
+  appearance or theme is on screen.
 - **Alarm responders.** The built-in **Alarm responder** role reads the alarms and guard reports
   and nothing else: no directory, visitors, badges or clearances. Their Home starts with the
   alarms and guard reports no one has opened. Opening one marks it read for everyone, as it does
@@ -678,7 +698,13 @@ Point of Contact (PoC), or Points of Contact when it has several, each a link to
 record for those who see the directory, with their company; then the site and the guests
 expected. Each guest shows as expected, arrived but not yet through the desk, here (since
 when) or left. Staff who give badges out can pick the visitor badge to hand each guest
-(Badge column): check-in then shows that badge. Guests are picked from
+(Badge column): check-in then shows that badge. Or they can say **No badge necessary** there
+(an escorted guest, say): once that guest's ID is checked, at the desk or after the kiosk, their
+check-in is done with no badge step, they never wait among those needing a badge, the kiosk
+doesn't promise them one, and the visit log shows "Not needed". Add guest has a tick box that
+marks the guests being added the same way. It is set per guest (on a repeating event, for
+that date or that and the later ones), until they arrive; picking a badge for them, or
+Clear, takes it back. Guests are picked from
 visitors on record, or typed in under Someone new: **Add guest** (or Enter)
 looks the name and email up, offers the visitor on record when there is one, and otherwise
 asks before adding them as a new visitor; the boxes then clear for the next guest, so as many

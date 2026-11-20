@@ -312,11 +312,17 @@
 
     <!-- The Security role's clearance validation queue -->
     <section id="view-clearance" class="view" data-title="Clearance queue" hidden>
-      <div class="toolbar">
+      <div class="toolbar no-print">
         <p id="clearance-hint" class="muted small-text"></p>
         <span class="spacer"></span>
+        <button type="button" id="clearance-print" class="secondary small">Print list</button>
         <button type="button" id="clearance-import" class="secondary small">Import validated clearances</button>
         <button type="button" id="clearance-refresh" class="secondary small">Refresh</button>
+      </div>
+      <!-- The printed list: the names waiting, never anything of an SSN (17-clearance.js) -->
+      <div class="print-only print-head">
+        <h2 id="clearance-print-title"></h2>
+        <p id="clearance-print-time"></p>
       </div>
       <div id="clearance-list"></div>
     </section>

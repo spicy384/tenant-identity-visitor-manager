@@ -50,7 +50,7 @@ function renderBadgeAlerts() {
         h("strong", { text: a.name }), a.organization ? h("span", { class: "muted", text: ` (${a.organization})` }) : null,
         a.visitorType === "Service Technician" ? h("span", { class: "badge", text: "Service Technician" }) : null,
         ` checked in ${a.kioskName ? `at ${a.kioskName}` : "at the desk"}${multiSite() ? `, ${a.siteName},` : ""} ${agoText(a.checkedInAt)}. `,
-        h("strong", { text: a.stage === "id" ? "Check their ID, then give them a badge." : "Their ID is checked; give them a badge." }),
+        h("strong", { text: a.stage === "id" ? (a.noBadge ? "Check their ID. No badge necessary: they were marked so as an expected guest." : "Check their ID, then give them a badge.") : "Their ID is checked; give them a badge." }),
         a.companyName ? h("div", { class: "muted small-text", text: `Visiting ${a.companyName}${a.hostName ? `, contact ${a.hostName}` : ""}${a.purpose ? ` · ${a.purpose}` : ""}` }) : null),
       h("div", { class: "btn-row" },
         h("button", { type: "button", class: "primary", text: checkinNext(a), onclick: () => continueCheckIn(a.visitId) })))),

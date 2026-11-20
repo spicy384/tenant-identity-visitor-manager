@@ -297,17 +297,23 @@ async function showClearance() {
   }
   clearanceView.loaded = data.requests;
   const digitsText = (q) => (q.digitsHeld ? "Held" : q.hadDigits ? "Wiped" : "Not given");
-  const queueTable = (requests) => (requests.length
+  // The SSN column (which only ever says whether digits were given) and the buttons stay off
+  // the printed list; it prints the names as they are filtered here.
+  const queueTable = (requests) => {
+    $("clearance-print-title").textContent = `Clearance validation list (${requests.length} ${requests.length === 1 ? "name" : "names"})`;
+    return queueRows(requests);
+  };
+  const queueRows = (requests) => (requests.length
     ? h("div", { class: "table-wrap" }, h("table", { class: "table compact" },
-      h("thead", {}, h("tr", {}, ["Name", "Clearance on record", "Requested", "Note", "SSN last four", ""].map((t) => h("th", { text: t })))),
+      h("thead", {}, h("tr", {}, [["Name"], ["Clearance on record"], ["Requested"], ["Note"], ["SSN last four", "no-print"], ["", "no-print"]].map(([t, cls]) => h("th", { text: t, class: cls || null })))),
       h("tbody", {}, requests.map((q) => h("tr", {},
         h("td", {}, h("a", { href: q.kind === "visitor" ? `#visitor/${q.holderId}` : `#person/${q.holderId}`, text: q.name }),
           h("div", { class: "muted small-text", text: [q.kind === "visitor" ? "Visitor" : "Person", q.organization].filter(Boolean).join(" · ") })),
         h("td", { class: "small-text" }, q.currentLevel || "None", q.lastValidatedAt ? h("div", { class: "muted", text: `last validated ${fmtDate(q.lastValidatedAt)}` }) : null),
         h("td", { class: "small-text nowrap" }, fmtDateTime(q.requestedAt), q.requestedBy ? h("div", { class: "muted", text: `by ${q.requestedBy}` }) : null),
         h("td", { class: "small-text", text: q.note || "" }),
-        h("td", { class: `small-text${q.hadDigits && !q.digitsHeld ? " muted" : ""}`, text: digitsText(q) }),
-        h("td", {}, h("div", { class: "btn-row" },
+        h("td", { class: `small-text no-print${q.hadDigits && !q.digitsHeld ? " muted" : ""}`, text: digitsText(q) }),
+        h("td", { class: "no-print" }, h("div", { class: "btn-row" },
           h("button", { type: "button", class: "primary small", text: "Validate", onclick: () => validateFromQueue(q) }),
           h("button", { type: "button", class: "link-btn danger-text", text: "Cancel", onclick: async () => {
             if (!(await confirmDialog(`Cancel the request for ${q.name}?${q.digitsHeld ? " The SSN digits given with it are wiped." : ""}`, { confirmLabel: "Cancel request", danger: true }))) return;
@@ -330,6 +336,7 @@ async function showClearance() {
     filters: [KIND_FILTER, { key: "level", label: "Every clearance on record", value: (q) => q.currentLevel || "None" }, { key: "digits", label: "SSN digits: any", value: digitsText }],
     render: queueTable
   });
+  queue.tools?.classList.add("no-print");
   clear(list).append(...[queue.tools, queue.body].filter(Boolean));
   $("clearance-hint").textContent = `SSN digits given with a request are kept in memory only, never stored or logged, and wiped when you validate or cancel, or after ${data.digitsHeldHours} hours.`;
 }
@@ -346,6 +353,19 @@ async function validateFromQueue(q) {
 }
 
 $("clearance-refresh").addEventListener("click", () => showClearance());
+// The list of names waiting to be validated, on paper: who, their company, the clearance on
+// record, who asked and when, and the note. Nothing of an SSN is on it: the digits are never
+// sent to this page, and the column saying whether any were given is left off as well.
+$("clearance-print").addEventListener("click", async () => {
+  await showClearance();
+  // What is on the page now: the search may have left none.
+  if (!$("clearance-list").querySelector("tbody tr")) {
+    toast(clearanceView.loaded.length ? "No names match the search to print." : "Nothing is waiting to be validated.");
+    return;
+  }
+  $("clearance-print-time").textContent = `As of ${new Date().toLocaleString()}`;
+  window.print();
+});
 $("clearance-import").addEventListener("click", () => importDialog("clearances").then((done) => { if (done) showClearance(); }));
 
 // --- Security > Re-checks and expiry (Security and administrators) --------------------------------

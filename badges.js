@@ -610,7 +610,8 @@ function createBadges({ db, clearance, now = Date.now }) {
     if (sites) where.push(`v.site_id IN (${[...sites].map(Number).join(",") || "NULL"})`);
     if (siteId) { where.push("v.site_id = ?"); params.push(Number(siteId)); }
     return raw.prepare(`SELECT v.id, v.visitor_id, v.site_id, v.company_name, v.host_name, v.checked_in_at, v.checkin_stage, v.purpose, s.name AS site_name, k.name AS kiosk_name,
-        p.first_name, p.last_name, p.organization, coalesce(v.visitor_type, p.visitor_type) AS visitor_type
+        p.first_name, p.last_name, p.organization, coalesce(v.visitor_type, p.visitor_type) AS visitor_type,
+        (EXISTS (SELECT 1 FROM event_guests g WHERE g.visit_id = v.id AND g.no_badge = 1) AND NOT EXISTS (SELECT 1 FROM event_guests g WHERE g.visit_id = v.id AND g.badge_id IS NOT NULL)) AS no_badge
       FROM visits v JOIN visitors p ON p.id = v.visitor_id JOIN sites s ON s.id = v.site_id LEFT JOIN kiosks k ON k.id = v.kiosk_id
       WHERE ${where.join(" AND ")} ORDER BY v.checked_in_at`).all(...params).map((r) => ({
       visitId: r.id,
@@ -625,6 +626,8 @@ function createBadges({ db, clearance, now = Date.now }) {
       purpose: r.purpose,
       visitorType: r.visitor_type || "Guest",
       stage: r.checkin_stage,
+      // An expected guest marked as needing no badge: their ID is all the desk has left to check.
+      noBadge: Boolean(r.no_badge),
       checkedInAt: r.checked_in_at
     }));
   }

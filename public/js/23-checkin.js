@@ -513,16 +513,21 @@ function checkInWizard(start = {}) {
         }
         if (!match.checked) throw new Error(`Tick the box once the ID matches ${name()}. If it doesn't, don't check them in.`);
         const visit = { hostIds: w.hostIds, companyId: w.companyId, purpose: w.purpose };
+        // Finished before now (they were in the building already), not by this.
+        let already = false;
         // A visit under way (from a kiosk, or back here from the badge step): checked on that visit.
         if (w.visit && ["id", "badge"].includes(w.visit.checkinStage)) {
           w.visit = (await api(`/api/visits/${w.visit.id}/verify-id`, { method: "POST", body: { idType, idOther, ...visit } })).visit;
         } else {
           const r = await api("/api/checkins", { method: "POST", body: { visitorId: v.id, siteId: Number(w.siteId), idType, idOther, overrideBlock: w.overrideBlock, ...visit } });
           w.visit = r.visit;
+          already = r.already && w.visit.checkinStage === "done";
           // Already in the building (from a kiosk, say): their ID is checked on that visit.
           if (r.already && w.visit.checkinStage === "id") w.visit = (await api(`/api/visits/${w.visit.id}/verify-id`, { method: "POST", body: { idType, idOther, ...visit } })).visit;
         }
         w.changed = true;
+        // An expected guest marked as needing no badge: their ID was all there was to check.
+        if (!already && w.visit.checkinStage === "done" && w.visit.badgeWaivedAt) return doneStep(`${name()} is checked in. No badge necessary: they were marked so as an expected guest${w.visit.badgeWaivedBy ? ` by ${w.visit.badgeWaivedBy}` : ""}.`);
         if (w.visit.checkinStage !== "badge") return doneStep(`${name()} was checked in already.`);
         if (!canGiveBadges()) return doneStep(`${name()} is checked in. Someone who gives badges out gives them their visitor badge.`);
         return badgeStep();

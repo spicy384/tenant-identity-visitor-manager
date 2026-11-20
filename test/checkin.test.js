@@ -719,6 +719,120 @@ async function main() {
   check("return: back, a new visit, and here again", back.id !== quinnVisit.id && (await quinnAt()).status === "here" && (await quinnAt()).visitId === back.id);
   await desk.post(`/api/visits/${back.id}/badge-not-needed`);
   await desk.post(`/api/visits/${back.id}/checkout`);
+
+  // --- a visit's entry, corrected, with what it was before ------------------------------------------
+  const eva = (await desk.post("/api/visitors", { firstName: "Eva", lastName: "Entry", organization: "Edit Co", citizenship: "US" })).data.visitor;
+  const evaVisit = (await desk.post("/api/checkins", { visitorId: eva.id, siteId: site.id, hostId: host.id, purpose: "Meeting", idType: "Passport" })).data.visit;
+  await desk.post(`/api/visits/${evaVisit.id}/badge-not-needed`);
+  const entry = (id, body, c = desk) => c.put(`/api/visits/${id}`, body);
+  const entryNow = async (c = desk) => (await c.get(`/api/visits/${evaVisit.id}`)).data;
+  check("entry: as recorded, it has no changes", (await entryNow()).history.length === 0 && (await entryNow()).visit.detailsChanged === 0 && (await entryNow()).visit.badgeWaivedAt > 0);
+  check("entry: only those who correct visits", (await entry(evaVisit.id, { purpose: "Audit" }, viewer)).status === 403 && (await entry(999999, { purpose: "Audit" })).status === 404);
+  check("entry: something must change", (await entry(evaVisit.id, { purpose: "Meeting", hostIds: [host.id], checkedInAt: evaVisit.checkedInAt, checkedOutAt: null })).status === 400 && (await entry(evaVisit.id, {})).status === 400);
+  r = await entry(evaVisit.id, { purpose: "  Site   audit " });
+  check("entry: the purpose changed, with what it was, who changed it and when", r.status === 200 && r.data.visit.purpose === "Site audit" && r.data.history.length === 1 && r.data.history[0].field === "purpose"
+    && r.data.history[0].from === "Meeting" && r.data.history[0].to === "Site audit" && r.data.history[0].by === "desk" && r.data.history[0].at > 0 && r.data.history[0].reason === null, JSON.stringify(r.data.history));
+  check("entry: a point of contact is someone in the directory, at the company", (await entry(evaVisit.id, { hostIds: [999999] })).status === 400 && (await entry(evaVisit.id, { hostIds: ["x"] })).status === 400
+    && (await entry(evaVisit.id, { hostIds: [riverRita.id], companyId: acme.id })).status === 400 && (await entry(evaVisit.id, { hostIds: [] })).status === 400 && (await entryNow()).visit.hostName === "Hana Host");
+  r = await entry(evaVisit.id, { hostIds: [riverRita.id], reason: "They came for River Partners" });
+  const fieldOf = (history, field) => history.find((c) => c.field === field);
+  check("entry: who they visited changed, the company coming with the contact", r.status === 200 && r.data.visit.companyName === "River Partners" && r.data.visit.companyId === riverCo.id && r.data.visit.hostName === "Rita Riverton"
+    && r.data.visit.hostIds.join() === String(riverRita.id) && r.data.history.length === 3 && fieldOf(r.data.history, "company").from === "Acme Corp" && fieldOf(r.data.history, "company").to === "River Partners"
+    && fieldOf(r.data.history, "contact").from === "Hana Host" && fieldOf(r.data.history, "contact").to === "Rita Riverton" && fieldOf(r.data.history, "contact").reason === "They came for River Partners"
+    && r.data.history[2].field === "purpose" && r.data.visit.detailsChanged === 3, JSON.stringify(r.data.history));
+  r = await entry(evaVisit.id, { purpose: "Changed again", checkedInAt: evaVisit.checkedInAt - HOUR });
+  check("entry: a time needs its reason, and without it nothing at all is changed", r.status === 400 && /reason/i.test(r.data.error) && (await entryNow()).visit.purpose === "Site audit" && (await entryNow()).history.length === 3, JSON.stringify(r.data));
+  r = await entry(evaVisit.id, { purpose: "Changed again", checkedInAt: evaVisit.checkedInAt - HOUR, checkedOutAt: evaVisit.checkedInAt - HOUR / 2, reason: "Arrived earlier; left after half an hour" });
+  check("entry: times and details corrected in one go", r.status === 200 && r.data.visit.checkedInAt === evaVisit.checkedInAt - HOUR && r.data.visit.checkedOutAt === evaVisit.checkedInAt - HOUR / 2 && r.data.visit.purpose === "Changed again"
+    && r.data.visit.timesCorrected === 2 && r.data.visit.detailsChanged === 4 && r.data.history.length === 6 && Array.isArray(r.data.badgesOut), JSON.stringify(r.data));
+  check("entry: its changes are listed newest first, times as times", r.data.history.slice(0, 3).map((c) => c.field).sort().join() === "in,out,purpose" && fieldOf(r.data.history, "in").from === evaVisit.checkedInAt
+    && fieldOf(r.data.history, "in").to === evaVisit.checkedInAt - HOUR && fieldOf(r.data.history, "out").from === null && fieldOf(r.data.history, "out").to === evaVisit.checkedInAt - HOUR / 2
+    && r.data.history.every((c, i, all) => !i || all[i - 1].at >= c.at) && r.data.history.slice(0, 3).every((c) => c.reason === "Arrived earlier; left after half an hour"));
+  r = await entry(evaVisit.id, { purpose: "Seen by Security" }, security);
+  check("entry: Security corrects them too", r.status === 200 && r.data.history[0].by === "sec" && r.data.history[0].from === "Changed again");
+  check("entry: whoever sees visits sees what was changed", (await entryNow(viewer)).history.length === 7 && (await visitOf(eva.id)).detailsChanged === 5);
+  const edited = (await admin.get("/api/audit?action=visit.edited")).data.entries.filter((e) => e.target === "Eva Entry").map((e) => e.detail);
+  check("entry: each change is in the audit log", edited.length === 4 && edited.some((d) => d.includes('purpose "Meeting" -> "Site audit"')) && edited.some((d) => d.includes('visiting "Acme Corp" -> "River Partners"; point of contact "Hana Host" -> "Rita Riverton". Reason: They came for River Partners'))
+    && (await admin.get("/api/audit?action=visit.times_corrected")).data.entries.some((e) => e.target === "Eva Entry" && /Arrived earlier; left after half an hour/.test(e.detail)), JSON.stringify(edited));
+  const evaNote = (await desk.post(`/api/visits/${evaVisit.id}/comments`, { body: "Wrong desk" })).data.visit.comments[0];
+  await admin.del(`/api/visits/${evaVisit.id}/comments/${evaNote.id}`);
+  r = await entryNow();
+  check("entry: a comment taken off stays among its changes", r.history[0].field === "comment" && r.history[0].from === "desk: Wrong desk" && r.history[0].to === null && r.history[0].by === "admin" && r.visit.detailsChanged === 5, JSON.stringify(r.history[0]));
+  check("entry: so does a badge entered later", (await desk.get(`/api/visits/${ritaVisit.id}`)).data.history.some((c) => c.field === "badge" && c.from === null && c.to === "V-REC" && c.reason === "Recorded after the visit" && c.by === "sec"));
+
+  // Who corrects an entry: those who check visitors in (the front desk, managers) and Security, who also choose its points of contact.
+  await admin.post("/api/users", { username: "mgr", password: pw.desk, role: "manager" });
+  const mgr = await as("mgr", pw.desk);
+  r = await entry(evaVisit.id, { purpose: "Seen by the manager" }, mgr);
+  check("entry: a manager corrects them", r.status === 200 && r.data.history[0].by === "mgr" && r.data.history[0].to === "Seen by the manager");
+  check("entry: Security finds a point of contact in the directory, a viewer doesn't", (await security.get("/api/contacts?q=Hana")).data.people?.some((p) => p.id === host.id) && (await security.get(`/api/contacts/${host.id}`)).status === 200
+    && (await viewer.get("/api/contacts?q=Hana")).status === 403);
+  r = await entry(evaVisit.id, { hostIds: [host.id] }, security);
+  check("entry: and Security changes who was visited", r.status === 200 && r.data.visit.companyName === "Acme Corp" && r.data.visit.hostName === "Hana Host" && r.data.history[0].by === "sec");
+  // The site it was at.
+  check("entry: the site is one that is open, and one the account sees", (await entry(evaVisit.id, { siteId: 999999 })).status === 400 && (await entry(evaVisit.id, { siteId: "x" })).status === 400
+    && (await entry(evaVisit.id, { siteId: other.id }, harborDesk)).status === 403 && (await entryNow()).visit.siteId === site.id);
+  r = await entry(evaVisit.id, { siteId: other.id, reason: "They were at Riverside" });
+  check("entry: the site changed, with what it was", r.status === 200 && r.data.visit.siteId === other.id && r.data.visit.siteName === "Riverside" && r.data.history[0].field === "site"
+    && r.data.history[0].from === site.name && r.data.history[0].to === "Riverside" && r.data.history[0].reason === "They were at Riverside" && r.data.history[0].by === "desk", JSON.stringify(r.data.history[0]));
+  check("entry: it is in the audit log, and the visit is now the other site's", (await admin.get("/api/audit?action=visit.edited")).data.entries.some((e) => e.target === "Eva Entry" && e.detail.includes(`site "${site.name}" -> "Riverside". Reason: They were at Riverside`))
+    && (await harborDesk.get(`/api/visits/${evaVisit.id}`)).status === 404 && (await desk.get(`/api/visits?visitorId=${eva.id}&site=${other.id}`)).data.total === 1);
+  check("entry: the same site is no change", (await entry(evaVisit.id, { siteId: other.id })).status === 400);
+  const dot = (await desk.post("/api/visitors", { firstName: "Dot", lastName: "Double", organization: "Two Co", citizenship: "US" })).data.visitor;
+  const dotHere = (await desk.post("/api/checkins", { visitorId: dot.id, siteId: site.id, hostId: host.id, purpose: "Meeting", idType: "Passport" })).data.visit;
+  const dotThere = (await desk.post("/api/checkins", { visitorId: dot.id, siteId: other.id, hostId: host.id, purpose: "Meeting", idType: "Passport" })).data.visit;
+  r = await entry(dotHere.id, { siteId: other.id });
+  check("entry: someone still in the building isn't moved to a site where another visit of theirs is open", dotThere.id !== dotHere.id && r.status === 409 && /in the building at Riverside already/.test(r.data.error), JSON.stringify(r.data));
+  // Expected at the other site, but checked in at this one by mistake: the correction notes them as arrived there.
+  const riverEvent = (await desk.post("/api/events", { siteId: other.id, title: "River briefing", date: day, companyId: riverCo.id, hostId: riverRita.id })).data.event;
+  const wes = (await desk.post(`/api/events/${riverEvent.id}/guests`, { visitor: { firstName: "Wes", lastName: "Wrongdoor", organization: "Guest Co", citizenship: "US" } })).data.event.guests[0];
+  const wesVisit = (await desk.post("/api/checkins", { visitorId: wes.visitorId, siteId: site.id, hostId: host.id, purpose: "Briefing", idType: "Passport" })).data.visit;
+  const wesAtEvent = async () => (await desk.get(`/api/events/${riverEvent.id}`)).data.event.guests[0];
+  check("entry: (checked in at the wrong site, they are still expected at the other)", (await wesAtEvent()).status === "expected");
+  r = await entry(wesVisit.id, { siteId: other.id, hostIds: [riverRita.id] });
+  check("entry: moved to the site of the event they were expected at, they have arrived for it", r.status === 200 && r.data.visit.siteId === other.id && r.data.visit.companyName === "River Partners"
+    && (await wesAtEvent()).status === "here" && (await wesAtEvent()).visitId === wesVisit.id && r.data.history.map((c) => c.field).sort().join() === "company,contact,site", JSON.stringify(r.data.history));
+  r = await entry(wesVisit.id, { siteId: site.id });
+  check("entry: moved away again, the event expects them once more", r.status === 200 && (await wesAtEvent()).status === "expected" && (await wesAtEvent()).visitId === null);
+
+  // --- an expected guest who needs no badge --------------------------------------------------------
+  const vEsc = (await security.post("/api/badges", { number: "V-ESC", type: "visitor" })).data.badge;
+  const tour = (await desk.post("/api/events", { siteId: site.id, title: "Escorted tour", date: day, companyId: acme.id, hostId: host.id })).data.event;
+  const addEscorted = async (firstName, extra = {}) => (await desk.post(`/api/events/${tour.id}/guests`, { visitor: { firstName, lastName: "Escorted", organization: "Tour Co", citizenship: "US" }, ...extra })).data.event.guests.find((g) => g.firstName === firstName);
+  const escorted = async (firstName) => (await desk.get(`/api/events/${tour.id}`)).data.event.guests.find((g) => g.firstName === firstName);
+  const noBadge = (g, on, c = desk) => c.put(`/api/events/${tour.id}/guests/${g.visitorId}/no-badge`, { noBadge: on });
+  const waiting = async (name) => (await desk.get("/api/visits/badge-needed")).data.visits.find((v) => v.name === name);
+  const ned = await addEscorted("Ned");
+  check("no badge: a guest needs one unless it is said they don't", ned.noBadge === false && ned.noBadgeBy === null);
+  check("no badge: said by those who give badges out, yes or no", (await noBadge(ned, true, viewer)).status === 403 && (await desk.put(`/api/events/${tour.id}/guests/${ned.visitorId}/no-badge`, {})).status === 400
+    && (await desk.put(`/api/events/${tour.id}/guests/999999/no-badge`, { noBadge: true })).status === 404);
+  await desk.put(`/api/events/${tour.id}/guests/${ned.visitorId}/badge`, { badgeId: vEsc.id });
+  r = await noBadge(ned, true);
+  check("no badge: marked, with who said so, and the badge picked for them let go", r.status === 200 && (await escorted("Ned")).noBadge === true && (await escorted("Ned")).noBadgeBy === "desk" && (await escorted("Ned")).badge === null);
+  check("no badge: in the audit log", (await admin.get("/api/audit?action=event.guest_badge")).data.entries.some((e) => e.target === "Escorted tour" && e.detail === "Ned Escorted: no badge necessary"));
+  r = await desk.post("/api/checkins", { visitorId: ned.visitorId, siteId: site.id, hostId: host.id, purpose: "Tour", idType: "Passport" });
+  check("no badge: checked in at the desk with their ID checked, and that is all", r.status === 200 && r.data.visit.checkinStage === "done" && r.data.visit.badgeWaivedAt > 0 && r.data.visit.badgeWaivedBy === "desk" && !(await waiting("Ned Escorted")), JSON.stringify(r.data));
+  check("no badge: the audit log says why none was given", (await admin.get("/api/audit?action=visit.checkin")).data.entries.some((e) => e.target === "Ned Escorted" && /no badge necessary, as marked for the expected guest by desk/.test(e.detail)));
+  check("no badge: once they have arrived, it is said as they are checked in", (await noBadge(ned, false)).status === 409 && (await escorted("Ned")).noBadge === true);
+  const kay = await addEscorted("Kay", { noBadge: true });
+  check("no badge: said as a guest is added", kay.noBadge === true && (await admin.get("/api/audit?action=event.guest_add")).data.entries.some((e) => e.detail === "Kay Escorted; no badge necessary"));
+  r = await desk.post("/api/visits", { visitorId: kay.visitorId, siteId: site.id, companyId: acme.id, hostId: host.id, purpose: "Tour" });
+  check("no badge: arrived with their ID still to check, the desk is told that is all there is", r.data.visit.checkinStage === "id" && (await waiting("Kay Escorted")).stage === "id" && (await waiting("Kay Escorted")).noBadge === true && (await waiting("Gail Guest"))?.noBadge !== true);
+  r = await desk.post(`/api/visits/${r.data.visit.id}/verify-id`, { idType: "Passport" });
+  check("no badge: their ID checked, the check-in is done", r.status === 200 && r.data.visit.checkinStage === "done" && r.data.visit.badgeWaivedAt > 0 && !(await waiting("Kay Escorted")), JSON.stringify(r.data));
+  const pat = await addEscorted("Pat", { noBadge: true });
+  r = await desk.put(`/api/events/${tour.id}/guests/${pat.visitorId}/badge`, { badgeId: vEsc.id });
+  check("no badge: a badge picked for them means they need one after all", r.status === 200 && (await escorted("Pat")).noBadge === false && (await escorted("Pat")).badge.label === "V-ESC");
+  const una = await addEscorted("Una", { noBadge: true });
+  check("no badge: taken back, check-in waits for a badge as usual", (await noBadge(una, false)).status === 200 && (await escorted("Una")).noBadge === false
+    && (await desk.post("/api/checkins", { visitorId: una.visitorId, siteId: site.id, hostId: host.id, purpose: "Tour", idType: "Passport" })).data.visit.checkinStage === "badge");
+  const walks = (await desk.post("/api/events", { siteId: site.id, title: "Daily walk", date: dayAfter(1), companyId: acme.id, hostId: host.id, repeat: { freq: "daily", until: dayAfter(3) } })).data.event;
+  const sam = (await desk.post(`/api/events/${walks.id}/guests`, { visitor: { firstName: "Sam", lastName: "Series", organization: "Tour Co", citizenship: "US" }, scope: "following" })).data.event.guests[0];
+  const walkDays = async () => (await desk.get(`/api/events?from=${dayAfter(1)}&to=${dayAfter(3)}`)).data.events.filter((e) => e.title === "Daily walk").map((e) => e.guests[0].noBadge);
+  await desk.put(`/api/events/${walks.id}/guests/${sam.visitorId}/no-badge`, { noBadge: true, scope: "following" });
+  check("no badge: on a repeating event's later dates too, when asked", (await walkDays()).join() === "true,true,true", String(await walkDays()));
+  await desk.put(`/api/events/${walks.id}/guests/${sam.visitorId}/no-badge`, { noBadge: false });
+  check("no badge: or on the one date", (await walkDays()).join() === "false,true,true", String(await walkDays()));
 }
 
 main()

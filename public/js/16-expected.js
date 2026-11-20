@@ -36,20 +36,21 @@ $("expected-add").addEventListener("click", async () => {
 });
 
 async function loadExpected() {
-  const list = clear($("expected-list"));
+  // Filled only once the answer is in, so two loads at once (a check-in finishing, say) don't both add the day's events.
+  const list = $("expected-list");
   const date = expectedDay();
   let data;
   try {
     data = await api(`/api/events?${new URLSearchParams({ date, ...siteQuery() })}`);
   } catch (error) {
-    list.append(h("p", { class: "message error", text: error.message }));
+    list.replaceChildren(h("p", { class: "message error", text: error.message }));
     return;
   }
   if (!data.events.length) {
-    list.append(h("div", { class: "placeholder", text: `No visitor events on ${fmtDate(Date.parse(`${date}T12:00:00`))}${canEditVisitors() ? ". Add one with New event." : "."}` }));
+    list.replaceChildren(h("div", { class: "placeholder", text: `No visitor events on ${fmtDate(Date.parse(`${date}T12:00:00`))}${canEditVisitors() ? ". Add one with New event." : "."}` }));
     return;
   }
-  for (const e of data.events) list.append(eventPanel(e));
+  list.replaceChildren(...data.events.map((e) => eventPanel(e)));
 }
 
 /** "9:00 AM" from an event's "09:00", as the page shows every other time. */
@@ -238,13 +239,31 @@ function guestBadgeCell(e, g) {
       toast(error.message, "error");
     }
   };
+  // No badge necessary (escorted, say): their check-in is done once their ID is checked.
+  const setNoBadge = async (on) => {
+    const scope = await seriesScope(e, { title: `${on ? "No badge necessary for" : "A badge after all for"} ${g.firstName} ${g.lastName}`, one: "This date only", following: "This and later dates" });
+    if (!scope) return;
+    try {
+      await api(`/api/events/${e.id}/guests/${g.visitorId}/no-badge`, { method: "PUT", body: { noBadge: on, scope } });
+      loadExpected();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+  const noBadgeButton = may ? h("button", { type: "button", class: "link-btn", text: "No badge necessary", title: "Their check-in is done once their ID is checked, with no badge to give", onclick: () => setNoBadge(true) }) : null;
+  if (g.noBadge) {
+    return h("span", { class: "btn-row" }, h("span", { class: "badge muted", text: "No badge necessary", title: g.noBadgeBy ? `Said ${g.noBadgeBy}` : null }),
+      may ? h("button", { type: "button", class: "link-btn", text: "Pick badge", onclick: pickBadge }) : null,
+      may ? h("button", { type: "button", class: "link-btn danger-text", text: "Clear", onclick: () => setNoBadge(false) }) : null);
+  }
   if (g.badge) {
     return h("span", { class: "btn-row" }, h("span", { class: "mono", text: g.badge.label }),
       reserved ? h("span", { class: "muted small-text", text: "Reserved" }) : null,
       may ? h("button", { type: "button", class: "link-btn", text: "Change", onclick: pickBadge }) : null,
-      may && !reserved ? h("button", { type: "button", class: "link-btn danger-text", text: "Clear", onclick: clearBadge }) : null);
+      may && !reserved ? h("button", { type: "button", class: "link-btn danger-text", text: "Clear", onclick: clearBadge }) : null,
+      noBadgeButton);
   }
-  return may ? h("button", { type: "button", class: "link-btn", text: "Pick badge", onclick: pickBadge }) : h("span", { class: "muted small-text", text: "—" });
+  return may ? h("span", { class: "btn-row" }, h("button", { type: "button", class: "link-btn", text: "Pick badge", onclick: pickBadge }), noBadgeButton) : h("span", { class: "muted small-text", text: "—" });
 }
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -504,7 +523,8 @@ async function addGuestDialog(event, scope = "one") {
     current.replaceChildren(h("h4", { text: `On this event${e.guests.length ? ` (${e.guests.length})` : ""}` }),
       e.guests.length ? h("ul", { class: "plain-list" }, e.guests.map((g) => h("li", { class: "row-between" },
         h("span", {}, h("strong", { text: `${g.firstName} ${g.lastName}` }), g.organization ? h("span", { class: "muted small-text", text: ` · ${g.organization}` }) : null,
-          g.status !== "expected" ? h("span", { class: "muted small-text", text: g.status === "here" ? " · here" : " · came" }) : null),
+          g.status !== "expected" ? h("span", { class: "muted small-text", text: g.status === "here" ? " · here" : " · came" }) : null,
+          g.noBadge ? h("span", { class: "muted small-text", text: " · no badge necessary" }) : null),
         removeGuestButton(e, g, () => { added += 1; showCurrent(); }) || "")))
         : h("p", { class: "muted", text: "No guests yet." }));
   };
@@ -513,9 +533,11 @@ async function addGuestDialog(event, scope = "one") {
   const message = h("p", { class: "message", hidden: true });
   const search = h("input", { type: "search", placeholder: "Search visitors on record", autocomplete: "off" });
   const say = (text, kind = "success") => { message.className = `message ${kind}`; message.textContent = text; message.hidden = false; };
+  // For those who give badges out: the guests added while this is ticked need none.
+  const noBadge = h("input", { type: "checkbox" });
   const add = async (body, name) => {
     try {
-      await api(`/api/events/${event.id}/guests`, { method: "POST", body: { ...body, scope } });
+      await api(`/api/events/${event.id}/guests`, { method: "POST", body: { ...body, scope, noBadge: noBadge.checked } });
       added += 1;
       say(`${name} added. Add another, or press Done.`);
       showCurrent();
@@ -622,6 +644,8 @@ async function addGuestDialog(event, scope = "one") {
     body: h("div", { class: "stack" },
       message,
       current,
+      canGiveBadges() ? h("label", { class: "check-row" }, noBadge, h("span", { text: "No badge necessary for the guests added now" }),
+        h("span", { class: "hint", text: "Escorted guests, say: their check-in is done once their ID is checked. Untick it for the ones who need a badge; it can be changed for each guest afterwards, in the Badge column." })) : null,
       h("h4", { text: "Add someone on record" }), search, results,
       h("h4", { text: "Someone new" }),
       h("div", { class: "form-grid" }, first, last, org, email),

@@ -519,7 +519,9 @@ async function checkIn(body, link, button = null) {
     const host = result.hostName;
     showDone(
       result.already ? `You're already checked in, ${result.firstName}` : `You're checked in, ${result.firstName}`,
-      `Please show your photo ID to the front desk, and they'll give you your visitor badge${host ? ` and let ${host} know you're here` : ""}.`
+      result.noBadge
+        ? `Please show your photo ID to the front desk${host ? `, and they'll let ${host} know you're here` : ""}.`
+        : `Please show your photo ID to the front desk, and they'll give you your visitor badge${host ? ` and let ${host} know you're here` : ""}.`
     );
   } catch (error) {
     if (error.status === 401) return;

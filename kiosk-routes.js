@@ -271,7 +271,8 @@ function createKioskRoutes({ db, kiosks, visitors, events = null, sites, clock, 
     const { visit, already } = visitors.checkIn({ visitorId, siteId: req.site.id, companyId: company.id, hostIds, purpose, by: `kiosk:${req.kiosk.name}`, kioskId: req.kiosk.id });
     if (!already) audit(req, "visit.checkin", `${visit.visitor.firstName} ${visit.visitor.lastName}`, `${visit.companyName}${visit.hostName ? `, host ${visit.hostName}` : ""}${created ? "; new visitor" : ""}`);
     // "Jane Doe, Sam Roe and Lee Poe", for the kiosk's closing words.
-    res.json({ ok: true, already, firstName: visit.visitor.firstName, companyName: visit.companyName, hostName: visit.hostName ? visit.hostName.replace(/, ([^,]*)$/, " and $1") : null });
+    // noBadge: an expected guest marked as needing none, so the kiosk doesn't promise them one.
+    res.json({ ok: true, already, firstName: visit.visitor.firstName, companyName: visit.companyName, hostName: visit.hostName ? visit.hostName.replace(/, ([^,]*)$/, " and $1") : null, noBadge: visitors.noBadgeNeeded(visit.id) });
   });
 
   /** Check-out lookup: open visits at this site for this name, with the company only. */

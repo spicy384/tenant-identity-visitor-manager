@@ -617,7 +617,8 @@ function formDialog({ title, fields, submitLabel = "Save", onSubmit, extraAction
     ],
     onOpen: (dlg) => {
       const first = fields.find((f) => f.autofocus) || fields.find((f) => f.name && inputs[f.name] && !f.disabled);
-      if (first && inputs[first.name] && !matchMedia("(pointer: coarse)").matches) inputs[first.name].focus();
+      // Without scrolling to it: a window that opens on what is on record starts at its top.
+      if (first && inputs[first.name] && !matchMedia("(pointer: coarse)").matches) inputs[first.name].focus({ preventScroll: true });
       for (const f of fields) if (f.onChange && inputs[f.name]) f.onChange(inputs[f.name], inputs, dlg);
     }
   });

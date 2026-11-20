@@ -533,9 +533,11 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     if (!visit.checkedOutAt) {
       const given = badges.assign(badge.id, { kind: "visitor", holderId: visit.visitor.id, visitId: visit.id }, { by: staffName(req), sites: req.ctx.sites, levelNames: seesLevels(req) });
       auditFrom(req, "badge.assign", given.label, `to ${given.holder.name}${given.holder.company ? ` (${given.holder.company})` : ""}; entered from the visit log${reservedNote(given, "visitor", visit.visitor.id)}`);
+      visitors.logVisitChange(visit.id, { field: "badge", from: null, to: given.label, reason: "Given from the visit log", by: staffName(req) });
       return res.json({ ok: true, badge: badgeOut(req, given), recorded: false });
     }
     badges.recordForVisit(badge.id, visit.id, { by: staffName(req), sites: req.ctx.sites });
+    visitors.logVisitChange(visit.id, { field: "badge", from: null, to: badge.label, reason: "Recorded after the visit", by: staffName(req) });
     auditFrom(req, "visit.badge_recorded", name, `badge ${badge.label}, recorded after the visit (${visit.siteName}, arrived ${new Date(visit.checkedInAt).toISOString()})`);
     return res.json({ ok: true, badge: badgeOut(req, badges.get(badge.id)), recorded: true });
   });
@@ -699,9 +701,11 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
       if (!known.companies.some((c) => c.companyId === event.companyId)) visitors.setLink(visitorId, { companyId: event.companyId, hostId: event.hostId });
     }
     const scope = scopeOf(req.body?.scope);
-    const updated = events.addGuest(event.id, visitorId, { sites: req.ctx.sites, scope });
+    // No badge necessary: said by those who give badges out.
+    const noBadge = req.body?.noBadge === true && access.canEditBadges(req.ctx);
+    const updated = events.addGuest(event.id, visitorId, { sites: req.ctx.sites, scope, noBadge, by: staffName(req) });
     const guest = updated.guests.find((g) => g.visitorId === visitorId);
-    auditFrom(req, "event.guest_add", event.title, `${guest.firstName} ${guest.lastName}${scope === "following" && event.seriesId ? `, ${event.date} and later dates` : ""}`);
+    auditFrom(req, "event.guest_add", event.title, `${guest.firstName} ${guest.lastName}${scope === "following" && event.seriesId ? `, ${event.date} and later dates` : ""}${guest.noBadge ? "; no badge necessary" : ""}`);
     res.json({ ok: true, event: eventFor(req, updated) });
   });
 
@@ -737,6 +741,21 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const guest = event.guests.find((g) => g.visitorId === visitorId);
     auditFrom(req, "event.guest_badge", event.title, `${guest.firstName} ${guest.lastName}: ${guest.badge?.source === "event" ? `badge ${guest.badge.label}${badge ? reservedNote(badge, "visitor", visitorId) : ""}` : "no badge picked"}`);
     return res.json({ ok: true, event });
+  });
+
+  /**
+   * Says an expected guest needs no badge, or takes that back: { noBadge: true or false, scope
+   * ("following": on the event's later dates too) }. Their check-in is then done once their ID
+   * is checked.
+   */
+  router.put("/api/events/:id/guests/:visitorId/no-badge", editVisitors, editBadges, (req, res) => {
+    if (typeof req.body?.noBadge !== "boolean") throw fail(400, "Say whether they need a badge.");
+    const visitorId = positiveInt(req.params.visitorId);
+    const scope = scopeOf(req.body?.scope);
+    const event = events.setGuestNoBadge(positiveInt(req.params.id), visitorId, req.body.noBadge, { by: staffName(req), sites: req.ctx.sites, scope });
+    const guest = event.guests.find((g) => g.visitorId === visitorId);
+    auditFrom(req, "event.guest_badge", event.title, `${guest.firstName} ${guest.lastName}: ${req.body.noBadge ? "no badge necessary" : "a badge is needed again"}${scope === "following" && event.seriesId ? `, ${event.date} and later dates` : ""}`);
+    return res.json({ ok: true, event: eventFor(req, event) });
   });
 
   router.delete("/api/events/:id/guests/:visitorId", editVisitors, (req, res) => {

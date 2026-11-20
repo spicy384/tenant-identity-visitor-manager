@@ -496,10 +496,15 @@ function createVisitors({ db, fields }) {
       checkedOutAt: r.checked_out_at,
       checkoutMethod: r.checkout_method,
       checkedOutBy: r.checked_out_by,
+      // No badge was needed (said at check-in, or ahead of time for an expected guest), and who said so.
+      badgeWaivedAt: r.badge_waived_at ?? null,
+      badgeWaivedBy: r.badge_waived_by || null,
       // How many times its check-in or check-out time has been corrected, which of them, and the latest.
       timesCorrected: r.time_changes || 0,
       timeChanged: r.time_changes ? { in: String(r.changed_fields || "").split(",").includes("in"), out: String(r.changed_fields || "").split(",").includes("out") } : null,
       lastCorrection: r.time_changes ? { reason: r.last_reason, by: r.last_by, at: r.last_at } : null,
+      // How many times where it was, who they visited or what for has been changed since.
+      detailsChanged: r.detail_changes || 0,
       // The visitor badges they had on this visit, and whether one was recorded after it.
       badges: r.badge_labels ? String(r.badge_labels).split(", ") : [],
       badgeRecordedLater: Boolean(r.badge_recorded_later),
@@ -516,6 +521,7 @@ function createVisitors({ db, fields }) {
     (SELECT max(a.note = 'Recorded after the visit') FROM badge_assignments a WHERE ${VISIT_BADGE_WHERE}) AS badge_recorded_later`;
   const VISIT_SELECT = `SELECT x.*, s.name AS site_name, v.first_name, v.last_name, v.organization, v.verified, v.blocked, v.citizenship, k.name AS kiosk_name,
     (SELECT count(*) FROM visit_time_changes c WHERE c.visit_id = x.id) AS time_changes,
+    (SELECT count(*) FROM visit_changes c WHERE c.visit_id = x.id AND c.field IN ('site', 'company', 'contact', 'purpose')) AS detail_changes,
     (SELECT group_concat(DISTINCT c.field) FROM visit_time_changes c WHERE c.visit_id = x.id) AS changed_fields,
     (SELECT c.reason FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_reason,
     (SELECT c.changed_by FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_by,
@@ -659,6 +665,7 @@ function createVisitors({ db, fields }) {
         AND (visit_id IS NULL OR (visit_id IN (SELECT id FROM visits WHERE checked_out_at IS NOT NULL)
           AND event_id IN (SELECT id FROM visitor_events WHERE end_time > ? OR (end_time IS NULL AND start_time IS NULL))))`)
         .run(id, visitorId, siteId, today(site.time_zone, now), clockAt(site.time_zone, now));
+      waiveForGuest(id, now);
     });
     return { visit: getVisit(id), already: false };
   }
@@ -679,8 +686,30 @@ function createVisitors({ db, fields }) {
     if (!visit || visit.checkedOutAt) throw fail(404, "No such visit in the building.");
     // Checked again (the desk went back a step) until their badge is given; then it stands.
     if (!["id", "badge"].includes(visit.checkinStage)) throw fail(409, `${visit.visitor.firstName} ${visit.visitor.lastName}'s check-in is finished.`);
-    raw.prepare("UPDATE visits SET checkin_stage = 'badge', id_type = ?, id_other = ?, id_verified_at = ?, id_verified_by = ? WHERE id = ?").run(idType, other, now, by, visitId);
+    db.transaction(() => {
+      raw.prepare("UPDATE visits SET checkin_stage = 'badge', id_type = ?, id_other = ?, id_verified_at = ?, id_verified_by = ? WHERE id = ?").run(idType, other, now, by, visitId);
+      waiveForGuest(visitId, now);
+    });
     return getVisit(visitId);
+  }
+
+  // An expected guest marked as needing no badge, at an event this visit is noted against, with
+  // no badge picked for them at another of the day's events.
+  const NO_BADGE_GUEST = `SELECT g.no_badge_by FROM event_guests g WHERE g.visit_id = ? AND g.no_badge = 1
+    AND NOT EXISTS (SELECT 1 FROM event_guests o WHERE o.visit_id = g.visit_id AND o.badge_id IS NOT NULL) LIMIT 1`;
+
+  /** Whether a visit is an expected guest's who was marked as needing no badge. */
+  function noBadgeNeeded(visitId) {
+    return Boolean(raw.prepare(NO_BADGE_GUEST).get(Number(visitId)));
+  }
+
+  /**
+   * An expected guest marked as needing no badge: once their ID is checked (the visit waits
+   * for its badge), the check-in is done, on the word of whoever marked them.
+   */
+  function waiveForGuest(visitId, now) {
+    const guest = raw.prepare(NO_BADGE_GUEST).get(visitId);
+    if (guest) raw.prepare("UPDATE visits SET checkin_stage = 'done', badge_waived_at = ?, badge_waived_by = ? WHERE id = ? AND checkin_stage = 'badge'").run(now, guest.no_badge_by, visitId);
   }
 
   /** Moves a visit on to `stage` (done once a badge is given, or none is needed). */
@@ -765,13 +794,101 @@ function createVisitors({ db, fields }) {
     return { visit: getVisit(visit.id), comment: { id, body: words, by, at: now } };
   }
 
-  /** Takes a comment off a visit. Returns { visit, comment } (the comment as it was). */
-  function removeComment(visitId, commentId, { sites = null } = {}) {
+  /** Takes a comment off a visit; what it said stays in the visit's changes. Returns { visit, comment } (the comment as it was). */
+  function removeComment(visitId, commentId, { sites = null, by = null } = {}) {
     const visit = getVisit(visitId, { sites });
     const comment = visit?.comments.find((c) => c.id === Number(commentId));
     if (!comment) throw fail(404, "No such comment.");
-    raw.prepare("DELETE FROM visit_comments WHERE id = ? AND visit_id = ?").run(comment.id, visit.id);
+    db.transaction(() => {
+      raw.prepare("DELETE FROM visit_comments WHERE id = ? AND visit_id = ?").run(comment.id, visit.id);
+      logVisitChange(visit.id, { field: "comment", from: `${comment.by || "staff"}: ${comment.body}`, to: null, by });
+    });
     return { visit: getVisit(visit.id), comment };
+  }
+
+  /** Keeps a change to a visit's entry with it: what it was, what it became, why, who and when. */
+  function logVisitChange(visitId, { field, from = null, to = null, reason = null, by = null, at = Date.now() } = {}) {
+    raw.prepare("INSERT INTO visit_changes (visit_id, field, from_text, to_text, reason, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(Number(visitId), field, from === null ? null : String(from).slice(0, 2000), to === null ? null : String(to).slice(0, 2000), reason || null, by, at);
+  }
+
+  /**
+   * Corrects a visit's entry in the log, open or ended: the site it was at (`siteId`, an open
+   * one the caller sees), who they visited (`hostIds`, its points of contact, whose company
+   * comes with them unless `companyId` says), what for (`purpose`), and when they arrived and
+   * left (as correctTimes, which needs the `reason`). Only what is given and differs is
+   * changed, all of it or none, and each change is kept with the visit. A visit moved to
+   * another site lets go of the events it was noted against at the old one (their guest is
+   * expected there again) and is noted against those of its day at the new one.
+   * Returns { visit, changes: [{ field: site, company, contact or purpose, from, to }], times
+   * (correctTimes' answer, or null), reason }.
+   */
+  function editVisit(visitId, { siteId, companyId, hostIds, purpose, checkedInAt, checkedOutAt, reason, by = null, sites = null, now = Date.now() } = {}) {
+    const visit = getVisit(visitId, { sites });
+    if (!visit) throw fail(404, "No such visit.");
+    const why = String(reason ?? "").trim().replace(/\s+/g, " ");
+    if (why.length > 500) throw fail(400, "Keep the reason to 500 characters.");
+    const changes = [];
+    let site = null;
+    if (siteId !== undefined && Number(siteId) !== visit.siteId) {
+      site = raw.prepare("SELECT * FROM sites WHERE id = ?").get(Number(siteId)) || null;
+      if (!site || !site.active) throw fail(400, "Choose a site that is open.");
+      if (sites && !sites.has(site.id)) throw fail(403, "This account can't see that site.");
+      // Still in the building: not at a site where another visit of theirs is open.
+      if (!visit.checkedOutAt && openVisit(visit.visitorId, site.id)) throw fail(409, `${visit.visitor.firstName} ${visit.visitor.lastName} is in the building at ${site.name} already, on another visit.`);
+      changes.push({ field: "site", from: visit.siteName, to: site.name });
+    }
+    let company = null;
+    let hosts = null;
+    const given = hostIds === undefined ? undefined : contactIds(hostIds);
+    if (given === null) throw fail(400, "Each point of contact must be someone in the directory.");
+    if (given !== undefined && String(given) !== String(visit.hostIds)) {
+      if (!given.length) throw fail(400, "Choose the point of contact, someone at the company they visited.");
+      company = activeCompany(Number(companyId) > 0 ? companyId : companyOfPerson(given[0]));
+      if (!company) throw fail(400, "That point of contact isn't in the directory.");
+      hosts = contactsFor(company, given, { one: "The point of contact must be someone at that company." });
+      if (company.name !== visit.companyName) changes.push({ field: "company", from: visit.companyName || null, to: company.name });
+      if (contactNames(hosts) !== visit.hostName) changes.push({ field: "contact", from: visit.hostName || null, to: contactNames(hosts) });
+    }
+    const nextPurpose = purpose === undefined ? undefined : text(purpose, 200);
+    const purposeChanged = nextPurpose !== undefined && nextPurpose !== (visit.purpose || null);
+    if (purposeChanged) changes.push({ field: "purpose", from: visit.purpose || null, to: nextPurpose });
+    // Times given as they are on record aren't a correction.
+    const times = {};
+    if (checkedInAt !== undefined && Number(checkedInAt) !== visit.checkedInAt) times.checkedInAt = checkedInAt;
+    const noOut = checkedOutAt === null || checkedOutAt === "";
+    if (checkedOutAt !== undefined && !(noOut ? !visit.checkedOutAt : Number(checkedOutAt) === visit.checkedOutAt)) times.checkedOutAt = checkedOutAt;
+    const timed = Object.keys(times).length > 0;
+    if (!changes.length && !hosts && !timed) throw fail(400, "Nothing was changed.");
+    let corrected = null;
+    db.transaction(() => {
+      if (site) {
+        raw.prepare("UPDATE visits SET site_id = ? WHERE id = ?").run(site.id, visit.id);
+        raw.prepare("UPDATE event_guests SET visit_id = NULL WHERE visit_id = ? AND event_id IN (SELECT id FROM visitor_events WHERE site_id != ?)").run(visit.id, site.id);
+        raw.prepare("UPDATE event_guests SET visit_id = ? WHERE visitor_id = ? AND visit_id IS NULL AND event_id IN (SELECT id FROM visitor_events WHERE site_id = ? AND date = ?)")
+          .run(visit.id, visit.visitorId, site.id, today(site.time_zone, visit.checkedInAt));
+      }
+      if (timed) corrected = correctTimes(visit.id, { ...times, reason: why, by, sites, now });
+      if (hosts) {
+        raw.prepare("UPDATE visits SET company_id = ?, company_name = ?, host_id = ?, host_name = ? WHERE id = ?").run(company.id, company.name, hosts[0].id, contactNames(hosts), visit.id);
+        setVisitContacts(visit.id, hosts);
+      }
+      if (purposeChanged) raw.prepare("UPDATE visits SET purpose = ? WHERE id = ?").run(nextPurpose, visit.id);
+      const at = Date.now();
+      for (const c of changes) logVisitChange(visit.id, { ...c, reason: why, by, at });
+    });
+    return { visit: getVisit(visit.id), changes, times: corrected, reason: why };
+  }
+
+  /**
+   * Every change made to a visit's entry after it was recorded, newest first: { field ("in" or
+   * "out" for when they arrived or left, site, company, contact, purpose, comment, badge), from, to
+   * (timestamps for in and out, else text; null for nothing), reason, by, at }.
+   */
+  function visitHistory(visitId) {
+    const rest = raw.prepare("SELECT * FROM visit_changes WHERE visit_id = ? ORDER BY changed_at DESC, id DESC").all(Number(visitId))
+      .map((r) => ({ field: r.field, from: r.from_text, to: r.to_text, reason: r.reason || null, by: r.changed_by, at: r.changed_at }));
+    return [...timeChanges(visitId), ...rest].sort((a, b) => b.at - a.at);
   }
 
   /**
@@ -897,6 +1014,7 @@ function createVisitors({ db, fields }) {
   return {
     correctTimes,
     timeChanges,
+    editVisit, visitHistory, logVisitChange, noBadgeNeeded,
     verifyId, setStage, updateVisit, cancelCheckIn, reserveBadge, releaseBadge, companyOfPerson, companyHere, sitesOfContact,
     list,
     get,

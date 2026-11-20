@@ -49,7 +49,7 @@ const DASHBOARD_MODULES = {
       return { count: visits.length, attention: visits.length > 0, body: dashList(visits.map((a) => h("div", { class: `checkin-row stage-${a.stage}` }, dashRow({
         onclick: () => continueCheckIn(a.visitId),
         main: a.name,
-        sub: [a.stage === "id" ? "Check their ID" : "Needs a badge", a.companyName, multiSite() && !state.site ? a.siteName : null, agoText(a.checkedInAt)].filter(Boolean).join(" · "),
+        sub: [a.stage === "id" ? (a.noBadge ? "Check their ID (no badge necessary)" : "Check their ID") : "Needs a badge", a.companyName, multiSite() && !state.site ? a.siteName : null, agoText(a.checkedInAt)].filter(Boolean).join(" · "),
         right: h("button", { type: "button", class: "primary small", text: checkinNext(a), onclick: (e) => { e.stopPropagation(); continueCheckIn(a.visitId); } })
       }))), "Nobody is waiting at the desk.") };
     }

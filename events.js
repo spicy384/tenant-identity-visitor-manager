@@ -129,7 +129,7 @@ function createEvents({ db, now = Date.now }) {
     const out = new Map();
     if (!eventIds.length) return out;
     const kept = (id, number, code, source) => ({ id, number, facilityCode: code ?? null, label: badgeLabel(code, number), source });
-    const rows = raw.prepare(`SELECT g.event_id, g.visitor_id, g.visit_id, g.badge_id, b.number AS badge_number, b.facility_code AS badge_code, rb.id AS reserved_id, rb.number AS reserved_number, rb.facility_code AS reserved_code, v.first_name, v.last_name, v.organization, v.blocked, x.checked_in_at, x.checked_out_at, x.checkin_stage, e.date, e.start_time, e.end_time, s.time_zone
+    const rows = raw.prepare(`SELECT g.event_id, g.visitor_id, g.visit_id, g.badge_id, g.no_badge, g.no_badge_by, b.number AS badge_number, b.facility_code AS badge_code, rb.id AS reserved_id, rb.number AS reserved_number, rb.facility_code AS reserved_code, v.first_name, v.last_name, v.organization, v.blocked, x.checked_in_at, x.checked_out_at, x.checkin_stage, e.date, e.start_time, e.end_time, s.time_zone
       FROM event_guests g JOIN visitor_events e ON e.id = g.event_id JOIN sites s ON s.id = e.site_id JOIN visitors v ON v.id = g.visitor_id LEFT JOIN visits x ON x.id = g.visit_id LEFT JOIN badges b ON b.id = g.badge_id
       LEFT JOIN badges rb ON rb.id = (SELECT k.id FROM visitor_reserved_badges vr JOIN badges k ON k.id = vr.badge_id WHERE vr.visitor_id = g.visitor_id AND k.status = 'active'
           AND (NOT EXISTS (SELECT 1 FROM badge_sites bs WHERE bs.badge_id = k.id) OR EXISTS (SELECT 1 FROM badge_sites bs WHERE bs.badge_id = k.id AND bs.site_id = e.site_id))
@@ -155,7 +155,11 @@ function createEvents({ db, now = Date.now }) {
         // The visitor badge kept for them, as check-in will offer it: the one picked for this event,
         // else (until they arrive) the first reserved on their record that can be used at this site.
         badge: r.badge_id ? kept(r.badge_id, r.badge_number, r.badge_code, "event")
-          : !r.visit_id && r.reserved_id ? kept(r.reserved_id, r.reserved_number, r.reserved_code, "reserved") : null,
+          : !r.visit_id && r.reserved_id && !r.no_badge ? kept(r.reserved_id, r.reserved_number, r.reserved_code, "reserved") : null,
+        // Marked as needing no badge for this event (escorted, say), and by whom: once their ID
+        // is checked, their check-in is done.
+        noBadge: Boolean(r.no_badge) && !r.badge_id,
+        noBadgeBy: r.no_badge && !r.badge_id ? r.no_badge_by || null : null,
         arrivedAt: r.checked_in_at ?? null,
         leftAt: r.checked_out_at ?? null
       });
@@ -339,16 +343,18 @@ function createEvents({ db, now = Date.now }) {
 
   /**
    * Adds an expected guest, to the event or (scope "following") to it and its series' later
-   * dates; one already at an event is left as they are.
+   * dates; one already at an event is left as they are. With noBadge, they are marked as
+   * needing no badge wherever they were added.
    */
-  function addGuest(eventId, visitorId, { sites = null, scope = "one" } = {}) {
+  function addGuest(eventId, visitorId, { sites = null, scope = "one", noBadge = false, by = null } = {}) {
     const event = get(eventId, { sites });
     if (!event) throw fail(404, "No such event.");
     if (!raw.prepare("SELECT 1 FROM visitors WHERE id = ?").get(Number(visitorId))) throw fail(404, "No such visitor.");
     db.transaction(() => {
       for (const id of reach(event, scope, sites)) {
         const e = id === event.id ? event : get(id);
-        raw.prepare("INSERT OR IGNORE INTO event_guests (event_id, visitor_id, added_at) VALUES (?, ?, ?)").run(e.id, Number(visitorId), now());
+        const added = raw.prepare("INSERT OR IGNORE INTO event_guests (event_id, visitor_id, added_at) VALUES (?, ?, ?)").run(e.id, Number(visitorId), now()).changes;
+        if (added && noBadge) raw.prepare("UPDATE event_guests SET no_badge = 1, no_badge_by = ? WHERE event_id = ? AND visitor_id = ?").run(by, e.id, Number(visitorId));
         // Already here today at that site (checked in before being added): note it straight away.
         if (e.date === today(raw.prepare("SELECT time_zone FROM sites WHERE id = ?").get(e.siteId).time_zone, now())) {
           const open = raw.prepare("SELECT id FROM visits WHERE visitor_id = ? AND site_id = ? AND checked_out_at IS NULL ORDER BY checked_in_at DESC").get(Number(visitorId), e.siteId);
@@ -400,6 +406,26 @@ function createEvents({ db, now = Date.now }) {
       if (taken) throw fail(409, `Badge ${badge.number} is picked for ${taken.first_name} ${taken.last_name} that day.`);
     }
     raw.prepare("UPDATE event_guests SET badge_id = ? WHERE event_id = ? AND visitor_id = ?").run(badgeId === null ? null : Number(badgeId), event.id, Number(visitorId));
+    // A badge picked: they need one after all.
+    if (badgeId !== null) raw.prepare("UPDATE event_guests SET no_badge = 0, no_badge_by = NULL WHERE event_id = ? AND visitor_id = ?").run(event.id, Number(visitorId));
+    return get(event.id);
+  }
+
+  /**
+   * Says an expected guest needs no badge (escorted, say), or takes that back: once their ID
+   * is checked, their check-in is done, with no badge to give. On the event, or (scope
+   * "following") on it and its series' later dates, wherever they haven't arrived; a badge
+   * picked for them there is let go. One who has arrived is told of as they are checked in.
+   */
+  function setGuestNoBadge(eventId, visitorId, on, { by = null, sites = null, scope = "one" } = {}) {
+    const event = get(eventId, { sites });
+    if (!event) throw fail(404, "No such event.");
+    const row = raw.prepare("SELECT visit_id FROM event_guests WHERE event_id = ? AND visitor_id = ?").get(event.id, Number(visitorId));
+    if (!row) throw fail(404, "They aren't a guest at this event.");
+    if (row.visit_id) throw fail(409, "They have arrived: say whether they need a badge as they are checked in.");
+    const ids = reach(event, scope, sites);
+    raw.prepare(`UPDATE event_guests SET no_badge = ?, no_badge_by = ?, badge_id = CASE WHEN ? = 1 THEN NULL ELSE badge_id END
+      WHERE event_id IN (${inList(ids)}) AND visitor_id = ? AND visit_id IS NULL`).run(on ? 1 : 0, on ? by : null, on ? 1 : 0, ...ids, Number(visitorId));
     return get(event.id);
   }
 
@@ -456,7 +482,7 @@ function createEvents({ db, now = Date.now }) {
     return n;
   }
 
-  return { list, get, create, update, remove, addGuest, removeGuest, setGuestBadge, isLater, pickedForOthers, badgeForVisit, expectedToday, expectedCount };
+  return { list, get, create, update, remove, addGuest, removeGuest, setGuestBadge, setGuestNoBadge, isLater, pickedForOthers, badgeForVisit, expectedToday, expectedCount };
 }
 
 module.exports = { createEvents, cleanRule, datesOf, ruleText };

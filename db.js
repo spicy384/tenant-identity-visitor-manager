@@ -280,6 +280,21 @@ CREATE TABLE IF NOT EXISTS visit_comments (
 );
 CREATE INDEX IF NOT EXISTS visit_comments_visit ON visit_comments(visit_id);
 
+-- What was changed on a visit's entry after it was recorded (times apart, which are in
+-- visit_time_changes): field is site, company, contact, purpose, comment (one removed) or badge (one
+-- entered later); what it was, what it became, why, who changed it and when.
+CREATE TABLE IF NOT EXISTS visit_changes (
+  id INTEGER PRIMARY KEY,
+  visit_id INTEGER NOT NULL REFERENCES visits(id) ON DELETE CASCADE,
+  field TEXT NOT NULL,
+  from_text TEXT,
+  to_text TEXT,
+  reason TEXT,
+  changed_by TEXT,
+  changed_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS visit_changes_visit ON visit_changes(visit_id);
+
 CREATE TABLE IF NOT EXISTS api_clients (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -872,6 +887,9 @@ const ADDED_COLUMNS = [
   // A badge's expiry date (YYYY-MM-DD, optional): good through that day, then it can't be given out.
   ["badges", "expires_on", "TEXT"],
   ["event_guests", "badge_id", "INTEGER REFERENCES badges(id) ON DELETE SET NULL"],
+  // An expected guest who needs no badge (escorted, say), and who said so.
+  ["event_guests", "no_badge", "INTEGER NOT NULL DEFAULT 0"],
+  ["event_guests", "no_badge_by", "TEXT"],
   // How many desks an office has: each gives its company a tenant badge without charge.
   ["offices", "desks", "INTEGER"],
   // When a lease's term commences, when not its start (null: the same); its yearly increases count from it.

@@ -104,4 +104,17 @@ for (const file of scripts(path.join(PUBLIC, "js"))) {
 check("scan: top-level names are found", seen.has("formDialog") && seen.has("eventContactPicker"));
 check("no two page scripts declare the same top-level name", clashes.length === 0, clashes.join(", "));
 
+// --- nothing of an SSN on paper ------------------------------------------------------------------
+const styles = fs.readFileSync(path.join(PUBLIC, "styles.css"), "utf8");
+const printRules = styles.slice(styles.indexOf("@media print {"));
+const printBlock = printRules.slice(0, printRules.search(/\r?\n}/));
+check("print: SSN digits are hidden on paper, with windows and whatever is marked no-print", printBlock.includes(".masked-digits, .digits-out { display: none !important; }")
+  && /[ ,]dialog[, ]/.test(printBlock) && /\.no-print[, ]/.test(printBlock), printBlock.slice(0, 300));
+const clearancePage = fs.readFileSync(path.join(PUBLIC, "js", "17-clearance.js"), "utf8");
+check("print: the validation list leaves its SSN column and buttons off", clearancePage.includes('["SSN last four", "no-print"], ["", "no-print"]') && clearancePage.includes("class: `small-text no-print${q.hadDigits")
+  && fs.readFileSync(path.join(PUBLIC, "index.html"), "utf8").includes('id="clearance-print"'));
+// Wherever the page takes the digits (a box of four) or shows them, the element is of a class print hides.
+const digitLines = clearancePage.split(/\r?\n/).filter((line) => line.includes('maxlength: "4"') || line.includes('digitsHeld ? "••••"'));
+check("print: wherever the page takes or shows the digits is hidden on paper", digitLines.length >= 2 && digitLines.every((line) => /class: "[^"]*(masked-digits|digits-out)/.test(line)), digitLines.map((l) => l.trim().slice(0, 90)).join(" / "));
+
 process.exit(report() ? 0 : 1);

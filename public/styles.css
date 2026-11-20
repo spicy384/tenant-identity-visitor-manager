@@ -184,6 +184,9 @@ button.visit-comment:hover { background: var(--primary-soft); }
 .visit-comment-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
 .comment-list li { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .comment-list li p { margin: 0 0 4px; overflow-wrap: anywhere; }
+/* A visit's changes, at the foot of its window: before and after may be long. */
+.visit-history td { vertical-align: top; overflow-wrap: anywhere; }
+.visit-history td:nth-child(2), .visit-history td:nth-child(3) { min-width: 8rem; }
 .badge-return-ask { font-size: 1.05rem; }
 .badge.bad { background: var(--danger-soft); color: var(--danger); }
 .badge.muted { background: var(--surface-3); color: var(--text-muted); }
@@ -423,8 +426,18 @@ dialog::backdrop { background: rgba(15, 23, 42, 0.5); }
 .detail h4 { margin: 18px 0 6px; }
 .print-only { display: none; }
 @media print {
-  .app-header, .app-footer, .no-print, .pager, dialog, .toast { display: none !important; }
+  .chrome, .app-header, .app-footer, .badge-alerts, .update-bar, .no-print, .pager, dialog, .toast { display: none !important; }
+  /* SSN digits are only ever on screen in the validation window; never on paper, whatever is open. */
+  .masked-digits, .digits-out { display: none !important; }
   .print-only { display: block; }
+  /* Paper is light, whatever appearance or theme is on screen: dark surfaces and pale text would not read. */
+  :root {
+    color-scheme: light;
+    --bg: #fff !important; --surface: #fff !important; --surface-2: #fff !important; --surface-3: #f1f5f9 !important;
+    --border: #999 !important; --border-strong: #666 !important; --text: #000 !important; --text-muted: #444 !important;
+    --primary: #1d4ed8 !important; --primary-soft: #fff !important; --secondary-bg: #fff !important; --secondary-text: #000 !important;
+    --danger: #b91c1c !important; --danger-soft: #fff !important; --success: #047857 !important; --success-soft: #fff !important; --warn: #92400e !important; --warn-soft: #fff !important;
+  }
   body, main { background: #fff; color: #000; }
   .view[hidden] { display: none !important; }
   .table-wrap { overflow: visible; border: none; box-shadow: none; }
@@ -523,7 +536,8 @@ a.brand:hover { text-decoration: none; }
 /* Home */
 .page-title { margin: 0 0 6px; font-size: 1.3rem; }
 .dashboard-head { align-items: flex-end; }
-.home-search { position: relative; z-index: 20; margin-bottom: 14px; }
+/* Over the cards below it (its results hang over them), under the header and its menus. */
+.home-search { position: relative; z-index: 10; margin-bottom: 14px; }
 .home-search input { width: 100%; }
 .home-search-results { position: absolute; top: 100%; left: 0; right: 0; margin-top: 4px; padding: 6px; max-height: 60vh; overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); }
 .home-search-group { padding: 8px 6px 4px; }
@@ -982,9 +996,9 @@ dialog.dialog.is-closing::backdrop { opacity: 0; }
 /* --- the site menu grows out of its button, and fades back into it --- */
 .site-menu {
   transform-origin: top right;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  -webkit-backdrop-filter: var(--material-blur);
-  backdrop-filter: var(--material-blur);
+  /* Solid: inside the header (itself a blurred layer) a blur of its own can not reach the page,
+     so a translucent menu would show the page through it, sharp. */
+  background: var(--surface);
   border-radius: var(--radius);
   transition: opacity 160ms var(--ease-out), transform var(--spring-time) var(--spring);
 }

@@ -210,8 +210,21 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
   router.get("/api/visits/:id", readVisitors, (req, res) => {
     const visit = visitors.getVisit(positiveInt(req.params.id), { sites: req.ctx.sites });
     if (!visit) throw fail(404, "No such visit.");
-    res.json({ visit: visitsOut(req.ctx, [visit])[0], timeChanges: visitors.timeChanges(visit.id) });
+    res.json({ visit: visitsOut(req.ctx, [visit])[0], timeChanges: visitors.timeChanges(visit.id), history: visitors.visitHistory(visit.id) });
   });
+
+  /**
+   * Corrected times go in the audit log, in the site's own time as the desk there sees it.
+   * Returns the badges a visit checked out by the correction still has, for staff who take
+   * badges back to say of each.
+   */
+  function timesCorrected(req, { visit, changes, reason, timeZone }) {
+    const fmt = (ms) => (ms ? new Intl.DateTimeFormat("en-US", { timeZone: timeZone || undefined, dateStyle: "medium", timeStyle: "short" }).format(ms) : "not checked out");
+    const what = changes.map((c) => `${c.field === "in" ? "arrived" : "left"} ${fmt(c.from)} -> ${fmt(c.to)}`).join("; ");
+    auditFrom(req, "visit.times_corrected", `${visit.visitor.firstName} ${visit.visitor.lastName}`, `${visit.siteName}, visit ${visit.id}: ${what}. Reason: ${reason}`);
+    const closed = changes.some((c) => c.field === "out" && c.from === null);
+    return closed && badges && access.canEditBadges(req.ctx) ? badges.outForVisit(visit).map((b) => ({ id: b.id, label: b.label })) : [];
+  }
 
   /**
    * Corrects when a visitor arrived or left: { checkedInAt, checkedOutAt (timestamps), reason }.
@@ -219,15 +232,28 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
    */
   router.put("/api/visits/:id/times", correctVisits, (req, res) => {
     const body = req.body || {};
-    const { visit, changes, reason, timeZone } = visitors.correctTimes(positiveInt(req.params.id), { checkedInAt: body.checkedInAt, checkedOutAt: body.checkedOutAt, reason: body.reason, by: staffName(req), sites: req.ctx.sites });
-    // In the site's own time, as the desk there sees it.
-    const fmt = (ms) => (ms ? new Intl.DateTimeFormat("en-US", { timeZone: timeZone || undefined, dateStyle: "medium", timeStyle: "short" }).format(ms) : "not checked out");
-    const what = changes.map((c) => `${c.field === "in" ? "arrived" : "left"} ${fmt(c.from)} -> ${fmt(c.to)}`).join("; ");
-    auditFrom(req, "visit.times_corrected", `${visit.visitor.firstName} ${visit.visitor.lastName}`, `${visit.siteName}, visit ${visit.id}: ${what}. Reason: ${reason}`);
-    // Checked out by the correction: the badges they still have, for staff who take badges back to say of each.
-    const closed = changes.some((c) => c.field === "out" && c.from === null);
-    const badgesOut = closed && badges && access.canEditBadges(req.ctx) ? badges.outForVisit(visit).map((b) => ({ id: b.id, label: b.label })) : [];
-    res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0], timeChanges: visitors.timeChanges(visit.id), badgesOut });
+    const result = visitors.correctTimes(positiveInt(req.params.id), { checkedInAt: body.checkedInAt, checkedOutAt: body.checkedOutAt, reason: body.reason, by: staffName(req), sites: req.ctx.sites });
+    const badgesOut = timesCorrected(req, result);
+    res.json({ ok: true, visit: visitsOut(req.ctx, [result.visit])[0], timeChanges: visitors.timeChanges(result.visit.id), badgesOut });
+  });
+
+  /**
+   * Corrects a visit's entry in the log: { siteId (the site it was at), hostIds (its points of
+   * contact, whose company comes with them), purpose, checkedInAt, checkedOutAt (timestamps),
+   * reason (needed when a time changes) }. Only what is given and differs is changed. Each change is kept with the visit
+   * (what it was, what it became, who changed it, when and why) and in the audit log.
+   */
+  router.put("/api/visits/:id", correctVisits, (req, res) => {
+    const body = req.body || {};
+    const { visit, changes, times, reason } = visitors.editVisit(positiveInt(req.params.id), { siteId: body.siteId === undefined ? undefined : positiveInt(body.siteId) ?? 0, hostIds: body.hostIds, companyId: positiveInt(body.companyId) ?? undefined, purpose: body.purpose,
+      checkedInAt: body.checkedInAt, checkedOutAt: body.checkedOutAt, reason: body.reason, by: staffName(req), sites: req.ctx.sites });
+    const badgesOut = times ? timesCorrected(req, { ...times, visit }) : [];
+    if (changes.length) {
+      const said = (v) => (v === null ? "nothing" : `"${String(v).slice(0, 200)}"`);
+      const words = { site: "site", company: "visiting", contact: "point of contact", purpose: "purpose" };
+      auditFrom(req, "visit.edited", fullName(visit.visitor), `${visit.siteName}, visit ${visit.id}: ${changes.map((c) => `${words[c.field]} ${said(c.from)} -> ${said(c.to)}`).join("; ")}${reason ? `. Reason: ${reason}` : ""}`);
+    }
+    res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0], history: visitors.visitHistory(visit.id), badgesOut });
   });
 
   // --- comments on a visit ----------------------------------------------------------------------
@@ -241,7 +267,7 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
 
   /** Takes a comment off a visit (administrators); what it said stays in the audit log. */
   router.delete("/api/visits/:id/comments/:commentId", admin, (req, res) => {
-    const { visit, comment } = visitors.removeComment(positiveInt(req.params.id), positiveInt(req.params.commentId), { sites: req.ctx.sites });
+    const { visit, comment } = visitors.removeComment(positiveInt(req.params.id), positiveInt(req.params.commentId), { sites: req.ctx.sites, by: staffName(req) });
     auditFrom(req, "visit.comment_removed", fullName(visit.visitor), `${visit.siteName}, visit ${visit.id}: ${comment.by || "staff"} wrote: ${comment.body.slice(0, 300)}`);
     res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0] });
   });
@@ -297,7 +323,8 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
    * the sites they're assigned to, for the desk's warning when the visit is at another.
    */
   const contactOut = (req, record, list) => ({ ...access.project(req.ctx, "person", record, list), assignedSiteIds: visitors.sitesOfContact(record) });
-  const findContacts = (req, res, next) => (access.canEditVisitors(req.ctx) && access.canReadDirectory(req.ctx) ? next() : res.status(403).json({ error: "This account can't choose a point of contact." }));
+  // Those who check visitors in, and those who correct a visit's entry (Security, which otherwise only reads visitors).
+  const findContacts = (req, res, next) => (access.canCorrectVisits(req.ctx) && access.canReadDirectory(req.ctx) ? next() : res.status(403).json({ error: "This account can't choose a point of contact." }));
 
   router.get("/api/contacts", findContacts, (req, res) => {
     const q = String(str(req.query.q) || "").trim();
@@ -326,6 +353,9 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
     return { hostIds, companyId };
   }
 
+  /** For the audit log: an expected guest whose check-in finished without a badge, as marked ahead of time. */
+  const noBadgeNote = (visit) => (visit.checkinStage === "done" && visit.badgeWaivedAt ? `; no badge necessary, as marked for the expected guest${visit.badgeWaivedBy ? ` by ${visit.badgeWaivedBy}` : ""}` : "");
+
   /**
    * The desk checks in someone standing there, their ID already checked: { visitorId, siteId,
    * hostIds (their points of contact; or hostId, one), companyId (else the first contact's company), purpose, idType, idOther (what an Other
@@ -346,7 +376,7 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
     const idOther = cleanIdOther(body.idType, body.idOther);
     const { hostIds, companyId } = contactFrom(body);
     const { visit, already } = visitors.checkIn({ visitorId: visitor.id, siteId, companyId, hostIds, purpose: body.purpose, idType: body.idType, idOther, by: staffName(req) });
-    if (!already) auditFrom(req, "visit.checkin", fullName(visitor), `${visit.siteName}: ${visit.companyName}, contact ${visit.hostName}; ID checked (${idText(body.idType, idOther)})${visitor.blocked ? "; blocked, let in anyway" : ""}`);
+    if (!already) auditFrom(req, "visit.checkin", fullName(visitor), `${visit.siteName}: ${visit.companyName}, contact ${visit.hostName}; ID checked (${idText(body.idType, idOther)})${visitor.blocked ? "; blocked, let in anyway" : ""}${noBadgeNote(visit)}`);
     res.json({ ok: true, already, visit: visitsOut(req.ctx, [visit])[0] });
   });
 
@@ -370,7 +400,7 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
     if (!String(purpose || "").trim()) throw fail(400, "Say what the visit is for.");
     if (String(contact.hostIds) !== String(before.hostIds) || contact.companyId !== before.companyId || purpose !== before.purpose) visitors.updateVisit(before.id, { ...contact, purpose });
     const visit = visitors.verifyId(before.id, { idType: body.idType, idOther, by: staffName(req) });
-    auditFrom(req, "visit.id_checked", fullName(visitor), `${visit.siteName}: ${idText(body.idType, idOther)}${before.checkinStage === "badge" ? `; checked again (was ${idText(before.idType, before.idOther)})` : ""}`);
+    auditFrom(req, "visit.id_checked", fullName(visitor), `${visit.siteName}: ${idText(body.idType, idOther)}${before.checkinStage === "badge" ? `; checked again (was ${idText(before.idType, before.idOther)})` : ""}${noBadgeNote(visit)}`);
     res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0] });
   });
 

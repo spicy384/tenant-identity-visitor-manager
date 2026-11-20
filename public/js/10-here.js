@@ -122,7 +122,7 @@ async function loadHere() {
     h("td", { text: v.hostName || "" }),
     allSites ? h("td", { text: v.siteName }) : null,
     h("td", { class: "nowrap" }, new Date(v.checkedInAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), h("span", { class: "muted small-text no-print", text: ` · ${sinceText(v.checkedInAt)}` })),
-    h("td", { class: "no-print" }, h("div", { class: "btn-row" }, canCorrectVisits() ? h("button", { type: "button", class: "link-btn small-text nowrap", text: "Correct time", onclick: async () => { if (await correctVisitTimes(v)) loadHere(); } }) : null, canEditVisitors() ? h("button", { type: "button", class: "secondary small", text: "Check out", onclick: async (e) => {
+    h("td", { class: "no-print" }, h("div", { class: "btn-row" }, canCorrectVisits() ? h("button", { type: "button", class: "link-btn small-text nowrap", text: "Edit entry", onclick: async () => { if (await openVisitEntry(v)) loadHere(); } }) : null, canEditVisitors() ? h("button", { type: "button", class: "secondary small", text: "Check out", onclick: async (e) => {
       e.target.disabled = true;
       try {
         if (await checkOutVisit(v)) loadHere();
