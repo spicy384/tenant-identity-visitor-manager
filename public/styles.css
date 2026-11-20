@@ -185,7 +185,9 @@ button.visit-comment:hover { background: var(--primary-soft); }
 .comment-list li { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .comment-list li p { margin: 0 0 4px; overflow-wrap: anywhere; }
 /* A visit's changes, at the foot of its window: before and after may be long. */
-.visit-history td { vertical-align: top; overflow-wrap: anywhere; }
+.visit-history td { vertical-align: top; }
+.visit-history td:nth-child(-n+3) { overflow-wrap: anywhere; }
+.visit-history td:nth-child(4) { white-space: nowrap; }
 .visit-history td:nth-child(2), .visit-history td:nth-child(3) { min-width: 8rem; }
 .badge-return-ask { font-size: 1.05rem; }
 .badge.bad { background: var(--danger-soft); color: var(--danger); }

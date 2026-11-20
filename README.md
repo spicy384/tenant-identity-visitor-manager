@@ -274,7 +274,7 @@ The design and decisions are in [PLAN.md](PLAN.md).
 - **Visit log**: every visit with filters and a CSV export (administrators), with who on the
   staff checked each visitor in and out (or the kiosk they used, and who checked their ID), and
   the visitor badge each visitor had (for those who see badges; a badge given from a visitor's page goes
-  with the visit they're on). **Add badge** enters one that wasn't recorded at the time: for a
+  with the visit they're on). **Add badge** enters one that wasn't recorded at the time, with the reason: for a
   visit that has ended it is recorded as theirs from arrival to departure, shown as "entered
   later" and in the badge's history and the audit log, and refused if the badge was with
   someone else then; for someone still here it is given to them now. Staff who check visitors
@@ -293,12 +293,17 @@ The design and decisions are in [PLAN.md](PLAN.md).
   (the front desk, managers, administrators), and Security (which otherwise only reads
   visitors), correct it there: the site it was at (with more than one site; an open one the
   account sees), who was visited (choose the points of contact, and their company comes with
-  them), the purpose, and when they arrived and left. Everyone else who sees visits opens it
+  them), when they arrived and left, the ID they showed (once it has been checked), the badge
+  number, and the purpose. Each has a box of its own in the window. The **badge number** is
+  for those who also give badges out: with none on record, a number records the badge they
+  had (or gives it to them now, if they are still here); with one on record, changing it
+  corrects a number recorded wrong, and the visit then had the other badge all along, for the
+  same time. A badge that was with someone else then is refused. Everyone else who sees visits opens it
   to read. A visit moved to another site is noted against the events its visitor was expected
   at there that day, and no longer against the old site's; someone still in the building
-  can't be moved to a site where another visit of theirs is open. A changed time needs a reason; for the rest it is optional. Each change is in the
+  can't be moved to a site where another visit of theirs is open. Every change needs a reason (comments are the exception: they are added without one). Each change is in the
   audit log too. A comment an administrator removed, and a badge entered after the fact, are
-  listed among the changes as well. The visitor and the ID shown can't be changed.
+  listed among the changes as well. The visitor can't be changed.
 - **Correcting arrival and departure times**: when a visitor didn't check in or out as they
   should have, the visit's window changes
   when they arrived and left. A reason is required. Each

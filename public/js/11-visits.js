@@ -1,7 +1,7 @@
 // 11-visits.js: the visit log, with filters and CSV export, and the visits table the
 // visitor dialog shares. Each entry opens in its own window. Staff who check visitors in
-// (and Security) can correct it there: the site, who was visited, what for, and when they
-// arrived or left (giving the reason). Every change is kept with the visit, what it was before and
+// (and Security) can correct it there: the site, who was visited, what for, the ID shown, the
+// badge number, and when they arrived or left. Every change needs its reason. Every change is kept with the visit, what it was before and
 // after, who made it and when, and listed at the foot of the window; it is in the audit log
 // too. They can also note comments against a visit, each kept with who wrote it and when.
 
@@ -127,7 +127,7 @@ function changedMark(v, open) {
 
 /** The same mark beside who they visited, when that or the purpose was changed since. */
 function detailsChangedMark(v, open) {
-  const title = `The site, who they visited or what for was changed ${v.detailsChanged === 1 ? "once" : `${v.detailsChanged} times`} since this was recorded. Open the entry to see what it was.`;
+  const title = `This entry (its site, who they visited, what for, the ID shown or the badge) was corrected ${v.detailsChanged === 1 ? "once" : `${v.detailsChanged} times`} since it was recorded. Open it to see what it was.`;
   return h("button", { type: "button", class: "badge warn time-changed-mark", title, "aria-label": title, text: "Changed", onclick: () => open(v) });
 }
 
@@ -146,11 +146,12 @@ async function recordVisitBadge(v) {
       : `${name} is still here: the badge is given to them now, as at check-in.` }),
     fields: [
       { name: "number", label: "Badge number", required: true, half: true, autofocus: true, placeholder: "e.g. V-012 or 101-40001" },
-      { name: "facilityCode", label: "Facility code (optional)", half: true, placeholder: "2-3 digits", hint: "Only if the same number is under more than one code." }
+      { name: "facilityCode", label: "Facility code (optional)", half: true, placeholder: "2-3 digits", hint: "Only if the same number is under more than one code." },
+      { name: "reason", label: "Reason", type: "textarea", rows: 2, required: true, placeholder: "Not entered at check-in; taken from the desk's paper log.", hint: "Kept with the visit's entry and in the audit log." }
     ],
     submitLabel: ended ? "Record the badge" : "Give the badge",
     onSubmit: async (values) => {
-      const r = await api(`/api/visits/${v.id}/badge-record`, { method: "POST", body: { number: values.number, facilityCode: values.facilityCode || null } });
+      const r = await api(`/api/visits/${v.id}/badge-record`, { method: "POST", body: { number: values.number, facilityCode: values.facilityCode || null, reason: values.reason } });
       toast(r.recorded ? `Badge ${r.badge.label} recorded for the visit.` : `Badge ${r.badge.label} given to ${name}.`);
       return true;
     }
@@ -167,7 +168,7 @@ function localInputValue(ms) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-const VISIT_CHANGE_FIELDS = { in: "Arrived", out: "Left", site: "Site", company: "Visiting", contact: "Point of contact", purpose: "Purpose", comment: "Comment removed", badge: "Badge entered" };
+const VISIT_CHANGE_FIELDS = { in: "Arrived", out: "Left", site: "Site", company: "Visiting", contact: "Point of contact", purpose: "Purpose", id: "ID shown", comment: "Comment removed", badge: "Badge" };
 
 /**
  * Every change made to a visit's entry since it was recorded, newest first: what was changed
@@ -189,10 +190,11 @@ function visitHistoryTable(history) {
 
 /**
  * A visit's entry in its own window: what is on record, and at its foot every change made to
- * it since (before and after, who and when). Those who correct visits change it here: the
- * site (with more than one to choose from), who was visited (the points of contact, whose
- * company comes with them), what for, and when they arrived and left, which needs the reason.
- * Resolves true when the entry was changed.
+ * it since (before and after, who and when). Those who correct visits change it here, each
+ * thing in its own box: the site (with more than one to choose from), who was visited (the
+ * points of contact, whose company comes with them), when they arrived and left (which needs
+ * the reason), the ID they showed, the badge number (for those who give badges out) and what
+ * the visit was for. Resolves true when the entry was changed.
  */
 async function openVisitEntry(row) {
   let v;
@@ -212,20 +214,29 @@ async function openVisitEntry(row) {
   // The sites it could have been at: the open ones they see, and the one on record even if it has closed.
   const siteChoices = [...activeSites().map((s) => ({ value: String(s.id), label: s.name })), ...(activeSites().some((s) => s.id === v.siteId) ? [] : [{ value: String(v.siteId), label: v.siteName }])];
   const pickSite = correcting && siteChoices.length > 1;
+  // The ID they showed: corrected once it has been checked (before that, checking it is the desk's next step).
+  const idKinds = state.config.checkin?.idTypes || [];
+  const otherId = state.config.checkin?.otherId;
+  const pickId = correcting && idKinds.length > 0 && v.checkinStage !== "id";
+  // The badge: a number to enter or correct, for those who give badges out, when the visit has at most one.
+  const badges = v.badges || [];
+  const onRecord = badges[0] || "";
+  const pickBadge = correcting && canGiveBadges() && badges.length < 2;
   const fact = (label, value) => (value ? [h("dt", { text: label }), h("dd", {}, value)] : null);
-  const badge = (v.badges || []).length ? `${v.badges.join(", ")}${v.badgeRecordedLater ? " (entered later)" : ""}`
+  const idShown = v.idType ? `${v.idType}${v.idOther ? ` (${v.idOther})` : ""}${v.idVerifiedBy ? `, checked by ${v.idVerifiedBy}` : ""}` : null;
+  const badgeText = badges.length ? `${badges.join(", ")}${v.badgeRecordedLater ? " (entered later)" : ""}`
     : v.badgeWaivedAt ? `Not needed${v.badgeWaivedBy ? ` (said ${v.badgeWaivedBy})` : ""}` : canReadBadges() ? "None" : null;
+  // What has a box of its own below isn't repeated here.
   const facts = h("dl", { class: "facts" },
     fact("Visitor", `${name}${v.visitor.organization ? ` (${v.visitor.organization})` : ""}`),
     multiSite() && !pickSite ? fact("Site", v.siteName) : null,
-    fact("Arrived", [fmtDateTime(v.checkedInAt), arrivedHow(v)].filter(Boolean).join(", ")),
-    fact("Left", v.checkedOutAt ? [fmtDateTime(v.checkedOutAt), leftHow(v)].filter(Boolean).join(", ") : "Still in the building"),
-    fact("ID shown", v.idType ? `${v.idType}${v.idOther ? ` (${v.idOther})` : ""}` : null),
-    // Who they visited and what for: boxes below for those who change them, facts for the rest.
+    correcting ? null : fact("Arrived", [fmtDateTime(v.checkedInAt), arrivedHow(v)].filter(Boolean).join(", ")),
+    correcting ? null : fact("Left", v.checkedOutAt ? [fmtDateTime(v.checkedOutAt), leftHow(v)].filter(Boolean).join(", ") : "Still in the building"),
+    pickId ? null : fact("ID shown", idShown),
     picker ? null : fact("Visiting", v.companyName),
     picker ? null : fact(v.hostIds.length > 1 ? "Points of contact" : "Point of contact", v.hostName),
     correcting ? null : fact("Purpose", v.purpose),
-    fact("Badge", badge));
+    pickBadge ? null : fact("Badge", badgeText));
   const comments = (v.comments || []).length ? h("div", { class: "stack" },
     h("h4", { text: `Comments (${v.comments.length})` }),
     h("ul", { class: "plain-list comment-list" }, v.comments.map((c) => h("li", {}, h("p", { class: "pre", text: c.body }), h("div", { class: "muted small-text", text: `${c.by || "staff"}, ${fmtDateTime(c.at)}` }))))) : "";
@@ -235,6 +246,8 @@ async function openVisitEntry(row) {
     await openDialog({ title, wide: true, body: h("div", { class: "stack" }, facts, comments, changes) });
     return false;
   }
+  // Saved in part (the entry, but not its badge) and then closed: the log is still drawn again.
+  let savedSome = false;
   const saved = await formDialog({
     title,
     wide: true,
@@ -249,12 +262,27 @@ async function openVisitEntry(row) {
         { node: h("p", { class: "muted small-text full-row", text: `On record: ${v.companyName || "no company"}${v.hostName ? `, ${v.hostName}` : ", nobody in particular"}. To change it, choose the people they visited; their company comes with them. With nobody chosen it stays as it is.` }) },
         { node: picker.node }
       ] : []),
-      { type: "heading", label: "What for, and when" },
-      { name: "purpose", label: "Purpose", value: v.purpose || "" },
-      { name: "checkedInAt", label: "Arrived", type: "datetime-local", required: true, half: true, value: localInputValue(v.checkedInAt) },
+      { type: "heading", label: "When" },
+      { name: "checkedInAt", label: "Arrived", type: "datetime-local", required: true, half: true, value: localInputValue(v.checkedInAt), hint: arrivedHow(v) ? `Checked in ${arrivedHow(v)}.` : "" },
       { name: "checkedOutAt", label: "Left", type: "datetime-local", half: true, value: localInputValue(v.checkedOutAt),
-        hint: v.checkedOutAt ? "" : "Empty while they're still here. A time checks them out then." },
-      { name: "reason", label: "Reason for the change", type: "textarea", rows: 2, placeholder: "Didn't check out at the kiosk; left at 4:30 PM per the host.", hint: "Needed when a time changes. Kept with the entry and in the audit log. Times are in this device's time." },
+        hint: v.checkedOutAt ? (leftHow(v) ? `Checked out ${leftHow(v)}.` : "") : "Empty while they're still here. A time checks them out then." },
+      ...(pickId || pickBadge ? [{ type: "heading", label: pickId && pickBadge ? "ID and badge" : pickId ? "ID" : "Badge" }] : []),
+      ...(pickId ? [
+        { name: "idType", label: "ID shown", type: "select", half: true, value: v.idType || "",
+          options: [...(v.idType ? [] : [{ value: "", label: "Not recorded" }]), ...[...new Set([...idKinds, ...(v.idType ? [v.idType] : [])])].map((t) => ({ value: t, label: t }))],
+          hint: v.idVerifiedBy ? `Checked by ${v.idVerifiedBy}.` : "",
+          // What the other ID was is asked only for an Other government ID.
+          onChange: (input, inputs) => { inputs.idOther.closest("label").hidden = input.value !== otherId; } },
+        { name: "idOther", label: "What ID was it?", half: true, value: v.idOther || "", placeholder: "A military ID, a tribal ID…" }
+      ] : []),
+      ...(pickBadge ? [
+        { name: "badge", label: "Badge number", half: true, value: onRecord, placeholder: "e.g. V-012 or 101-40001",
+          hint: onRecord ? "Change it when the wrong number was recorded: the visit then had this badge all along."
+            : `${v.badgeWaivedAt ? `No badge was needed${v.badgeWaivedBy ? ` (said ${v.badgeWaivedBy})` : ""}. ` : "None on record. "}${v.checkedOutAt ? "A number records the badge they had, for the time of the visit." : "A number gives them that badge now."}` }
+      ] : []),
+      { type: "heading", label: "What for" },
+      { name: "purpose", label: "Purpose", value: v.purpose || "" },
+      { name: "reason", label: "Reason for the change", type: "textarea", rows: 2, placeholder: "Didn't check out at the kiosk; left at 4:30 PM per the host.", hint: "Needed for any change. Kept with the entry and in the audit log. Times are in this device's time." },
       { node: changes }
     ],
     submitLabel: "Save changes",
@@ -271,14 +299,38 @@ async function openVisitEntry(row) {
       const chosen = picker ? picker.value() : null;
       if (chosen && chosen.hostIds.length && String(chosen.hostIds) !== String(v.hostIds)) Object.assign(body, { hostIds: chosen.hostIds, companyId: chosen.companyId });
       if (values.purpose.trim().replace(/\s+/g, " ") !== (v.purpose || "")) body.purpose = values.purpose;
+      if (pickId && values.idType) {
+        const other = values.idType === otherId ? values.idOther.trim().replace(/\s+/g, " ") : "";
+        if (values.idType === otherId && !other) throw new Error("Say what the other government ID was.");
+        if (values.idType !== v.idType || other !== (v.idOther || "")) Object.assign(body, { idType: values.idType, idOther: other || null });
+      }
       if (!same(values.checkedInAt, v.checkedInAt)) body.checkedInAt = at(values.checkedInAt, "Arrived");
       if (values.checkedOutAt && !same(values.checkedOutAt, v.checkedOutAt)) body.checkedOutAt = at(values.checkedOutAt, "Left");
       if (!values.checkedOutAt && v.checkedOutAt) body.checkedOutAt = null;
-      if (!Object.keys(body).length) throw new Error("Nothing was changed.");
-      return api(`/api/visits/${v.id}`, { method: "PUT", body: { ...body, reason: values.reason } });
+      const typed = pickBadge ? values.badge.trim().replace(/\s+/g, " ") : "";
+      const badgeChanged = pickBadge && typed.toLowerCase() !== onRecord.toLowerCase();
+      if (badgeChanged && !typed) throw new Error("Enter the badge number, or leave it as it was. A badge is taken back at check-out, or from the Badges page.");
+      if (!Object.keys(body).length && !badgeChanged) throw new Error("Nothing was changed.");
+      // Whatever is changed, the entry says why: asked for before anything is saved.
+      if (values.reason.trim().length < 5) throw new Error("Give the reason for the change.");
+      let result = { badgesOut: [] };
+      if (Object.keys(body).length) {
+        result = await api(`/api/visits/${v.id}`, { method: "PUT", body: { ...body, reason: values.reason } });
+        // Saved: what is on record now, should the badge below be refused and Save pressed again.
+        v = result.visit;
+        savedSome = true;
+      }
+      if (badgeChanged) {
+        try {
+          await api(`/api/visits/${v.id}/badge-record`, { method: "POST", body: { number: typed, replace: Boolean(onRecord), reason: values.reason } });
+        } catch (error) {
+          throw new Error(savedSome ? `The other changes were saved, but not the badge: ${error.message}` : error.message);
+        }
+      }
+      return result;
     }
   });
-  if (!saved) return false;
+  if (!saved) return savedSome;
   toast("Entry saved.");
   refreshCounts();
   // A corrected time checked them out with a badge still theirs: was it returned?

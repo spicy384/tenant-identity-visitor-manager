@@ -560,6 +560,40 @@ function createBadges({ db, clearance, now = Date.now }) {
   }
 
   /**
+   * Corrects which visitor badge a visit had, when the wrong number was recorded: the visit's
+   * badge becomes `badgeId`, for the same time, as if it had been the one all along. Refused
+   * when the visit has no badge (or several), when the badge was with someone else at any time
+   * during it, and, while they still have it, when it is one they may not hold. Returns
+   * { badge, from (the label recorded before) }.
+   */
+  function correctVisitBadge(visitId, badgeId, { sites = null, levelNames = true } = {}) {
+    const badge = get(badgeId, { sites });
+    if (!badge) throw fail(404, "No such badge.");
+    if (badge.type !== "visitor") throw fail(400, `Badge ${badge.label} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`);
+    const visit = raw.prepare("SELECT id, visitor_id, checked_in_at, checked_out_at FROM visits WHERE id = ?").get(Number(visitId));
+    if (!visit) throw fail(404, "No such visit.");
+    // The visit's badges: given with it, or (before badges went with visits) given to them while they were there.
+    const rows = raw.prepare(`SELECT a.id, a.badge_id, a.assigned_at, a.returned_at FROM badge_assignments a WHERE a.holder_kind = 'visitor' AND a.holder_id = ?
+      AND (a.visit_id = ? OR (a.visit_id IS NULL AND a.assigned_at >= ? AND a.assigned_at <= ?)) ORDER BY a.assigned_at, a.id`)
+      .all(visit.visitor_id, visit.id, visit.checked_in_at, visit.checked_out_at ?? Number.MAX_SAFE_INTEGER);
+    if (!rows.length) throw fail(409, "This visit has no badge on record to correct.");
+    if (rows.length > 1) throw fail(409, "This visit has more than one badge: correct them from the Badges page.");
+    const [row] = rows;
+    const was = get(row.badge_id);
+    if (row.badge_id === badge.id) throw fail(400, `Badge ${badge.label} is the one on record already.`);
+    const clash = raw.prepare(`SELECT holder_name FROM badge_assignments WHERE badge_id = ? AND id != ? AND assigned_at < ? AND (returned_at IS NULL OR returned_at > ?)
+      ORDER BY assigned_at LIMIT 1`).get(badge.id, row.id, row.returned_at ?? Number.MAX_SAFE_INTEGER, row.assigned_at);
+    if (clash) throw fail(409, `Badge ${badge.label} was with ${clash.holder_name} then, so it can't have been this visitor's. Check the number.`);
+    // Still with them: it must be one they may hold now.
+    if (!row.returned_at) {
+      const why = refusal(badge, holder("visitor", visit.visitor_id), { levelNames });
+      if (why) throw fail(409, why);
+    }
+    raw.prepare("UPDATE badge_assignments SET badge_id = ?, visit_id = coalesce(visit_id, ?) WHERE id = ?").run(badge.id, visit.id, row.id);
+    return { badge: get(badge.id), from: was ? was.label : null };
+  }
+
+  /**
    * The badges a visitor still has as `visit` ends, oldest first: [{ id, number, label }]. Theirs
    * now, but for one given with another visit they are still on (at another site).
    */
@@ -671,7 +705,7 @@ function createBadges({ db, clearance, now = Date.now }) {
     return [...out.values()];
   }
 
-  return { list, get, history, forHolder, openForHolder, heldByPeople, outOfStep, matchHolderLevel, create, createRange, update, remove, holder, refusal, reservedForOther, isReservedFor, clearanceRefusal, availableFor, availableLater, assign, recordForVisit, takeBack, outForVisit, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
+  return { list, get, history, forHolder, openForHolder, heldByPeople, outOfStep, matchHolderLevel, create, createRange, update, remove, holder, refusal, reservedForOther, isReservedFor, clearanceRefusal, availableFor, availableLater, assign, recordForVisit, correctVisitBadge, takeBack, outForVisit, leftCount, overdueCount, waitingForBadge, waiveVisitBadge, findByNumber, findExact };
 }
 
 module.exports = { createBadges, TYPES, TYPE_LABELS, STATUSES, FACILITY_CODE_RE, badgeLabel, RECORDED_NOTE };

@@ -239,18 +239,19 @@ function createVisitorRoutes({ access, visitors, directory, kiosks, clock, admin
 
   /**
    * Corrects a visit's entry in the log: { siteId (the site it was at), hostIds (its points of
-   * contact, whose company comes with them), purpose, checkedInAt, checkedOutAt (timestamps),
-   * reason (needed when a time changes) }. Only what is given and differs is changed. Each change is kept with the visit
+   * contact, whose company comes with them), purpose, idType and idOther (the ID they showed),
+   * checkedInAt, checkedOutAt (timestamps), reason (required) }.
+   * (Its badge number is corrected with POST /api/visits/:id/badge-record.) Only what is given and differs is changed. Each change is kept with the visit
    * (what it was, what it became, who changed it, when and why) and in the audit log.
    */
   router.put("/api/visits/:id", correctVisits, (req, res) => {
     const body = req.body || {};
-    const { visit, changes, times, reason } = visitors.editVisit(positiveInt(req.params.id), { siteId: body.siteId === undefined ? undefined : positiveInt(body.siteId) ?? 0, hostIds: body.hostIds, companyId: positiveInt(body.companyId) ?? undefined, purpose: body.purpose,
+    const { visit, changes, times, reason } = visitors.editVisit(positiveInt(req.params.id), { siteId: body.siteId === undefined ? undefined : positiveInt(body.siteId) ?? 0, hostIds: body.hostIds, companyId: positiveInt(body.companyId) ?? undefined, purpose: body.purpose, idType: body.idType, idOther: body.idOther,
       checkedInAt: body.checkedInAt, checkedOutAt: body.checkedOutAt, reason: body.reason, by: staffName(req), sites: req.ctx.sites });
     const badgesOut = times ? timesCorrected(req, { ...times, visit }) : [];
     if (changes.length) {
       const said = (v) => (v === null ? "nothing" : `"${String(v).slice(0, 200)}"`);
-      const words = { site: "site", company: "visiting", contact: "point of contact", purpose: "purpose" };
+      const words = { site: "site", company: "visiting", contact: "point of contact", purpose: "purpose", id: "ID shown" };
       auditFrom(req, "visit.edited", fullName(visit.visitor), `${visit.siteName}, visit ${visit.id}: ${changes.map((c) => `${words[c.field]} ${said(c.from)} -> ${said(c.to)}`).join("; ")}${reason ? `. Reason: ${reason}` : ""}`);
     }
     res.json({ ok: true, visit: visitsOut(req.ctx, [visit])[0], history: visitors.visitHistory(visit.id), badgesOut });

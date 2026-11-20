@@ -427,7 +427,7 @@ async function main() {
   check("options: then it's not offered to another guest that day", !(await optionNames(later5, gus)).includes("OUT-1") && (await optionNames(later5, fran)).includes("OUT-1"));
   const later6 = await eventOn(dayAfter(6), "The day after");
   check("options: but it is the day after", (await optionNames(later6, await optionGuest(later6, "Hal"))).includes("OUT-1"));
-  check("badge: a visit with one can't have another entered", (await desk.post(`/api/visits/${tiaVisit.id}/badge-record`, { number: "V-3" })).status === 409);
+  check("badge: a visit with one can't have another entered", (await desk.post(`/api/visits/${tiaVisit.id}/badge-record`, { number: "V-3", reason: "Entered after the fact" })).status === 409);
   const rita = (await desk.post("/api/visitors", { firstName: "Rita", lastName: "Record", organization: "Late Co", citizenship: "US" })).data.visitor;
   const ritaVisit = (await desk.post("/api/checkins", { visitorId: rita.id, siteId: site.id, hostId: host.id, purpose: "Audit", idType: "Passport" })).data.visit;
   await desk.post(`/api/visits/${ritaVisit.id}/badge-not-needed`);
@@ -438,9 +438,9 @@ async function main() {
   check("badge: only those who give badges and check visitors in", (await viewer.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "V-REC" })).status === 403);
   check("badge: a number that isn't a badge", (await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "NOPE-1" })).status === 404);
   check("badge: only a visitor badge", (await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { badgeId: tRec.id })).status === 400);
-  r = await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "101-777" });
+  r = await desk.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "101-777", reason: "Entered after the fact" });
   check("badge: not one that was with someone else then", r.status === 409 && /was with Tim Typed then/.test(r.data.error), r.data.error);
-  r = await security.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "v-rec" });
+  r = await security.post(`/api/visits/${ritaVisit.id}/badge-record`, { number: "v-rec", reason: "Entered from the paper log" });
   check("badge: entered (by Security) for a visit that ended, held for its time and back", r.status === 200 && r.data.recorded === true && !r.data.badge.holder, JSON.stringify(r.data));
   const ritaLogged = await visitOf(rita.id);
   check("badge: the log shows it, marked entered later", ritaLogged.badges.join() === "V-REC" && ritaLogged.badgeRecordedLater === true);
@@ -453,6 +453,8 @@ async function main() {
   const olaVisit = (await desk.post("/api/checkins", { visitorId: ola.id, siteId: site.id, hostId: host.id, purpose: "Audit", idType: "Passport" })).data.visit;
   const vNow = (await security.post("/api/badges", { number: "V-NOW", type: "visitor" })).data.badge;
   r = await desk.post(`/api/visits/${olaVisit.id}/badge-record`, { number: "V-NOW" });
+  check("badge: entered only with the reason", r.status === 400 && /reason/i.test(r.data.error) && (await desk.post(`/api/visits/${olaVisit.id}/badge-record`, { number: "V-NOW", reason: " no " })).status === 400 && !(await visitOf(ola.id)).badges.length);
+  r = await desk.post(`/api/visits/${olaVisit.id}/badge-record`, { number: "V-NOW", reason: "Given at the desk, not entered" });
   check("badge: for someone still here, given now", r.status === 200 && r.data.recorded === false && r.data.badge.holder?.name === "Ola Open" && (await visitOf(ola.id)).badges.join() === "V-NOW");
   await desk.post(`/api/badges/${vNow.id}/return`);
   // A badge given from the visitor's page while they're here goes with that visit.
@@ -671,7 +673,7 @@ async function main() {
   r = await cancel(quinnVisit);
   check("cancel: not once the check-in is finished", r.status === 409 && /Check them out instead/.test(r.data.error) && (await desk.get(`/api/visits/${quinnVisit.id}`)).status === 200);
   // From the visit log, for someone still here: a badge kept for others, without a question.
-  r = await desk.post(`/api/visits/${quinnVisit.id}/badge-record`, { number: "RSV-1" });
+  r = await desk.post(`/api/visits/${quinnVisit.id}/badge-record`, { number: "RSV-1", reason: "Entered after the fact" });
   check("shared: entered from the visit log for someone else", r.status === 200 && r.data.recorded === false && r.data.badge.holder.name === "Quinn Quits");
   await leave({ badges: [{ id: rsv.id, returned: true }] });
   // Lent to a tenant who forgot theirs.
@@ -724,14 +726,18 @@ async function main() {
   const eva = (await desk.post("/api/visitors", { firstName: "Eva", lastName: "Entry", organization: "Edit Co", citizenship: "US" })).data.visitor;
   const evaVisit = (await desk.post("/api/checkins", { visitorId: eva.id, siteId: site.id, hostId: host.id, purpose: "Meeting", idType: "Passport" })).data.visit;
   await desk.post(`/api/visits/${evaVisit.id}/badge-not-needed`);
-  const entry = (id, body, c = desk) => c.put(`/api/visits/${id}`, body);
+  // With a reason, unless the check is about going without one.
+  const entry = (id, body, c = desk) => c.put(`/api/visits/${id}`, { reason: "Corrected at the desk", ...body });
   const entryNow = async (c = desk) => (await c.get(`/api/visits/${evaVisit.id}`)).data;
   check("entry: as recorded, it has no changes", (await entryNow()).history.length === 0 && (await entryNow()).visit.detailsChanged === 0 && (await entryNow()).visit.badgeWaivedAt > 0);
   check("entry: only those who correct visits", (await entry(evaVisit.id, { purpose: "Audit" }, viewer)).status === 403 && (await entry(999999, { purpose: "Audit" })).status === 404);
   check("entry: something must change", (await entry(evaVisit.id, { purpose: "Meeting", hostIds: [host.id], checkedInAt: evaVisit.checkedInAt, checkedOutAt: null })).status === 400 && (await entry(evaVisit.id, {})).status === 400);
+  r = await entry(evaVisit.id, { purpose: "Site audit", reason: "" });
+  check("entry: any change needs its reason", r.status === 400 && /reason/i.test(r.data.error) && (await entry(evaVisit.id, { purpose: "Site audit", reason: undefined })).status === 400
+    && (await entry(evaVisit.id, { hostIds: [riverRita.id], reason: "no" })).status === 400 && (await entry(evaVisit.id, { siteId: other.id, reason: " " })).status === 400 && (await entryNow()).history.length === 0);
   r = await entry(evaVisit.id, { purpose: "  Site   audit " });
   check("entry: the purpose changed, with what it was, who changed it and when", r.status === 200 && r.data.visit.purpose === "Site audit" && r.data.history.length === 1 && r.data.history[0].field === "purpose"
-    && r.data.history[0].from === "Meeting" && r.data.history[0].to === "Site audit" && r.data.history[0].by === "desk" && r.data.history[0].at > 0 && r.data.history[0].reason === null, JSON.stringify(r.data.history));
+    && r.data.history[0].from === "Meeting" && r.data.history[0].to === "Site audit" && r.data.history[0].by === "desk" && r.data.history[0].at > 0 && r.data.history[0].reason === "Corrected at the desk", JSON.stringify(r.data.history));
   check("entry: a point of contact is someone in the directory, at the company", (await entry(evaVisit.id, { hostIds: [999999] })).status === 400 && (await entry(evaVisit.id, { hostIds: ["x"] })).status === 400
     && (await entry(evaVisit.id, { hostIds: [riverRita.id], companyId: acme.id })).status === 400 && (await entry(evaVisit.id, { hostIds: [] })).status === 400 && (await entryNow()).visit.hostName === "Hana Host");
   r = await entry(evaVisit.id, { hostIds: [riverRita.id], reason: "They came for River Partners" });
@@ -740,7 +746,7 @@ async function main() {
     && r.data.visit.hostIds.join() === String(riverRita.id) && r.data.history.length === 3 && fieldOf(r.data.history, "company").from === "Acme Corp" && fieldOf(r.data.history, "company").to === "River Partners"
     && fieldOf(r.data.history, "contact").from === "Hana Host" && fieldOf(r.data.history, "contact").to === "Rita Riverton" && fieldOf(r.data.history, "contact").reason === "They came for River Partners"
     && r.data.history[2].field === "purpose" && r.data.visit.detailsChanged === 3, JSON.stringify(r.data.history));
-  r = await entry(evaVisit.id, { purpose: "Changed again", checkedInAt: evaVisit.checkedInAt - HOUR });
+  r = await entry(evaVisit.id, { purpose: "Changed again", checkedInAt: evaVisit.checkedInAt - HOUR, reason: "" });
   check("entry: a time needs its reason, and without it nothing at all is changed", r.status === 400 && /reason/i.test(r.data.error) && (await entryNow()).visit.purpose === "Site audit" && (await entryNow()).history.length === 3, JSON.stringify(r.data));
   r = await entry(evaVisit.id, { purpose: "Changed again", checkedInAt: evaVisit.checkedInAt - HOUR, checkedOutAt: evaVisit.checkedInAt - HOUR / 2, reason: "Arrived earlier; left after half an hour" });
   check("entry: times and details corrected in one go", r.status === 200 && r.data.visit.checkedInAt === evaVisit.checkedInAt - HOUR && r.data.visit.checkedOutAt === evaVisit.checkedInAt - HOUR / 2 && r.data.visit.purpose === "Changed again"
@@ -758,7 +764,7 @@ async function main() {
   await admin.del(`/api/visits/${evaVisit.id}/comments/${evaNote.id}`);
   r = await entryNow();
   check("entry: a comment taken off stays among its changes", r.history[0].field === "comment" && r.history[0].from === "desk: Wrong desk" && r.history[0].to === null && r.history[0].by === "admin" && r.visit.detailsChanged === 5, JSON.stringify(r.history[0]));
-  check("entry: so does a badge entered later", (await desk.get(`/api/visits/${ritaVisit.id}`)).data.history.some((c) => c.field === "badge" && c.from === null && c.to === "V-REC" && c.reason === "Recorded after the visit" && c.by === "sec"));
+  check("entry: so does a badge entered later", (await desk.get(`/api/visits/${ritaVisit.id}`)).data.history.some((c) => c.field === "badge" && c.from === null && c.to === "V-REC" && c.reason === "Entered from the paper log" && c.by === "sec"));
 
   // Who corrects an entry: those who check visitors in (the front desk, managers) and Security, who also choose its points of contact.
   await admin.post("/api/users", { username: "mgr", password: pw.desk, role: "manager" });
@@ -794,6 +800,49 @@ async function main() {
     && (await wesAtEvent()).status === "here" && (await wesAtEvent()).visitId === wesVisit.id && r.data.history.map((c) => c.field).sort().join() === "company,contact,site", JSON.stringify(r.data.history));
   r = await entry(wesVisit.id, { siteId: site.id });
   check("entry: moved away again, the event expects them once more", r.status === 200 && (await wesAtEvent()).status === "expected" && (await wesAtEvent()).visitId === null);
+
+  // The ID they showed.
+  check("entry: the ID shown is one of the kinds the desk checks; another government ID is named", (await entry(evaVisit.id, { idType: "Library card" })).status === 400 && (await entry(evaVisit.id, { idType: "Other government ID" })).status === 400
+    && (await entry(evaVisit.id, { idType: "Passport" })).status === 400 && (await entryNow()).visit.idType === "Passport");
+  r = await entry(evaVisit.id, { idType: "Driver's license", reason: "It was their license" });
+  check("entry: the ID shown changed, with what it was", r.status === 200 && r.data.visit.idType === "Driver's license" && r.data.history[0].field === "id" && r.data.history[0].from === "Passport" && r.data.history[0].to === "Driver's license"
+    && r.data.history[0].reason === "It was their license" && r.data.visit.idVerifiedBy === evaVisit.idVerifiedBy, JSON.stringify(r.data.history[0]));
+  r = await entry(evaVisit.id, { idType: "CAC", reason: "" });
+  check("entry: the ID shown is changed only with the reason", r.status === 400 && /reason/i.test(r.data.error) && (await entry(evaVisit.id, { idType: "CAC", reason: "No" })).status === 400 && (await entryNow()).visit.idType === "Driver's license");
+  r = await entry(evaVisit.id, { idType: "Other government ID", idOther: "  Tribal   ID ", reason: "It was a tribal ID" });
+  check("entry: another government ID, saying which", r.status === 200 && r.data.visit.idType === "Other government ID" && r.data.visit.idOther === "Tribal ID" && r.data.history[0].to === "Other government ID: Tribal ID"
+    && (await admin.get("/api/audit?action=visit.edited")).data.entries.some((e) => e.target === "Eva Entry" && e.detail.includes(`ID shown "Passport" -> "Driver's license". Reason: It was their license`)));
+  const ivy = (await desk.post("/api/visitors", { firstName: "Ivy", lastName: "Unchecked", organization: "Wait Co", citizenship: "US" })).data.visitor;
+  const ivyVisit = (await desk.post("/api/visits", { visitorId: ivy.id, siteId: site.id, companyId: acme.id, hostId: host.id, purpose: "Meeting" })).data.visit;
+  check("entry: an ID that hasn't been checked yet is checked, not corrected", ivyVisit.checkinStage === "id" && (await entry(ivyVisit.id, { idType: "Passport" })).status === 409 && (await entry(ivyVisit.id, { purpose: "Lunch" })).status === 200);
+  await desk.post(`/api/visits/${ivyVisit.id}/cancel-checkin`, {});
+  // The badge number.
+  const fixA = (await security.post("/api/badges", { number: "V-FIXA", type: "visitor" })).data.badge;
+  const fixB = (await security.post("/api/badges", { number: "V-FIXB", type: "visitor" })).data.badge;
+  const fixC = (await security.post("/api/badges", { number: "V-FIXC", type: "visitor" })).data.badge;
+  const correctBadge = (visitId, body, c = desk) => c.post(`/api/visits/${visitId}/badge-record`, { replace: true, reason: "The wrong number was recorded", ...body });
+  r = await correctBadge(ritaVisit.id, { number: "V-FIXA", reason: "" });
+  check("badge number: corrected only with the reason", r.status === 400 && /reason/i.test(r.data.error) && (await correctBadge(ritaVisit.id, { number: "V-FIXA", reason: undefined })).status === 400 && (await visitOf(rita.id)).badges.join() === "V-REC");
+  check("badge number: corrected by those who give badges out and correct visits", (await correctBadge(ritaVisit.id, { number: "V-FIXA" }, viewer)).status === 403);
+  check("badge number: a visit with none has none to correct", (await correctBadge(evaVisit.id, { number: "V-FIXA" })).status === 409);
+  check("badge number: not the one on record, nor one that was with someone else then", (await correctBadge(ritaVisit.id, { number: "V-REC" })).status === 400 && /was with Tim Typed then/.test((await correctBadge(ritaVisit.id, { number: "101-777" })).data.error)
+    && (await correctBadge(ritaVisit.id, { badgeId: tRec.id })).status === 400 && (await visitOf(rita.id)).badges.join() === "V-REC");
+  r = await correctBadge(ritaVisit.id, { number: "v-fixa", reason: "Typed the wrong number" });
+  check("badge number: corrected on a visit that ended, for the same time", r.status === 200 && r.data.corrected === true && r.data.from === "V-REC" && (await visitOf(rita.id)).badges.join() === "V-FIXA"
+    && !(await holderOf(fixA)) && !(await holderOf(vRec)) && (await visitOf(rita.id)).detailsChanged === 1, JSON.stringify(r.data));
+  r = (await desk.get(`/api/visits/${ritaVisit.id}`)).data.history[0];
+  check("badge number: what it was is among the entry's changes, and in the audit log", r.field === "badge" && r.from === "V-REC" && r.to === "V-FIXA" && r.reason === "Typed the wrong number" && r.by === "desk"
+    && (await admin.get("/api/audit?action=visit.badge_corrected")).data.entries.some((e) => e.target === "Rita Record" && /badge V-REC -> V-FIXA\. Reason: Typed the wrong number/.test(e.detail)), JSON.stringify(r));
+  const bo = (await desk.post("/api/visitors", { firstName: "Bo", lastName: "Badged", organization: "Swap Co", citizenship: "US" })).data.visitor;
+  const boVisit = (await desk.post("/api/checkins", { visitorId: bo.id, siteId: site.id, hostId: host.id, purpose: "Meeting", idType: "Passport" })).data.visit;
+  await desk.post(`/api/visits/${boVisit.id}/badge`, { badgeId: fixB.id });
+  r = await correctBadge(boVisit.id, { badgeId: fixC.id });
+  check("badge number: corrected for someone still here, who then has that badge and not the other", r.status === 200 && (await holderOf(fixC))?.name === "Bo Badged" && !(await holderOf(fixB)) && (await visitOf(bo.id)).badges.join() === "V-FIXC", JSON.stringify(r.data));
+  const cy = (await desk.post("/api/visitors", { firstName: "Cy", lastName: "Clash", organization: "Swap Co", citizenship: "US" })).data.visitor;
+  const cyVisit = (await desk.post("/api/checkins", { visitorId: cy.id, siteId: site.id, hostId: host.id, purpose: "Meeting", idType: "Passport" })).data.visit;
+  await desk.post(`/api/visits/${cyVisit.id}/badge`, { badgeId: fixB.id });
+  check("badge number: not to one that someone else has now", /was with Bo Badged then/.test((await correctBadge(cyVisit.id, { badgeId: fixC.id })).data.error) && (await holderOf(fixB))?.name === "Cy Clash");
+  check("badge number: without asking for a correction, a visit with a badge still can't have another entered", (await desk.post(`/api/visits/${boVisit.id}/badge-record`, { badgeId: fixB.id, reason: "Entered after the fact" })).status === 409);
 
   // --- an expected guest who needs no badge --------------------------------------------------------
   const vEsc = (await security.post("/api/badges", { number: "V-ESC", type: "visitor" })).data.badge;

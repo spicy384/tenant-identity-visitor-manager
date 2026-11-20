@@ -503,7 +503,7 @@ function createVisitors({ db, fields }) {
       timesCorrected: r.time_changes || 0,
       timeChanged: r.time_changes ? { in: String(r.changed_fields || "").split(",").includes("in"), out: String(r.changed_fields || "").split(",").includes("out") } : null,
       lastCorrection: r.time_changes ? { reason: r.last_reason, by: r.last_by, at: r.last_at } : null,
-      // How many times where it was, who they visited or what for has been changed since.
+      // How many times where it was, who they visited, what for, the ID shown or the badge has been corrected since.
       detailsChanged: r.detail_changes || 0,
       // The visitor badges they had on this visit, and whether one was recorded after it.
       badges: r.badge_labels ? String(r.badge_labels).split(", ") : [],
@@ -521,7 +521,7 @@ function createVisitors({ db, fields }) {
     (SELECT max(a.note = 'Recorded after the visit') FROM badge_assignments a WHERE ${VISIT_BADGE_WHERE}) AS badge_recorded_later`;
   const VISIT_SELECT = `SELECT x.*, s.name AS site_name, v.first_name, v.last_name, v.organization, v.verified, v.blocked, v.citizenship, k.name AS kiosk_name,
     (SELECT count(*) FROM visit_time_changes c WHERE c.visit_id = x.id) AS time_changes,
-    (SELECT count(*) FROM visit_changes c WHERE c.visit_id = x.id AND c.field IN ('site', 'company', 'contact', 'purpose')) AS detail_changes,
+    (SELECT count(*) FROM visit_changes c WHERE c.visit_id = x.id AND (c.field IN ('site', 'company', 'contact', 'purpose', 'id') OR (c.field = 'badge' AND c.from_text IS NOT NULL))) AS detail_changes,
     (SELECT group_concat(DISTINCT c.field) FROM visit_time_changes c WHERE c.visit_id = x.id) AS changed_fields,
     (SELECT c.reason FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_reason,
     (SELECT c.changed_by FROM visit_time_changes c WHERE c.visit_id = x.id ORDER BY c.changed_at DESC, c.id DESC LIMIT 1) AS last_by,
@@ -815,15 +815,16 @@ function createVisitors({ db, fields }) {
   /**
    * Corrects a visit's entry in the log, open or ended: the site it was at (`siteId`, an open
    * one the caller sees), who they visited (`hostIds`, its points of contact, whose company
-   * comes with them unless `companyId` says), what for (`purpose`), and when they arrived and
-   * left (as correctTimes, which needs the `reason`). Only what is given and differs is
+   * comes with them unless `companyId` says), what for (`purpose`), the ID they showed
+   * (`idType`, with `idOther` for an Other government ID; once their ID has been checked), and
+   * when they arrived and left (as correctTimes). Any change needs the `reason`. Only what is given and differs is
    * changed, all of it or none, and each change is kept with the visit. A visit moved to
    * another site lets go of the events it was noted against at the old one (their guest is
    * expected there again) and is noted against those of its day at the new one.
-   * Returns { visit, changes: [{ field: site, company, contact or purpose, from, to }], times
+   * Returns { visit, changes: [{ field: site, company, contact, purpose or id, from, to }], times
    * (correctTimes' answer, or null), reason }.
    */
-  function editVisit(visitId, { siteId, companyId, hostIds, purpose, checkedInAt, checkedOutAt, reason, by = null, sites = null, now = Date.now() } = {}) {
+  function editVisit(visitId, { siteId, companyId, hostIds, purpose, idType, idOther, checkedInAt, checkedOutAt, reason, by = null, sites = null, now = Date.now(), allowNone = false } = {}) {
     const visit = getVisit(visitId, { sites });
     if (!visit) throw fail(404, "No such visit.");
     const why = String(reason ?? "").trim().replace(/\s+/g, " ");
@@ -853,13 +854,29 @@ function createVisitors({ db, fields }) {
     const nextPurpose = purpose === undefined ? undefined : text(purpose, 200);
     const purposeChanged = nextPurpose !== undefined && nextPurpose !== (visit.purpose || null);
     if (purposeChanged) changes.push({ field: "purpose", from: visit.purpose || null, to: nextPurpose });
+    // The ID they showed: one of the kinds the desk checks, corrected once theirs has been checked.
+    let nextId = null;
+    if (idType !== undefined && idType !== null && idType !== "") {
+      if (!ID_TYPES.includes(idType)) throw fail(400, `The ID shown is one of: ${ID_TYPES.join(", ")}.`);
+      const other = cleanIdOther(idType, idOther === undefined && idType === visit.idType ? visit.idOther : idOther);
+      if (idType !== visit.idType || other !== (visit.idOther || null)) {
+        if (visit.checkinStage === "id") throw fail(409, `${visit.visitor.firstName} ${visit.visitor.lastName}'s ID hasn't been checked yet: check it to finish their check-in.`);
+        nextId = { type: idType, other };
+        changes.push({ field: "id", from: visit.idType ? idText(visit.idType, visit.idOther) : null, to: idText(idType, other) });
+      }
+    }
     // Times given as they are on record aren't a correction.
     const times = {};
     if (checkedInAt !== undefined && Number(checkedInAt) !== visit.checkedInAt) times.checkedInAt = checkedInAt;
     const noOut = checkedOutAt === null || checkedOutAt === "";
     if (checkedOutAt !== undefined && !(noOut ? !visit.checkedOutAt : Number(checkedOutAt) === visit.checkedOutAt)) times.checkedOutAt = checkedOutAt;
     const timed = Object.keys(times).length > 0;
-    if (!changes.length && !hosts && !timed) throw fail(400, "Nothing was changed.");
+    if (!changes.length && !hosts && !timed) {
+      if (allowNone) return { visit, changes, times: null, reason: why };
+      throw fail(400, "Nothing was changed.");
+    }
+    // Whatever is changed, the entry says why.
+    if (why.length < 5) throw fail(400, "Give the reason for the change.");
     let corrected = null;
     db.transaction(() => {
       if (site) {
@@ -874,6 +891,7 @@ function createVisitors({ db, fields }) {
         setVisitContacts(visit.id, hosts);
       }
       if (purposeChanged) raw.prepare("UPDATE visits SET purpose = ? WHERE id = ?").run(nextPurpose, visit.id);
+      if (nextId) raw.prepare("UPDATE visits SET id_type = ?, id_other = ? WHERE id = ?").run(nextId.type, nextId.other, visit.id);
       const at = Date.now();
       for (const c of changes) logVisitChange(visit.id, { ...c, reason: why, by, at });
     });
@@ -882,7 +900,7 @@ function createVisitors({ db, fields }) {
 
   /**
    * Every change made to a visit's entry after it was recorded, newest first: { field ("in" or
-   * "out" for when they arrived or left, site, company, contact, purpose, comment, badge), from, to
+   * "out" for when they arrived or left, site, company, contact, purpose, id, comment, badge), from, to
    * (timestamps for in and out, else text; null for nothing), reason, by, at }.
    */
   function visitHistory(visitId) {

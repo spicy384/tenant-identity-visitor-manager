@@ -530,15 +530,29 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     if (badge.type !== "visitor") throw fail(400, `Badge ${badge.label} is a ${TYPE_LABELS[badge.type].toLowerCase()} badge; visitors get visitor badges.`);
     if (!validAtSite(badge, visit.siteId)) throw fail(400, `Badge ${badge.label} isn't valid at ${visit.siteName}.`);
     const name = `${visit.visitor.firstName} ${visit.visitor.lastName}`;
+    // A badge entered on a visit after the fact, or its number corrected, changes the entry: it says why ({ reason }).
+    const reason = String(req.body?.reason ?? "").trim().replace(/\s+/g, " ").slice(0, 500);
+    if (reason.length < 5) throw fail(400, "Give the reason for the change.");
+    // The wrong number was recorded ({ replace: true }): the visit's badge becomes this one, for the same time.
+    if (req.body?.replace === true) {
+      let right;
+      let from;
+      transaction(() => {
+        ({ badge: right, from } = badges.correctVisitBadge(visit.id, badge.id, { sites: req.ctx.sites, levelNames: seesLevels(req) }));
+        visitors.logVisitChange(visit.id, { field: "badge", from, to: right.label, reason, by: staffName(req) });
+      });
+      auditFrom(req, "visit.badge_corrected", name, `${visit.siteName}, visit ${visit.id}: badge ${from} -> ${right.label}${reason ? `. Reason: ${reason}` : ""}`);
+      return res.json({ ok: true, badge: badgeOut(req, right), corrected: true, from });
+    }
     if (!visit.checkedOutAt) {
       const given = badges.assign(badge.id, { kind: "visitor", holderId: visit.visitor.id, visitId: visit.id }, { by: staffName(req), sites: req.ctx.sites, levelNames: seesLevels(req) });
-      auditFrom(req, "badge.assign", given.label, `to ${given.holder.name}${given.holder.company ? ` (${given.holder.company})` : ""}; entered from the visit log${reservedNote(given, "visitor", visit.visitor.id)}`);
-      visitors.logVisitChange(visit.id, { field: "badge", from: null, to: given.label, reason: "Given from the visit log", by: staffName(req) });
+      auditFrom(req, "badge.assign", given.label, `to ${given.holder.name}${given.holder.company ? ` (${given.holder.company})` : ""}; entered from the visit log${reservedNote(given, "visitor", visit.visitor.id)}. Reason: ${reason}`);
+      visitors.logVisitChange(visit.id, { field: "badge", from: null, to: given.label, reason, by: staffName(req) });
       return res.json({ ok: true, badge: badgeOut(req, given), recorded: false });
     }
     badges.recordForVisit(badge.id, visit.id, { by: staffName(req), sites: req.ctx.sites });
-    visitors.logVisitChange(visit.id, { field: "badge", from: null, to: badge.label, reason: "Recorded after the visit", by: staffName(req) });
-    auditFrom(req, "visit.badge_recorded", name, `badge ${badge.label}, recorded after the visit (${visit.siteName}, arrived ${new Date(visit.checkedInAt).toISOString()})`);
+    visitors.logVisitChange(visit.id, { field: "badge", from: null, to: badge.label, reason, by: staffName(req) });
+    auditFrom(req, "visit.badge_recorded", name, `badge ${badge.label}, recorded after the visit (${visit.siteName}, arrived ${new Date(visit.checkedInAt).toISOString()}). Reason: ${reason}`);
     return res.json({ ok: true, badge: badgeOut(req, badges.get(badge.id)), recorded: true });
   });
 

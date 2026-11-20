@@ -281,8 +281,8 @@ CREATE TABLE IF NOT EXISTS visit_comments (
 CREATE INDEX IF NOT EXISTS visit_comments_visit ON visit_comments(visit_id);
 
 -- What was changed on a visit's entry after it was recorded (times apart, which are in
--- visit_time_changes): field is site, company, contact, purpose, comment (one removed) or badge (one
--- entered later); what it was, what it became, why, who changed it and when.
+-- visit_time_changes): field is site, company, contact, purpose, id (the ID shown), comment (one
+-- removed) or badge (one entered later, or its number corrected); what it was, what it became, why, who changed it and when.
 CREATE TABLE IF NOT EXISTS visit_changes (
   id INTEGER PRIMARY KEY,
   visit_id INTEGER NOT NULL REFERENCES visits(id) ON DELETE CASCADE,
