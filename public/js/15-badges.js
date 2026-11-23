@@ -37,52 +37,77 @@ const templateKind = (type) => (type === "visitor" ? "visitor" : "tenant");
  * Badges on offer as a list to pick from, each with its image, the one matching
  * `suggested` first. With `allowNone`, "No badge" is the first choice. With `filterable`, a
  * box above the list narrows it to the badges whose number has what is typed, choosing the one
- * that matches exactly, else the first left. Returns { node, value() (badge id or ""),
+ * that matches exactly, else the first left. With `chooseFirst` off nothing is chosen until
+ * the person picks one (typing chooses only an exact match, or the one badge left), for when
+ * the choice must be the badge in their hand. onChange() runs whenever the choice may have
+ * changed. A badge with `unavailable` (why it can't be given: "With Jane Doe", "Lost") is
+ * listed with that beside it and can't be chosen. Returns { node, value() (badge id or ""),
  * chosen() (the badge or null), filter (that box, or null) }.
  */
-function badgePicker(list, { suggested = null, allowNone = false, label = "Badge to give", showType = false, filterable = false } = {}) {
+function badgePicker(list, { suggested = null, allowNone = false, label = "Badge to give", showType = false, filterable = false, chooseFirst = true, onChange = () => {}, noMatch = "No badge matches that number." } = {}) {
   const name = `badge-pick-${Math.random().toString(36).slice(2, 8)}`;
   const ordered = [...list].sort((a, b) => Number(b.template === suggested && Boolean(suggested)) - Number(a.template === suggested && Boolean(suggested)));
-  const row = (value, children, checked) => {
+  const row = (value, children, checked, off = false) => {
     const input = h("input", { type: "radio", name, value });
     input.checked = checked;
-    return h("label", { class: "badge-pick-row" }, input, children);
+    input.disabled = off;
+    return h("label", { class: `badge-pick-row${off ? " is-unavailable" : ""}` }, input, children);
   };
+  // The first that can be given: the one chosen to start with, when one is.
+  const firstFree = ordered.findIndex((b) => !b.unavailable);
   const node = h("div", { class: "badge-pick-list", role: "radiogroup", "aria-label": label },
     allowNone ? row("", h("span", { text: "No badge" }), true) : null,
     ordered.map((b, i) => row(String(b.id), [
       templateImg(b.template) || h("span", { class: "badge-thumb empty", title: "No image for this badge yet" }),
       h("span", { class: "mono", text: b.label }),
       h("span", { class: "muted small-text", text: [showType ? BADGE_TYPE_LABELS[b.type] : null, badgeLevelText(b), multiSite() ? badgeSitesText(b) : null].filter(Boolean).join(" · ") }),
-      reservedTag(b)
-    ].filter(Boolean), !allowNone && i === 0)));
+      b.unavailable ? h("span", { class: "badge muted", text: b.unavailable }) : reservedTag(b)
+    ].filter(Boolean), chooseFirst && !allowNone && i === firstFree, Boolean(b.unavailable))));
   const value = () => node.querySelector("input:checked")?.value || "";
   const chosen = () => list.find((b) => String(b.id) === value()) || null;
+  node.addEventListener("change", () => onChange());
   if (!filterable) return { node, value, chosen, filter: null };
   // "101 4000 1", "101-40001" and "40001" all find 101-40001.
   const plain = (t) => String(t ?? "").toLowerCase().replace(/[\s-]+/g, "");
   const filter = h("input", { type: "search", placeholder: "Type a badge number to find it", autocomplete: "off", "aria-label": "Find a badge by number" });
-  const none = h("p", { class: "muted small-text", text: "No badge matches that number.", hidden: true });
+  const none = h("p", { class: "muted small-text", text: noMatch, hidden: true });
   filter.addEventListener("input", () => {
     const q = plain(filter.value);
     let first = null;
     let exact = null;
+    let left = 0;
     for (const r of node.querySelectorAll(".badge-pick-row")) {
       const b = list.find((x) => String(x.id) === r.querySelector("input").value);
       const names = b ? [plain(b.label), plain(b.number)] : [];
       r.hidden = Boolean(q) && !names.some((n) => n.includes(q));
-      if (!r.hidden && b) {
+      // One that can't be given is shown when it matches, but never chosen.
+      if (!r.hidden && b && !b.unavailable) {
+        left += 1;
         first ??= r;
         if (names.includes(q)) exact ??= r;
       }
     }
-    const pick = exact || first;
+    // Chosen for them: the exact match; else the first left, or (with nothing chosen for them) the only one left.
+    const pick = exact || (chooseFirst || (q && left === 1) ? first : null);
     const checked = node.querySelector("input:checked");
-    if (pick && (exact || !checked || checked.closest(".badge-pick-row").hidden)) pick.querySelector("input").checked = true;
-    else if (!pick && checked) checked.checked = false;
+    const gone = Boolean(checked && checked.closest(".badge-pick-row").hidden);
+    if (pick && (exact || !checked || gone)) pick.querySelector("input").checked = true;
+    else if (gone) checked.checked = false;
     none.hidden = Boolean(first);
+    onChange();
   });
   return { node: h("div", { class: "stack badge-pick-find" }, filter, node, none), value, chosen, filter };
+}
+
+/**
+ * The kind of badge to hand someone, as a large image with what it is under it. There is
+ * always something to see: with no image set for that kind yet, a blank badge that says so.
+ */
+function badgeKindFigure(ref, caption) {
+  return h("figure", { class: "badge-suggest" },
+    templateImg(ref, { large: true, alt: caption })
+      || h("div", { class: "badge-template-large empty", role: "img", "aria-label": `${caption}: no image set yet` }, h("span", { text: `No image is set for this badge yet${isAdmin() ? ". Add one under Settings > Badges and clearances." : "."}` })),
+    h("figcaption", { class: "small-text", text: caption }));
 }
 
 /** The large image of the badge to hand over, when the server has one for them. */

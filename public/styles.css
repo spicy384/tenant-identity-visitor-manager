@@ -474,6 +474,14 @@ input.narrow { width: 7ch; flex: 0 0 auto; }
 .badge-give { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 .badge-give > .stack { flex: 1; min-width: 220px; }
 .badge-suggest { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+/* No image set for that kind of badge yet: a blank badge in its place, so there is always one to see. */
+.badge-template-large.empty { width: 150px; height: 210px; display: grid; place-items: center; padding: 12px; text-align: center; border-style: dashed; border-color: var(--border-strong); color: var(--text-muted); font-size: 0.8rem; }
+.badge-find { margin: 0; }
+.badge-find .badge-pick-list { max-height: 200px; }
+/* One that can't be given (with someone, lost, retired, expired): listed, marked, not to be picked. */
+.badge-pick-row.is-unavailable { cursor: not-allowed; }
+.badge-pick-row.is-unavailable:hover { background: none; }
+.badge-pick-row.is-unavailable > .mono, .badge-pick-row.is-unavailable > .badge-thumb, .badge-pick-row.is-unavailable > .muted { opacity: 0.55; }
 .badge-pick-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px; }
 .badge-pick-row { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border-radius: 4px; cursor: pointer; margin: 0; }
 .badge-pick-row:hover { background: var(--surface-3); }

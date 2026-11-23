@@ -269,11 +269,29 @@ async function main() {
   const val = (await desk.post("/api/visitors", { firstName: "Val", lastName: "Idated", organization: "Clear Co", citizenship: "US" })).data.visitor;
   const valVisit = (await desk.post("/api/checkins", { visitorId: val.id, siteId: site.id, hostId: host.id, purpose: "Briefing", idType: "CAC" })).data.visit;
   r = await desk.get(`/api/visits/${valVisit.id}/badge-plan`);
-  check("image: not validated, the uncleared visitor badge is shown, even with none free", r.data.uncleared === true && r.data.suggested === unclearedImage && r.data.available.length === 0, JSON.stringify(r.data));
+  check("image: not validated, the uncleared visitor badge is shown, even with none free", r.data.uncleared === true && r.data.suggested === unclearedImage && r.data.available.length === 0
+    && r.data.kind.cleared === false && r.data.kind.levelName === null, JSON.stringify(r.data));
+  check("list: the rest of the uncleared visitor badges are there too, each saying why it can't be given", r.data.unavailable.some((b) => b.number === "V-2" && b.unavailable === "Retired")
+    && r.data.unavailable.some((b) => /^With /.test(b.unavailable)) && r.data.unavailable.every((b) => b.unavailable && b.type === "visitor" && !b.cleared)
+    && !r.data.unavailable.some((b) => b.number === "VC-1" || b.number === "T-1"), JSON.stringify(r.data.unavailable.map((b) => `${b.number}: ${b.unavailable}`)));
   check("image: the same on their visitor page", (await desk.get(`/api/badge-holders/visitor/${val.id}`)).data.suggested === unclearedImage);
   await security.post("/api/clearance/validate", { kind: "visitor", id: val.id, levelId: secret.id, granted: "2025-01-01" });
   r = await desk.get(`/api/visits/${valVisit.id}/badge-plan`);
   check("image: once Security validates it, the badge their clearance allows", r.data.uncleared === false && r.data.suggested === secretImage && r.data.available.map((b) => b.number).join() === "VC-1", JSON.stringify(r.data));
+  check("list: of their own kind only, and none that is free is among those that can't be given", r.data.unavailable.every((b) => b.cleared) && !r.data.unavailable.some((b) => b.number === "V-2" || b.number === "VC-1"), JSON.stringify(r.data.unavailable));
+  check("image: its kind is said, the level's name only to those who see level names", r.data.kind.cleared === true && r.data.kind.levelName === null
+    && (await security.get(`/api/visits/${valVisit.id}/badge-plan`)).data.kind.levelName === "Secret");
+  // Cleared at a level with no badge in stock: the image of that level's badge is shown all the same.
+  const bare2 = (await admin.get("/api/clearance")).data.levels.find((l) => l.id !== secret.id);
+  const lee = (await desk.post("/api/visitors", { firstName: "Lee", lastName: "Level", organization: "Clear Co", citizenship: "US" })).data.visitor;
+  const leeVisit = (await desk.post("/api/checkins", { visitorId: lee.id, siteId: site.id, hostId: host.id, purpose: "Briefing", idType: "CAC" })).data.visit;
+  await security.post("/api/clearance/validate", { kind: "visitor", id: lee.id, levelId: bare2.id, granted: "2025-01-01" });
+  r = await security.get(`/api/visits/${leeVisit.id}/badge-plan`);
+  check("image: with no image set for their kind of badge, the plan still says which kind it is", r.data.suggested === null && r.data.available.length === 0 && r.data.kind.cleared === true && r.data.kind.levelName === bare2.name, JSON.stringify(r.data));
+  const bareImage = (await admin.put(`/api/badge-templates/${bare2.id}/visitor`, { dataUrl: PNG })).data.template.ref;
+  r = await desk.get(`/api/visits/${leeVisit.id}/badge-plan`);
+  check("image: the badge at their own level is shown even with none of them free", r.data.suggested === bareImage && r.data.available.length === 0 && r.data.uncleared === false, JSON.stringify(r.data));
+  await desk.post(`/api/visits/${leeVisit.id}/badge-not-needed`);
 
   // --- facility codes: optional, 2-3 digits, the same number under several -----------------------------
   const add = (body) => security.post("/api/badges", { type: "visitor", ...body });

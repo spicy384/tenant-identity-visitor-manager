@@ -225,13 +225,23 @@ The design and decisions are in [PLAN.md](PLAN.md).
      for a regular visitor) is shown large, with **Badge handed over** and **Can't find it?
      Issue a different badge**. With several kept for them, it is the first that is free;
      the others are offered beside it (**Hand over ... instead**), and one that can't be given
-     says why. Otherwise the desk enters the number of the badge they hand
-     over: it must be an active visitor badge, valid at the site, that the visitor may hold.
+     says why. Otherwise the step shows two things, always. **The image of the kind of badge
+     they get**, large, with its name under it: the uncleared visitor badge while their
+     clearance doesn't count, else the visitor badge at the level Security validated, whether
+     or not one of them is free; where no image has been set for that kind yet, a blank badge
+     says so. And **every visitor badge of that kind** at the site, each with its image, under
+     a box that narrows the list as a number is typed ("40001" finds 101-40001): the free ones
+     first, to pick from, then the rest, each marked with why it can't be given (With Jane Doe,
+     Lost, Retired, Expired) and not to be picked. The desk picks
+     the badge in its hand, or types its number, and presses **Issue badge** (Enter does too).
+     Nothing is picked for it: typing chooses a badge only when the number is exactly one of
+     them, or leaves just one. It must be an active visitor badge, valid at the site, that the
+     visitor may hold.
      The free badges listed are only those at the visitor's own clearance level (the level
      Security validated; uncleared ones while their clearance doesn't count). A lower badge
-     their clearance covers isn't listed, but can still be given by entering its number.
+     their clearance covers isn't listed, but can still be given by typing its whole number.
      A visitor whose clearance doesn't count (not validated by Security, or due a re-check)
-     is shown the uncleared visitor badge image, with a note saying so, and can be
+     has a note saying so, and can be
      sent to Security from here (**Request clearance validation**). **No badge needed**
      (audited) finishes without one.
 

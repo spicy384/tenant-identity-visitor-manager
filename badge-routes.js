@@ -400,19 +400,24 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
 
   /**
    * The image of the badge to hand over, shown large to whoever gives badges out. A visitor
-   * whose clearance doesn't count (none on record, not validated by Security, due a re-check,
-   * or expired) gets the uncleared visitor badge, whatever is free. Otherwise the highest badge
-   * on offer they may hold (uncleared ones rank lowest). A blocked visitor gets none.
-   * { ref, uncleared }.
+   * gets the visitor badge of their own kind, whatever is free: the uncleared one while their
+   * clearance doesn't count (none on record, not validated by Security, due a re-check, or
+   * expired), else the one at the level Security validated. A person gets the highest badge on
+   * offer they may hold (uncleared ones rank lowest). A blocked visitor gets none.
+   * { ref (null when no image is set for that kind), uncleared, kind (what they get, in words
+   * the page captions it with: null for none, else { cleared, level: its name, levelId }) }.
    */
   function suggestedFor(kind, id, available) {
     const h = kind === "visitor" ? badges.holder(kind, id) : null;
     // A blocked visitor gets no badge at all.
-    if (h?.blocked) return { ref: null, uncleared: false };
-    if (h && !clearance.effectiveLevel(h)) return { ref: templates.refFor("visitor", null), uncleared: true };
+    if (h?.blocked) return { ref: null, uncleared: false, kind: null };
+    const own = h ? clearance.effectiveLevel(h) : null;
+    if (h && !own) return { ref: templates.refFor("visitor", null), uncleared: true, kind: { cleared: false, level: null, levelId: null } };
     const rank = new Map(clearance.levels().map((l) => [l.id, l.rank]));
     const best = available.reduce((top, b) => (!top || (rank.get(b.clearanceLevelId) ?? -1) > (rank.get(top.clearanceLevelId) ?? -1) ? b : top), null);
-    return { ref: best ? templates.refFor(best.type, best.clearanceLevelId) : null, uncleared: false };
+    // A visitor: the badge at their own level, even with none of them free.
+    if (h) return { ref: templates.refFor("visitor", own.id) ?? (best ? templates.refFor(best.type, best.clearanceLevelId) : null), uncleared: false, kind: { cleared: true, level: own.name, levelId: own.id } };
+    return { ref: best ? templates.refFor(best.type, best.clearanceLevelId) : null, uncleared: false, kind: null };
   }
 
   // --- the badge step of checking a visitor in ---------------------------------------------------
@@ -434,8 +439,10 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
   /**
    * What to hand a visitor at check-in: the badges kept for them (picked for the event they are
    * expected at, then those reserved on their record), each with why it can't be given, if so,
-   * and the one of them to hand over; any badge they hold already; and the visitor badges valid
-   * at the site they may be given instead.
+   * and the one of them to hand over; any badge they hold already; the visitor badges valid
+   * at the site they may be given instead (available); and the rest of the visitor badges of
+   * their kind there (unavailable), each with why it can't be given: with someone, lost,
+   * retired or expired. The desk sees the whole stock, and what became of the one it looks for.
    */
   router.get("/api/visits/:id/badge-plan", giveVisitorBadges, (req, res) => {
     const visit = visitForBadge(req);
@@ -465,6 +472,15 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
     const holding = badges.forHolder("visitor", visitor.id).filter((a) => !a.returnedAt).map((a) => ({ id: a.badgeId, number: a.badgeNumber, label: a.badgeLabel }));
     const available = badges.availableFor("visitor", visitor.id, { sites: req.ctx.sites }).filter((x) => validAtSite(x, visit.siteId));
     const best = suggestedFor("visitor", visitor.id, available);
+    // The rest of their kind: the visitor badges at their own level (not the temporary stock, which is for people).
+    const free = new Set(available.map((b) => b.id));
+    const whyNot = (b) => (b.holder ? (b.holder.kind === "visitor" && b.holder.id === visitor.id ? "They have it" : `With ${b.holder.name}`)
+      : b.status !== "active" ? b.status.replace(/^./, (c) => c.toUpperCase())
+        : b.expired ? `Expired ${b.expiresOn}` : "Not available");
+    const unavailable = best.kind
+      ? badges.list({ type: "visitor", levelId: best.kind.levelId ?? "none", siteId: visit.siteId, sites: req.ctx.sites, temporary: false, limit: 5000 }).badges
+        .filter((b) => !free.has(b.id)).map((b) => ({ ...short(b), unavailable: whyNot(b) }))
+      : [];
     res.json({
       visit: { id: visit.id, siteId: visit.siteId, siteName: visit.siteName, stage: visit.checkinStage },
       assigned,
@@ -472,7 +488,11 @@ function createBadgeRoutes({ access, badges, allotments, clearance, templates, e
       kept,
       holding,
       available: available.map(short),
+      unavailable,
       suggested: best.ref,
+      // The kind of badge they get, for the image's caption: null (none, they're blocked), else whether
+      // it is a cleared one, with the level's name for those who see level names.
+      kind: best.kind && { cleared: best.kind.cleared, levelName: seesLevels(req) ? best.kind.level : null },
       // Their clearance doesn't count yet: an uncleared visitor badge is the one to give.
       uncleared: best.uncleared
     });

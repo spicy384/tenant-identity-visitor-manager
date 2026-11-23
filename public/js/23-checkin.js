@@ -557,29 +557,55 @@ function checkInWizard(start = {}) {
       const kept = plan.kept || (a ? [a] : []);
       const why = { event: `Picked for ${a?.eventTitle || "the event they're expected at"}.`, reserved: "Reserved for them." };
 
-      // The number typed in, checked against the badges: a visitor badge, valid here, they may hold.
-      // The facility code is needed only when the number is under more than one; the server says so.
-      const code = h("input", { type: "text", autocomplete: "off", inputmode: "numeric", maxlength: "3", class: "mono badge-code-input", placeholder: "Facility code", "aria-label": "Facility code (optional)" });
-      const number = h("input", { type: "text", autocomplete: "off", spellcheck: "false", class: "mono badge-number-input", placeholder: "Badge number", "aria-label": "Badge number" });
-      const issue = btn("Issue badge", "primary", async () => {
-        if (!number.value.trim()) throw new Error("Enter the number on the badge.");
-        await give({ number: number.value.trim(), facilityCode: code.value.trim() || undefined });
-      });
-      for (const input of [code, number]) input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); issue.click(); } });
+      // The kind of badge they get, always shown: its image, or a blank badge when none is set for it.
+      const kindText = plan.kind ? `${plan.kind.cleared ? plan.kind.levelName || "Cleared" : "Uncleared"} visitor badge` : null;
       const kinds = [...new Set(plan.available.map((b) => badgeLevelText(b)).filter(Boolean))];
-      const free = h("div", { class: "free-badges", hidden: true }, plan.available.map((b) => h("button", { type: "button", class: "chip mono", text: b.reservedFor ? `${b.label} (reserved)` : b.label, title: b.reservedFor ? `Reserved for ${b.reservedFor}` : null, onclick: () => { code.value = b.facilityCode || ""; number.value = b.number; number.focus(); } })));
+      // Every visitor badge of their kind, with a box that narrows them by number: the free ones to
+      // pick from, then the rest, each marked with why it can't be given (with someone, lost, retired,
+      // expired). Nothing is chosen for the desk: it picks the badge in its hand, or types its number.
+      // A number that isn't listed (a lower one they may hold, say) is sent as typed, and checked when
+      // it is issued.
+      const taken = plan.unavailable || [];
+      const plainNumber = (t) => String(t ?? "").toLowerCase().replace(/[\s-]+/g, "");
+      const typed = () => number.value.trim();
+      // How many of the listed badges what is typed leaves.
+      const left = () => pick.node.querySelectorAll(".badge-pick-row:not([hidden]):not(.is-unavailable)").length;
+      // The one whose number was typed, when it is one that can't be given.
+      const goneTyped = () => taken.find((b) => [plainNumber(b.label), plainNumber(b.number)].includes(plainNumber(typed()))) || null;
+      const showIssue = () => {
+        const b = pick.chosen();
+        issue.textContent = b ? `Issue badge ${b.label}` : typed() && !left() && !goneTyped() ? `Issue badge ${typed()}` : "Issue badge";
+      };
+      const issue = btn("Issue badge", "primary", async () => {
+        const b = pick.chosen();
+        if (b) return give({ badgeId: b.id });
+        if (!typed()) throw new Error(plan.available.length ? "Pick the badge you are handing over, or type its number." : "Type the number on the badge.");
+        // Several of those listed have what was typed: which one is theirs to say.
+        if (left()) throw new Error(`${left()} of the free badges match ${typed()}. Pick the one you are handing over, or type its whole number.`);
+        // The number of one that can't be given: said here, with why.
+        const gone = goneTyped();
+        if (gone) throw new Error(`Badge ${gone.label} can't be issued: ${gone.unavailable.replace(/^./, (c) => c.toLowerCase())}.`);
+        return give({ number: typed() });
+      });
+      const pick = badgePicker([...plan.available, ...taken], { suggested: plan.suggested, label: "Visitor badges of this kind", filterable: true, chooseFirst: false, onChange: () => showIssue(),
+        noMatch: plan.available.length ? "None of the free badges has that number. Issue badge sends it as typed; it is checked then." : "" });
+      const number = pick.filter;
+      number.placeholder = plan.available.length || taken.length ? "Type a number to narrow the list" : "Badge number";
+      number.classList.add("mono");
+      number.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); issue.click(); } });
+      // With no badge of their kind at all there is nothing to list: only the box for a number.
+      pick.node.querySelector(".badge-pick-list").hidden = !plan.available.length && !taken.length;
       const entry = h("div", { class: "stack badge-entry" },
-        h("div", { class: "badge-give" }, suggestedBadge(plan.suggested),
+        h("div", { class: "badge-give" }, kindText ? badgeKindFigure(plan.suggested, kindText) : null,
           h("div", { class: "stack" },
             plan.uncleared ? h("p", { class: "message warn", text: `${name()}'s clearance hasn't been validated, so give them an uncleared visitor badge.` }) : null,
             h("p", {}, plan.available.length
-              ? [`Give them ${plan.uncleared ? "an uncleared" : "a"} visitor badge${!plan.uncleared && kinds.length ? ` (${kinds.join(" or ")})` : ""}, and enter its number.`, h("span", { class: "muted small-text", text: ` ${plan.available.length} free${multiSite() ? ` at ${plan.visit.siteName}` : ""}.` })]
+              ? [`Give them ${plan.uncleared ? "an uncleared" : "a"} visitor badge${!plan.uncleared && kinds.length ? ` (${kinds.join(" or ")})` : ""}: pick it from the list, or type its number.`, h("span", { class: "muted small-text", text: ` ${plan.available.length} free${taken.length ? ` of ${plan.available.length + taken.length}` : ""}${multiSite() ? ` at ${plan.visit.siteName}` : ""}${taken.length ? "; the rest are marked with why they can't be given" : ""}.` })]
               : h("span", { class: "message error", text: plan.uncleared
                 ? `No uncleared visitor badge is free${multiSite() ? ` at ${plan.visit.siteName}` : ""}.`
                 : `No visitor badge at ${name()}'s clearance level is free${multiSite() ? ` at ${plan.visit.siteName}` : ""}. A lower one they may hold can still be given by its number.` })),
-            h("div", { class: "btn-row" }, code, number, issue),
-            plan.available.length ? h("button", { type: "button", class: "link-btn small-text", text: "Show the free badges", onclick: (e) => { free.hidden = !free.hidden; e.target.textContent = free.hidden ? "Show the free badges" : "Hide the free badges"; } }) : null,
-            free)));
+            h("div", { class: "badge-find stack" }, h("span", { class: "label", text: plan.available.length || taken.length ? (kindText ? `${kindText}s` : "Visitor badges") : "Badge number" }), pick.node),
+            h("div", { class: "btn-row" }, issue))));
 
       if (a && !a.problem) {
         const handed = btn(a.heldByThem ? "Confirm they have it" : `Badge ${a.label} handed over`, "primary", () => give({ badgeId: a.id }));
